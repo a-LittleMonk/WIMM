@@ -1,0 +1,37 @@
+# Build artifacts
+dist/
+build/
+*.spec.bak
+upx/
+
+# Debug screenshots
+*.jpg
+*.jpeg
+*.png
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Data / output
+*.mp4
+*.avi
+*.mov
+*.xlsx
+*.csv
+results/
+output/
+# Source-code package — exempt from the `output/` ignore for run artifacts.
+!gui/output/
