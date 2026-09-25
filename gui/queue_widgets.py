@@ -251,6 +251,9 @@ class QueueStats(QFrame):
         g = QGridLayout(self)
         g.setContentsMargins(0, 0, 0, 1)
         g.setSpacing(1)
+        self._grid = g
+        self._cells = []
+        self._cols = 4
         self._num = {}
         for i, (key, label, tone) in enumerate((
                 ("done", "Done", "ok"), ("running", "Running", "accent"),
@@ -272,11 +275,28 @@ class QueueStats(QFrame):
             v.addWidget(t)
             g.addWidget(cell, 0, i)
             self._num[key] = n
+            self._cells.append(cell)
 
     def set_counts(self, done, running, ready, attention):
         for k, v in (("done", done), ("running", running),
                      ("ready", ready), ("attention", attention)):
             self._num[k].setText(str(v))
+
+    # 4 counters in a row need ~300 px to breathe; wrap to 2 x 2 below that.
+    WRAP_AT = 300
+
+    def minimumSizeHint(self):
+        m = super().minimumSizeHint()
+        return m.__class__(min(m.width(), 150), m.height())
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        cols = 2 if self.width() < self.WRAP_AT else 4
+        if cols != self._cols:
+            self._cols = cols
+            for i, cell in enumerate(self._cells):
+                self._grid.removeWidget(cell)
+                self._grid.addWidget(cell, i // cols, i % cols)
 
 
 class DropHint(QWidget):

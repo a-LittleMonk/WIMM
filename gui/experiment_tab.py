@@ -243,6 +243,8 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         # just the baseline so the first session matches the user's choice.
         try:
             gbs = self.config.get("body_style")
+            # Values the launcher used to store before it matched this combo.
+            gbs = {"dots": "dot", "skeleton": "ends", "dots+skeleton": "ends"}.get(gbs, gbs)
             if gbs is not None and hasattr(self, "combo_body_style"):
                 i = self.combo_body_style.findData(gbs)
                 if i >= 0:
@@ -250,6 +252,15 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         except Exception as e:
             logger.warn(f"body_style init failed: {e}", source="ui")
         self._apply_simple_mode()
+        # Remembered View settings. Deferred one tick so experiment
+        # subclasses (NOR picks "Center + nose + tail") set their defaults
+        # first; a saved choice then wins.
+        self._view_save_timer = QTimer(self)
+        self._view_save_timer.setSingleShot(True)
+        self._view_save_timer.setInterval(300)
+        self._view_save_timer.timeout.connect(self._save_view_prefs)
+        self._view_prefs_ready = False
+        QTimer.singleShot(0, self._init_view_prefs)
 
         last = self.config.get("last_video")
         if last and os.path.exists(last):
@@ -283,6 +294,9 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             "model_params": {m: dict(p) for m, p in self._model_params.items()},
             "post_params":  dict(self._post_params),
             "body_style":   self.combo_body_style.currentData() or "dot",
+            "marker_shape": self.combo_marker_shape.currentData() or "ring",
+            "marker_size":  int(self.spin_marker_size.value()),
+            "marker_tag":   self.chk_marker_tag.isChecked(),
             "ellipse":      self.chk_ellipse.isChecked(),
             "trail":        self.chk_trail.isChecked(),
             "trail_len":    self.spin_trail_len.value(),
@@ -362,6 +376,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         _candidate_block = [
             "chk_perspective", "combo_zone_mode", "combo_cage_shape",
             "combo_proc_scale", "combo_model", "combo_body_style",
+            "combo_marker_shape", "spin_marker_size", "chk_marker_tag",
             "combo_meta_sex", "spin_fps_override", "spin_movement_thr",
             "spin_bin_size", "spin_smooth", "spin_threshold",
             "spin_clahe", "spin_brush", "spin_trail_len",
@@ -382,6 +397,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         # the preview keeps showing the raw frame until the user nudges a
         # slider, since blockSignals suppressed the valueChanged → preview
         # cascade during the apply.
+        self._apply_view_prefs()
         self._update_calib_status()
         if hasattr(self, "_refresh_zones_label"):
             self._refresh_zones_label()
@@ -418,6 +434,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             v = _migrate_combo_value(s["body_style"], _LEGACY_BODY_STYLES, "dot")
             idx = self.combo_body_style.findData(v)
             self.combo_body_style.setCurrentIndex(idx if idx >= 0 else 1)
+        self._apply_marker_settings(s)
         self.chk_ellipse.setChecked(s.get("ellipse", False))
         self.chk_trail.setChecked(s.get("trail", True))
         self.spin_trail_len.setValue(s.get("trail_len", 0))
@@ -587,6 +604,179 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             zd.set_perspective_locked(False)
 
     # ── _open_corrections_popup lives in gui/output/corrections_mixin.py
+
+    def _apply_marker_settings(self, s):
+        """Body-marker shape / size / info tag from a settings snapshot."""
+        if "marker_shape" in s:
+            i = self.combo_marker_shape.findData(s["marker_shape"])
+            if i >= 0:
+                self.combo_marker_shape.setCurrentIndex(i)
+        if "marker_size" in s:
+            self.spin_marker_size.setValue(int(s["marker_size"]))
+        if "marker_tag" in s:
+            self.chk_marker_tag.setChecked(bool(s["marker_tag"]))
+        self.zone_drawer.set_layer("marker", self.chk_marker_tag.isChecked()
+                                   and self.combo_body_style.currentData() != "off")
+
+    def _on_body_marker_changed(self, *_):
+        """Body marker style / shape / size / info tag changed."""
+        zd = getattr(self, "zone_drawer", None)
+        if zd is not None:
+            # The Qt info tag is only shown with a visible marker.
+            zd.set_layer("marker", self.chk_marker_tag.isChecked()
+                         and self.combo_body_style.currentData() != "off")
+        legend = getattr(self, "_video_legend", None)
+        if legend is not None:
+            legend.update()
+        if hasattr(self, "slider_scrub"):
+            self._on_scrub(self.slider_scrub.value())
+
+    # ── Remembered View settings ─────────────────────────────────────────
+    # Stored per experiment in the app config under "view_prefs". They are
+    # display choices, so they win over the overlay values saved with each
+    # video's settings snapshot.
+
+    def _view_prefs_key(self):
+        return getattr(getattr(self, "experiment", None), "key", None) or "default"
+
+    def _live_config_owner(self):
+        """Object holding the app's real config dict + _save_config. Inside
+        a batch tab this tab is parent-less with a *copy* of the config, so
+        go through the batch tab's back-ref; otherwise use the window."""
+        for owner in (getattr(self, "_batch_owner", None), self.window()):
+            if owner is not None and isinstance(getattr(owner, "config", None), dict)                     and owner is not self:
+                return owner
+        return None
+
+    def _persist_config(self, key, value):
+        """Write to this tab's config AND the app's real config, then save
+        it to disk."""
+        self.config[key] = value
+        owner = self._live_config_owner()
+        if owner is None:
+            return
+        owner.config[key] = value
+        for target in (owner, owner.window()):
+            if hasattr(target, "_save_config"):
+                target._save_config()
+                return
+
+    def _collect_view_prefs(self):
+        zd = self.zone_drawer
+        chrome = getattr(self, "_chrome", None)
+        return {
+            "arena":        bool(zd.layers.get("arena", True)),
+            "zones":        bool(zd.layers.get("zones", True)),
+            "heat":         bool(chrome.layers.want_heat) if chrome else False,
+            "trail":        self.chk_trail.isChecked(),
+            "trail_seg":    int(getattr(self, "_trail_seg_idx", 0)),
+            "trail_fade":   self.chk_trail_fade.isChecked(),
+            "ellipse":      self.chk_ellipse.isChecked(),
+            "body_style":   self.combo_body_style.currentData() or "dot",
+            "marker_shape": self.combo_marker_shape.currentData() or "ring",
+            "marker_size":  int(self.spin_marker_size.value()),
+            "marker_tag":   self.chk_marker_tag.isChecked(),
+            "body_color":   self._colors.get("body"),
+            "cell_hl_color": zd._cell_highlight_color,
+            "cell_hl_alpha": int(zd._cell_highlight_alpha),
+            "cell_numbers": bool(zd._cell_show_numbers),
+            "cell_timer":   bool(zd._cell_show_timer),
+            "cell_entries": bool(zd._cell_show_entries),
+            "play_speed":   float(getattr(self, "_play_speed", 1.0)),
+        }
+
+    def _stored_view_prefs(self):
+        owner = self._live_config_owner()
+        src = owner.config if owner is not None else self.config
+        allp = src.get("view_prefs") or self.config.get("view_prefs") or {}
+        p = allp.get(self._view_prefs_key())
+        return p if isinstance(p, dict) else None
+
+    def _apply_view_prefs(self, p=None):
+        """Re-apply the remembered View settings (no-op if none saved)."""
+        if not getattr(self, "_view_prefs_ready", False) and p is None:
+            return
+        p = p if p is not None else self._stored_view_prefs()
+        if not p:
+            return
+        zd = self.zone_drawer
+        chrome = getattr(self, "_chrome", None)
+        if chrome is not None:
+            chrome.layers.want_heat = bool(p.get("heat", False))
+            for k in ("arena", "zones"):
+                if k in p:
+                    chrome.layers.set_chip(k, p[k])
+            chrome.layers.refresh_enabled()
+        if "trail" in p:
+            self.chk_trail.setChecked(bool(p["trail"]))
+        if "trail_fade" in p:
+            self.chk_trail_fade.setChecked(bool(p["trail_fade"]))
+        if "ellipse" in p:
+            self.chk_ellipse.setChecked(bool(p["ellipse"]))
+        i = self.combo_body_style.findData(p.get("body_style"))
+        if i >= 0:
+            self.combo_body_style.setCurrentIndex(i)
+        self._apply_marker_settings(p)
+        if p.get("body_color"):
+            self._colors["body"] = p["body_color"]
+            btn = self._color_buttons.get("body")
+            if btn is not None:
+                btn.setStyleSheet(
+                    f"background-color: {p['body_color']}; border: 1px solid rgba(0,0,0,0.18); border-radius: 2px;")
+        if p.get("cell_hl_color"):
+            zd.set_cell_highlight_color(p["cell_hl_color"])
+        if "cell_hl_alpha" in p:
+            zd.set_cell_highlight_alpha(int(p["cell_hl_alpha"]))
+        for key, setter in (("cell_numbers", zd.set_cell_show_numbers),
+                            ("cell_timer", zd.set_cell_show_timer),
+                            ("cell_entries", zd.set_cell_show_entries)):
+            if key in p:
+                setter(bool(p[key]))
+        if p.get("play_speed") in self.PLAY_SPEEDS:
+            self._play_speed = float(p["play_speed"])
+            self.seg_play_speed.set_index(self.PLAY_SPEEDS.index(self._play_speed))
+        self._trail_seg_idx = int(p.get("trail_seg", 0))
+        seg = getattr(self, "_trail_seg", None)
+        if seg is not None:
+            seg.set_index(self._trail_seg_idx)
+        self._sync_trail_len()
+        legend = getattr(self, "_video_legend", None)
+        if legend is not None:
+            legend.update()
+        if hasattr(self, "slider_scrub"):
+            self._on_scrub(self.slider_scrub.value())
+
+    def _init_view_prefs(self):
+        self._view_prefs_ready = True
+        self._apply_view_prefs()
+        for sig in (self.combo_body_style.currentIndexChanged,
+                    self.combo_marker_shape.currentIndexChanged,
+                    self.spin_marker_size.valueChanged,
+                    self.chk_marker_tag.toggled, self.chk_ellipse.toggled,
+                    self.chk_trail.toggled, self.chk_trail_fade.toggled,
+                    self.zone_drawer.view_changed):
+            sig.connect(self._schedule_view_save)
+        # Any save queued while applying is just the same values again.
+        self._view_save_timer.stop()
+
+    def _schedule_view_save(self, *_):
+        if getattr(self, "_view_prefs_ready", False):
+            self._view_save_timer.start()
+
+    def _save_view_prefs(self):
+        owner = self._live_config_owner()
+        src = owner.config if owner is not None else self.config
+        allp = dict(src.get("view_prefs") or {})
+        allp[self._view_prefs_key()] = self._collect_view_prefs()
+        self._persist_config("view_prefs", allp)
+
+    def _sync_trail_len(self):
+        """Trail "60 s" / "10 s" → frames at this video's fps."""
+        idx = int(getattr(self, "_trail_seg_idx", 0))
+        if not hasattr(self, "spin_trail_len"):
+            return
+        fps = float(self.fps or 30.0)
+        self.spin_trail_len.setValue((0, int(fps * 60), int(fps * 10))[max(0, min(2, idx))])
 
     def _open_view_popup(self):
         """Open the View popover (overlay options) on the video canvas."""
@@ -798,10 +988,8 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         if not accepted:
             for k, hex_c in backup.items():
                 self._apply_color_live(k, QColor(hex_c))
-        self.config["colors"] = dict(self._colors)
-        win = self.window()
-        if hasattr(win, "_save_config"):
-            win._save_config()
+        self._persist_config("colors", dict(self._colors))
+        self._schedule_view_save()
 
     def _pick_color(self, key):
         backup_color = self._colors[key]
@@ -820,12 +1008,10 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             if backup_alpha is not None:
                 restored.setAlpha(int(backup_alpha * 255 / 100))
             self._apply_color_live(key, restored)
-        self.config["colors"] = dict(self._colors)
         if key == "detection":
-            self.config["overlay_alpha"] = self.overlay_alpha
-        win = self.window()
-        if hasattr(win, "_save_config"):
-            win._save_config()
+            self._persist_config("overlay_alpha", self.overlay_alpha)
+        self._persist_config("colors", dict(self._colors))
+        self._schedule_view_save()
 
     def _apply_color_live(self, key, qcolor):
         if not qcolor.isValid():
@@ -839,6 +1025,8 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             btn.setStyleSheet(
                 f"background-color: {hex_str}; border: 1px solid rgba(0,0,0,0.18); border-radius: 2px;"
             )
+        if key == "body" and getattr(self, "_video_legend", None) is not None:
+            self._video_legend.update()
         if key in ("arena", "center_zone", "grid"):
             self.zone_drawer.set_zone_colors(self._colors)
         elif key == "detection":
@@ -1089,18 +1277,44 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             return
         if self.slider_scrub.value() >= self.slider_scrub.maximum():
             self.slider_scrub.setValue(self.slider_scrub.minimum())
-        fps = float(self.fps or 30.0)
-        self._play_timer.start(max(15, int(1000.0 / min(fps, 30.0))))
+        self._play_anchor()
+        self._play_timer.start(10)
         self.btn_play.set_icon_name("pause")
 
+    PLAY_SPEEDS = (0.5, 1.0, 1.5, 2.0)
+
+    def _play_anchor(self):
+        """Clock-based playback: remember when / where playing (re)started."""
+        import time
+        self._play_t0 = time.perf_counter()
+        self._play_f0 = self.slider_scrub.value()
+        self._play_last = self._play_f0
+
+    def _on_play_speed(self, i):
+        self._play_speed = self.PLAY_SPEEDS[i]
+        if self._play_timer.isActive():
+            self._play_anchor()
+        self._schedule_view_save()
+
     def _play_tick(self):
-        if self.slider_scrub.value() >= self.slider_scrub.maximum():
+        """Show the frame the clock says we should be on. If drawing falls
+        behind, frames are skipped so playback keeps true speed."""
+        import time
+        cur = self.slider_scrub.value()
+        if cur >= self.slider_scrub.maximum():
             self._play_timer.stop()
             self.btn_play.set_icon_name("play")
             return
-        step = max(1, int(round(float(self.fps or 30.0) / 30.0)))
-        self.slider_scrub.setValue(min(self.slider_scrub.maximum(),
-                                       self.slider_scrub.value() + step))
+        if cur != getattr(self, "_play_last", cur):
+            self._play_anchor()          # user stepped / seeked meanwhile
+        fps = float(self.fps or 30.0)
+        speed = float(getattr(self, "_play_speed", 1.0))
+        target = self._play_f0 + int((time.perf_counter() - self._play_t0) * fps * speed)
+        if target <= cur:
+            return
+        target = min(self.slider_scrub.maximum(), target)
+        self._play_last = target
+        self.slider_scrub.setValue(target)
 
     def _on_timeline_seek(self, frac):
         lo, hi = self.slider_scrub.minimum(), self.slider_scrub.maximum()
@@ -1119,6 +1333,11 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             self.lbl_frame.setText("")
             self.speed_timeline.set_data([], [], [], 0.0, "cm/s")
             self.measure_panel.clear()
+            # Drop the previous video's issue marks / count.
+            self._issues_df = None
+            self._refresh_issue_marks()
+            if self._issues_popup is not None:
+                self._issues_popup.hide()
         except Exception:
             pass
 
@@ -1158,11 +1377,19 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             if self.raw_df is not None and "Zone" in self.raw_df.columns:
                 zc = self.raw_df["Zone"].astype(str).str.contains("center", case=False).to_numpy()
                 center = [bool(zc[i:i + bins].mean() >= 0.5) for i in range(0, len(zc), bins)]
+            periphery = []
+            if self.raw_df is not None and "Zone" in self.raw_df.columns:
+                z = self.raw_df["Zone"].astype(str).str.lower()
+                zp = (~z.str.contains("center") & ~z.isin(["", "nan", "none"])).to_numpy()
+                periphery = [bool(zp[i:i + bins].mean() >= 0.5) for i in range(0, len(zp), bins)]
             missed = [i / float(n) for i, ok in enumerate(xs) if not ok]
+            n_miss = len(missed)
+            self.lbl_missed_count.setText(
+                f"{n_miss} missed frames ({100.0 * n_miss / n:.1f}%)" if n_miss else "No missed frames")
             if len(missed) > 600:
                 missed = missed[::int(np.ceil(len(missed) / 600.0))]
             thr = float(self.spin_movement_thr.value()) if hasattr(self, "spin_movement_thr") else 0.0
-            self.speed_timeline.set_data(speed, center, missed, thr, unit or "cm/s")
+            self.speed_timeline.set_data(speed, center, missed, thr, unit or "cm/s", periphery)
             self._refresh_heat()
             dur = n / float(self.fps or 30.0)
             det_rate = 100.0 * sum(1 for x in xs if x) / float(n)
@@ -1182,11 +1409,6 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             frac = (value - lo) / float(hi - lo) if hi > lo else 0.0
             self.speed_timeline.set_cursor(frac)
             self.lbl_frame.setText(f"{int(value)} / {int(hi)}")
-            fps0 = float(self.fps or 30.0)
-            t0 = max(0.0, (value - lo) / fps0)
-            self.zone_drawer.set_hud(
-                f"CAM 01 · {fps0:.0f} fps · F {int(value):06d}",
-                f"{int(t0) // 60:02d}:{int(t0) % 60:02d}.{int((t0 % 1) * 10)}")
             if not self.tracking_results or self.raw_df is None:
                 self.measure_panel.set_frame(None)
                 self.zone_drawer.set_marker_info(None)
@@ -1292,7 +1514,13 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self.right_tabs = QTabWidget()
         self.right_tabs.addTab(self._build_preview_tab(), "Video Preview")
         self._graph_widget = self._build_graph_tab()
-        self.right_tabs.addTab(self._build_excel_tab(), "Excel Output")
+        # Scrollable so its wide tables never force the window wider
+        # (a tab widget reserves room for its largest page).
+        out_scroll = QScrollArea()
+        out_scroll.setWidgetResizable(True)
+        out_scroll.setFrameShape(QFrame.NoFrame)
+        out_scroll.setWidget(self._build_excel_tab())
+        self.right_tabs.addTab(out_scroll, "Excel Output")
         root.addWidget(self.right_tabs, 1)
 
     def _build_view_popup_widgets(self):
@@ -1301,19 +1529,49 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         popover reparents them. Created here — under the preview-tab
         section — because they belong with the preview / view feature."""
         from gui.widgets_v2 import SwitchBox
+        from core.tracking.draw import MARKER_SHAPES
+        # Body marker = the one control that decides whether a marker is
+        # drawn on the mouse (no separate "Marker" layer chip any more).
         self.combo_body_style = QComboBox()
         self.combo_body_style.addItem("Off", "off")
-        self.combo_body_style.addItem("Dot (center only)", "dot")
-        self.combo_body_style.addItem("Center + Nose + Tail", "ends")
+        self.combo_body_style.addItem("Center", "dot")
+        self.combo_body_style.addItem("Center + nose + tail", "ends")
         self.combo_body_style.setCurrentIndex(1)
-        self.combo_body_style.currentIndexChanged.connect(
-            lambda: self._on_scrub(self.slider_scrub.value())
+        self.combo_body_style.currentIndexChanged.connect(self._on_body_marker_changed)
+
+        self.combo_marker_shape = QComboBox()
+        for key, label in MARKER_SHAPES:
+            self.combo_marker_shape.addItem(label, key)
+        self.combo_marker_shape.currentIndexChanged.connect(self._on_body_marker_changed)
+
+        self.spin_marker_size = QSpinBox()
+        self.spin_marker_size.setRange(2, 60)
+        self.spin_marker_size.setValue(15)
+        self.spin_marker_size.setSuffix(" px")
+        self.spin_marker_size.setToolTip(
+            "Marker radius, in pixels of a 640 px wide video\n"
+            "(scaled up for larger videos).")
+        self.spin_marker_size.valueChanged.connect(self._on_body_marker_changed)
+
+        self.btn_marker_color = QPushButton()
+        self.btn_marker_color.setFixedSize(40, 20)
+        self.btn_marker_color.setCursor(Qt.PointingHandCursor)
+        self.btn_marker_color.setToolTip("Pick the body-marker color")
+        self.btn_marker_color.setStyleSheet(
+            f"background-color: {self._colors['body']}; border: 1px solid rgba(0,0,0,0.18); border-radius: 2px;"
         )
+        self.btn_marker_color.clicked.connect(lambda: self._pick_color("body"))
+        self._color_buttons["body"] = self.btn_marker_color
+
+        self.chk_marker_tag = SwitchBox("Info tag next to marker")
+        self.chk_marker_tag.setChecked(True)
+        self.chk_marker_tag.setToolTip("Animal ID, speed and position beside the marker.")
+        self.chk_marker_tag.toggled.connect(self._on_body_marker_changed)
 
         self.chk_ellipse = SwitchBox("Bounding ellipse")
         self.chk_ellipse.toggled.connect(lambda: self._on_scrub(self.slider_scrub.value()))
-        # Trail on/off is the "Trail" layer chip on the canvas.
-        self.chk_trail = QCheckBox("Trail")
+        # Trail on/off: "Show trail" switch in the View popover (Trail & path).
+        self.chk_trail = SwitchBox("Show trail")
         self.chk_trail.setChecked(True)
         self.chk_trail.toggled.connect(lambda: self._on_scrub(self.slider_scrub.value()))
 
@@ -1425,8 +1683,8 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self._fix_widget.setVisible(False)
 
         # ── Transport: buttons, time, frame, actions, speed timeline, scrubber
-        from gui.widgets_v2 import IconButton, KeyedButton
-        from gui.redesign_widgets import SpeedTimeline, TimeTicks
+        from gui.widgets_v2 import IconButton, KeyedButton, SegTabs
+        from gui.redesign_widgets import TimelineTracks, TimeTicks
         card = QFrame()
         card.setObjectName("TransportCard")
         cv = QVBoxLayout(card)
@@ -1467,6 +1725,14 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             gh.addWidget(b)
         row1.addWidget(grp)
 
+        # Playback speed.
+        self._play_speed = 1.0
+        self.seg_play_speed = SegTabs(["0.5×", "1×", "1.5×", "2×"], current=1)
+        self.seg_play_speed.setToolTip("Playback speed")
+        self.seg_play_speed.setFixedHeight(28)
+        self.seg_play_speed.changed.connect(self._on_play_speed)
+        row1.addWidget(self.seg_play_speed)
+
         self.lbl_scrub = QLabel("—")
         self.lbl_scrub.setProperty("role", "scrub")
         self.lbl_total = QLabel("")
@@ -1498,17 +1764,27 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self.btn_corr_card = KeyedButton("Corrections…", "⌃K", lead="edit")
         self.btn_corr_card.setToolTip("Manual tracking corrections (Ctrl+K)")
         self.btn_corr_card.clicked.connect(self._open_corrections_popup)
-        row1.addWidget(self.btn_miss_card)
-        row1.addWidget(self.btn_corr_card)
-        self.btn_view_popup.hide()   # the View button now floats on the canvas
+        # Tracking issues: red marks on the frame slider + this popup button.
+        self.btn_issues = KeyedButton("Tracking issues", "", lead="dot")
+        self.btn_issues.setToolTip("Open the tracking-issues window: every flagged "
+                                   "frame, why it was flagged, and fixes")
+        self.btn_issues.setEnabled(False)
+        self.btn_issues.clicked.connect(self._open_tracking_issues_popup)
+        row1.addWidget(self.btn_issues)
+        # Next miss / Corrections live in the Missed frames and Frame
+        # corrections panels (built by the batch tab from these widgets).
+        self.btn_view_popup.hide()   # the View button lives in the canvas toolbar
         cv.addLayout(row1)
-        cv.addSpacing(12)
+        cv.addSpacing(8)
 
-        self.speed_timeline = SpeedTimeline()
+        # Speed / Center-periphery / Missed tracks — shown as separate panels.
+        self.speed_timeline = TimelineTracks(self)
         self.speed_timeline.seek.connect(self._on_timeline_seek)
-        cv.addWidget(self.speed_timeline)
+        self.lbl_missed_count = QLabel("")
+        theme.set_tone(self.lbl_missed_count, "faint", "font-size: 11px;")
 
-        self.slider_scrub = QSlider(Qt.Horizontal)
+        from gui.redesign_widgets import IssueSlider
+        self.slider_scrub = IssueSlider()   # red marks = tracking issues
         self.slider_scrub.setMinimum(0)
         self.slider_scrub.setMaximum(0)
         self.slider_scrub.setEnabled(False)
@@ -1524,17 +1800,18 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         )
         self.slider_scrub.valueChanged.connect(self._on_scrub)
         srow = QHBoxLayout()
-        srow.setContentsMargins(SpeedTimeline.LEFT, 6, 0, 0)
+        srow.setContentsMargins(0, 2, 0, 0)
         srow.addWidget(self.slider_scrub)
         cv.addLayout(srow)
         self.time_ticks = TimeTicks()
         trow = QHBoxLayout()
-        trow.setContentsMargins(SpeedTimeline.LEFT, 2, 0, 0)
+        trow.setContentsMargins(0, 2, 0, 0)
         trow.addWidget(self.time_ticks)
         cv.addLayout(trow)
         vlay.addWidget(card)
 
         self._play_timer = QTimer(self)
+        self._play_timer.setTimerType(Qt.PreciseTimer)
         self._play_timer.timeout.connect(self._play_tick)
         # Overlay controls (body style / ellipse / trail / smooth)
         # now live in the configuration pane only.
@@ -1639,6 +1916,21 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             b.clicked.connect(lambda _=False, e=ext.lower(): self._export_graph_fmt(e))
             sh.addWidget(b)
         right._bar_layout.addWidget(seg)
+        # Background of exported files + Excel images.
+        from gui.graph_style import set_export_bg
+        from gui.redesign_widgets import SegmentedControl
+        bg_choice = self.config.get("export_bg", "white")
+        set_export_bg(bg_choice)
+        bg_lbl = QLabel("Export background")
+        theme.set_tone(bg_lbl, "faint", "font-size: 11px;")
+        right._bar_layout.addSpacing(10)
+        right._bar_layout.addWidget(bg_lbl)
+        self.seg_export_bg = SegmentedControl(["White", "Transparent"],
+                                              1 if bg_choice == "transparent" else 0)
+        self.seg_export_bg.setToolTip("Background of saved SVG / PDF / PNG files and Excel images")
+        self.seg_export_bg.changed.connect(
+            lambda i: self._set_export_bg("transparent" if i else "white"))
+        right._bar_layout.addWidget(self.seg_export_bg)
 
         self._graph_scroll = right          # toggled by _populate_graph_tab
         self._graph_lbl = _FitLabel()
@@ -1764,9 +2056,14 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         default = os.path.join(out_folder, f"{name}.{ext}") if out_folder else f"{name}.{ext}"
         path, _ = QFileDialog.getSaveFileName(self, f"Export {name}", default,
                                               f"{ext.upper()} (*.{ext})")
-        if path and not self._export_graph_to_path(name, path):
-            QMessageBox.warning(self, "Export failed",
-                                "Could not write the graph file. See the log for details.")
+        if not path:
+            return
+        from gui.notify import show_done
+        if self._export_graph_to_path(name, path):
+            show_done(self, f"{name} graph exported", path=path)
+        else:
+            show_done(self, "Graph export failed",
+                      "Could not write the graph file. See Logs for details.", kind="err")
 
     # Preset that tags the standard 4×4 layout: corners, edges (perimeter
     # non-corner), middle (inner 2×2).
@@ -1867,8 +2164,9 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
 
         self._excel_tabs.addTab(padded(self._graph_widget), "Graphs")
         # Tracking Issues — glitch detector + table + mini map + actions.
-        self._excel_tabs.addTab(padded(self._build_tracking_issues_tab()),
-                                "Tracking issues")
+        # Shown in a popup from the preview (Tracking issues button), not here.
+        self._issues_widget = self._build_tracking_issues_tab()
+        self._issues_popup = None
         # Cell-Info tab is OF-specific (4×4 grid region labeling). YMazeTab
         # inherits the OF mixin so the method exists, but the tab is
         # irrelevant for Y-Maze — gate on experiment key.
@@ -1916,7 +2214,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
 
     def _build_controls(self):
         panel = QFrame()
-        panel.setMinimumWidth(280)
+        panel.setMinimumWidth(250)
         panel.setFrameShape(QFrame.NoFrame)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -2050,6 +2348,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         # honor manual override if set
         override = self._fps_override()
         self.fps = override if override > 0 else self._auto_fps
+        self._sync_trail_len()
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         self._total_frames = frame_count
         native_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -2315,6 +2614,15 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         if getattr(self, "_suppress_calib_mode", False):
             return
         self.config["calib_mode"] = self._calib_mode()
+        if self._calib_mode() != "manual":
+            # Leaving Manual: stop any line in progress and drop the drawn
+            # line so only the selected mode's calibration is in play.
+            zd = self.zone_drawer
+            if zd.mode == ZoneDrawer.MODE_CALIB:
+                zd.set_mode(ZoneDrawer.MODE_IDLE)
+            if zd.calib_p1 or zd.calib_p2:
+                zd.clear_calibration()
+            self.btn_clear_calib.setEnabled(False)
         win = self.window()
         if hasattr(win, "_save_config"):
             win._save_config()
@@ -2329,8 +2637,10 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         if not hasattr(self, "_calib_auto_widget"):
             return
         mode = self._calib_mode()
-        self._calib_auto_widget.setVisible(mode == "auto")
-        self._calib_manual_widget.setVisible(mode == "manual")
+        card = getattr(self, "_step_groups", {}).get("scale")
+        is_open = card is None or card.isChecked()
+        self._calib_auto_widget.setVisible(is_open and mode == "auto")
+        self._calib_manual_widget.setVisible(is_open and mode == "manual")
         exp = getattr(self, "experiment", None)
         if exp is not None:
             try:
@@ -2996,6 +3306,9 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             "model_params": {m: dict(p) for m, p in self._model_params.items()},
             "post_params":  dict(self._post_params),
             "body_style":   self.combo_body_style.currentData() or "dot",
+            "marker_shape": self.combo_marker_shape.currentData() or "ring",
+            "marker_size":  int(self.spin_marker_size.value()),
+            "marker_tag":   self.chk_marker_tag.isChecked(),
             "ellipse":      self.chk_ellipse.isChecked(),
             "trail":        self.chk_trail.isChecked(),
             "trail_len":    self.spin_trail_len.value(),
@@ -3085,6 +3398,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             v = _migrate_combo_value(p["body_style"], _LEGACY_BODY_STYLES, "dot")
             idx = self.combo_body_style.findData(v)
             self.combo_body_style.setCurrentIndex(idx if idx >= 0 else 1)
+        self._apply_marker_settings(p)
         if "ellipse" in p:
             self.chk_ellipse.setChecked(p["ellipse"])
         if "trail" in p:
@@ -3118,11 +3432,9 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
                     f"background-color: {self._colors[key]}; border: 1px solid rgba(0,0,0,0.18); border-radius: 2px;"
                 )
             self.zone_drawer.set_zone_colors(self._colors)
-            self.config["colors"] = dict(self._colors)
-            win = self.window()
-            if hasattr(win, "_save_config"):
-                win._save_config()
-            self._on_scrub(self.slider_scrub.value())
+            self._persist_config("colors", dict(self._colors))
+        self._apply_view_prefs()
+        self._on_scrub(self.slider_scrub.value())
 
     def _delete_preset(self):
         name = self.combo_preset.currentText()
@@ -3315,9 +3627,13 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             )
             self.lbl_export.setText(f"Saved:\n{out_path}\n(+ CSV companions)")
             theme.set_tone(self.lbl_export, "ok", "font-size:11px;")
+            from gui.notify import show_done
+            show_done(self, "Excel file saved",
+                      "CSV copies of the data were saved next to it.", path=out_path)
         except Exception as e:
-            QMessageBox.warning(self, "Export Error", str(e))
             theme.set_tone(self.lbl_export, "err", "font-size:11px;")
+            from gui.notify import show_done
+            show_done(self, "Excel export failed", str(e), kind="err")
 
     # ── exclusion brush ───────────────────────────────────────────────────
 
@@ -3476,9 +3792,9 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         draw_body_overlay(
             frame, r, frame_idx=frame_idx,
             results=results_override if results_override is not None else self.tracking_results,
-            style=body_style if body_style is not None else (
-                self.combo_body_style.currentData()
-                if self.zone_drawer.layers.get("marker", True) else "none"),
+            style=body_style if body_style is not None else self.combo_body_style.currentData(),
+            shape=self.combo_marker_shape.currentData() or "ring",
+            size=int(self.spin_marker_size.value()),
             do_ellipse=draw_ellipse if draw_ellipse is not None else self.chk_ellipse.isChecked(),
             do_trail=draw_trail if draw_trail is not None else self.chk_trail.isChecked(),
             trail_len=trail_len if trail_len is not None else self.spin_trail_len.value(),
@@ -3553,7 +3869,8 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         g.setObjectName("StepGroup")  # styled in theme.py
         m = re.match(r"\s*Step\s+(\d+)\s*[—–-]\s*(.+)", title)
         meta_icon, meta_name = STEP_META.get(status_id, ("config", None))
-        g._header = StepHeader(g, icon or meta_icon, name or (m.group(2) if m else title))
+        g._help_name = name or (m.group(2) if m else title)
+        g._header = StepHeader(g, icon or meta_icon, g._help_name)
         g._header.clicked.connect(lambda gb=g: gb.setChecked(not gb.isChecked()))
         HeaderPlacer(g, g._header)
         g.toggled.connect(lambda checked, gb=g: self._toggle_group(gb, checked))
@@ -3590,12 +3907,19 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self._update_group_title(gb)
         hdr = getattr(gb, "_header", None)
         for child in gb.children():
-            if isinstance(child, QWidget) and child is not hdr:
+            if (isinstance(child, QWidget) and child is not hdr
+                    and not getattr(child, "_keep_hidden", False)):
                 child.setVisible(checked)
         if checked:
             gb.setMaximumHeight(16777215)
             # re-hide widgets that belong to the Full view only
             self._apply_simple_mode()
+            # …and sub-panels that only show for the selected mode
+            if gb is getattr(self, "_step_groups", {}).get("scale"):
+                self._refresh_calib_mode_visibility()
+            pad = getattr(self, "_arena_pad_widget", None)
+            if pad is not None and pad.parent() is gb:
+                self._refresh_arena_mode_chip()
         else:
             gb.setMaximumHeight(HEADER_H + 1)
 

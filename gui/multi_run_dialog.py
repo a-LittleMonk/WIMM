@@ -345,13 +345,13 @@ class MultiRunDialog(QDialog):
             )
             self.lbl_status.setText(f"Saved: {out_path}")
             logger.info(f"Multi-Run wrote {out_path}", source="multirun")
-            QMessageBox.information(
-                self, "Multi-Run complete",
-                f"Wrote {len(variants)} variant(s) to:\n{out_path}"
-            )
+            from gui.notify import show_done
+            show_done(self, "Multi-run complete",
+                      f"{len(variants)} variant(s) compared in one workbook.", path=out_path)
         except Exception as e:
             logger.error(f"Multi-Run export failed: {e}", source="multirun")
-            QMessageBox.warning(self, "Multi-Run", f"Export failed: {e}")
+            from gui.notify import show_done
+            show_done(self, "Multi-run export failed", str(e), kind="err")
         finally:
             self.btn_run.setEnabled(True)
             self.btn_cancel.setText("Close")

@@ -71,6 +71,11 @@ _ICONS = {
                   '<path d="M4.75 1.5v13M8 1.5v13M11.25 1.5v13M1.5 4.75h13M1.5 8h13M1.5 11.25h13" '
                   'stroke-opacity=".55"/>', "stroke", 1.2),
     "minus":    ('<path d="M3.5 8h9"/>', "stroke", 1.8),
+    "sun":      ('<circle cx="8" cy="8" r="2.7"/>'
+                 '<path d="M8 1.5v1.8M8 12.7v1.8M1.5 8h1.8M12.7 8h1.8M3.4 3.4l1.3 1.3M11.3 11.3l1.3 1.3M3.4 12.6l1.3-1.3M11.3 4.7l1.3-1.3"/>',
+                 "stroke", 1.4),
+    "moon":     ('<path transform="scale(.6667)" d="M21 12.8 A9 9 0 1 1 11.2 3 A7 7 0 0 0 21 12.8 Z"/>', "stroke", 2.0),
+    "popout":   ('<path d="M9 2.5h4.5V7M13.5 2.5L8 8M11.5 9.5v4h-9v-9h4"/>', "stroke", 1.4),
     "logo":     ('<rect x="3.5" y="3.5" width="9" height="9" rx="1.2"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/>',
                  "stroke", 1.5),
 }

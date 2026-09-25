@@ -552,6 +552,8 @@ class RealtimeScoringTab(QWidget):
             ws["B1"].font = ws["B1"].font.copy(bold=True)
             wb.save(path)
             self._show(f"Saved: {path}")
+            from gui.notify import show_done
+            show_done(self, "Scoring saved", f"{len(self._export_points)} sample(s).", path=path)
         except Exception as e:
             self._show(f"Save failed: {e}", error=True)
 

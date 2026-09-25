@@ -63,6 +63,7 @@ _OF_METHOD_NAMES = [
     "_compute_center",
     "_ensure_cell_id_cache",
     "_build_cell_id_sequence",
+    "_periphery_cum_times",
     "_grid_cell_quad_px",
     "_draw_cell_overlay_cv2",
     "_draw_zones_on_frame_cv2",

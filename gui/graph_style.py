@@ -237,6 +237,16 @@ def _legacy_style(**overrides):
         "cell_label_dy":     0,     # px offset of cell text (Cell Time)
         "legend_x_offset":   0.0,   # axes-fraction offset for legend
         "legend_y_offset":   0.0,   # axes-fraction offset for legend
+        # Drag-to-position (chart editor) — see apply_layout_overrides().
+        "title_dx":          0.0,   # pt, horizontal title nudge
+        "xlabel_dx":         0.0,   # pt
+        "xlabel_dy":         0.0,   # pt
+        "ylabel_dx":         0.0,   # pt
+        "ylabel_dy":         0.0,   # pt
+        "plot_dl":           0.0,   # fig-fraction nudges of the plot-area edges
+        "plot_db":           0.0,
+        "plot_dr":           0.0,
+        "plot_dt":           0.0,
     }
     base.update(overrides)
     return base
@@ -291,8 +301,28 @@ _TOKEN_KEYS = {
 }
 
 
+# Background of exported graphs (files + Excel images): "white" | "transparent".
+# Chosen in Output → Graphs; saved as config["export_bg"].
+EXPORT_BG_CHOICES = {"white": "#FFFFFF", "transparent": "none"}
+_export_bg = "white"
+
+
+def set_export_bg(choice):
+    global _export_bg
+    _export_bg = choice if choice in EXPORT_BG_CHOICES else "white"
+
+
+def export_bg():
+    return _export_bg
+
+
 def resolve_token(value, mode="light"):
-    """Map "@ink"-style tokens to hex for `mode` ("light" | "dark")."""
+    """Map "@ink"-style tokens to hex for `mode` ("light" | "dark" |
+    "export" = light palette on a white or transparent ground)."""
+    if mode == "export":
+        if value in ("@surface", "@surface2"):
+            return EXPORT_BG_CHOICES[_export_bg]
+        mode = "light"
     if isinstance(value, (list, tuple)):
         return [resolve_token(v, mode) for v in value]
     if isinstance(value, str) and value.startswith("@"):
@@ -303,8 +333,52 @@ def resolve_token(value, mode="light"):
             return theme.mono_family()
         key = _TOKEN_KEYS.get(value)
         if key:
+            if mode == theme.mode():
+                return getattr(theme, key)  # live palette (View → Appearance)
             return (theme.DARK if mode == "dark" else theme.LIGHT)[key]
     return value
+
+
+# Drag-to-position fields (chart editor). Every graph has a title and a plot
+# area; axis-title nudges only where that graph has the axis title.
+PLOT_AREA_FIELDS = ("plot_dl", "plot_db", "plot_dr", "plot_dt")
+for _name, _fields in GRAPH_FIELDS.items():
+    _fields.update({"title_dx", "text_color", "title_color"})
+    _fields.update(PLOT_AREA_FIELDS)
+    if "xlabel" in _fields:
+        _fields.update({"xlabel_dx", "xlabel_dy", "label_color"})
+    if "ylabel" in _fields:
+        _fields.update({"ylabel_dx", "ylabel_dy", "label_color"})
+SECTION_FIELDS["layout"] += ["title_dx", "xlabel_dx", "xlabel_dy", "ylabel_dx", "ylabel_dy",
+                       *PLOT_AREA_FIELDS]
+
+
+def apply_layout_overrides(fig, st, ax=None):
+    """Apply the chart editor's drag positions to a finished figure: title
+    and axis-title nudges (points) and plot-area edge nudges (figure
+    fraction). Shared by the editor preview and the app's real graphs, so
+    what the user drags is exactly what gets drawn and exported."""
+    if fig is None or not fig.axes:
+        return fig
+    from matplotlib.transforms import ScaledTranslation
+    ax = ax or fig.axes[0]
+
+    def nudge(artist, dx, dy):
+        dx, dy = float(dx or 0.0), float(dy or 0.0)
+        if (dx or dy) and artist is not None and artist.get_text():
+            artist.set_transform(artist.get_transform() + ScaledTranslation(
+                dx / 72.0, dy / 72.0, fig.dpi_scale_trans))
+
+    nudge(ax.title, st.get("title_dx"), 0.0)          # vertical = title_pad
+    nudge(ax.xaxis.label, st.get("xlabel_dx"), st.get("xlabel_dy"))
+    nudge(ax.yaxis.label, st.get("ylabel_dx"), st.get("ylabel_dy"))
+    dl, db, dr, dt = (float(st.get(k, 0.0) or 0.0) for k in PLOT_AREA_FIELDS)
+    if dl or db or dr or dt:
+        p = ax.get_position()
+        w = max(0.05, p.width - dl + dr)
+        h = max(0.05, p.height - db + dt)
+        ax.set_position([p.x0 + dl, p.y0 + db, w, h])
+    return fig
 
 
 def resolve_style(style, mode="light"):
@@ -401,6 +475,19 @@ def _style(**overrides):
         "cell_label_dy":     0,     # px offset of cell text (Cell Time)
         "legend_x_offset":   0.0,   # axes-fraction offset for legend
         "legend_y_offset":   0.0,   # axes-fraction offset for legend
+        # Per-element text colours; "" = use text_color.
+        "title_color":       "",
+        "label_color":       "",
+        # Drag-to-position (chart editor) — see apply_layout_overrides().
+        "title_dx":          0.0,   # pt, horizontal title nudge
+        "xlabel_dx":         0.0,   # pt
+        "xlabel_dy":         0.0,   # pt
+        "ylabel_dx":         0.0,   # pt
+        "ylabel_dy":         0.0,   # pt
+        "plot_dl":           0.0,   # fig-fraction nudges of the plot-area edges
+        "plot_db":           0.0,
+        "plot_dr":           0.0,
+        "plot_dt":           0.0,
     }
     base.update(overrides)
     return base
@@ -421,6 +508,11 @@ LIGHT_PRESET = {
     "Triplets":        _style(ylabel="Share (%)", grid=True,
                               bar_colors=["@ok", "@err"]),
 }
+
+# The Default preset is simple and titles every graph by its name.
+for _gname, _gstyle in LIGHT_PRESET.items():
+    if not _gstyle.get("title"):
+        _gstyle["title"] = _gname
 
 PUBLICATION_PRESET = {
     "Trajectory":      _style(title="Trajectory", path_color="#333333",
@@ -467,6 +559,11 @@ PUBLICATION_PRESET = {
 # No built-in presets surfaced in the UI. LIGHT_PRESET is still used
 # internally by default_style_for() to seed sensible per-graph defaults.
 BUILTIN_PRESETS = {}
+
+# Presets hold every graph of every test. "Default" is built in (the
+# LIGHT_PRESET look) and can't be overwritten or deleted.
+DEFAULT_PRESET = "Default"
+ALL_PLUGIN_KEYS = ("open_field", "nor", "epm", "y_maze")
 
 
 # Per-plugin baseline overrides layered on top of the shared Light-preset
@@ -533,7 +630,10 @@ class GraphStyleConfig:
 
     def __init__(self):
         self.plugins = {}        # plugin_key → {graph_name: style}
-        self.custom_presets = {}  # preset_name → {graph_name: style}
+        # preset_name → {"plugins": {plugin_key: {graph_name: style}}}
+        # (older presets are a flat {graph_name: style}, used for every test)
+        self.custom_presets = {}
+        self.active_preset = DEFAULT_PRESET
 
     # ── bucket helpers ───────────────────────────────────────────────────
     def _ensure_plugin(self, plugin_key: str) -> dict:
@@ -582,50 +682,73 @@ class GraphStyleConfig:
 
     # ── presets ──────────────────────────────────────────────────────────
     def all_preset_names(self):
-        return list(BUILTIN_PRESETS.keys()) + list(self.custom_presets.keys())
-
-    def preset(self, name: str):
-        if name in BUILTIN_PRESETS:
-            return deepcopy(BUILTIN_PRESETS[name])
-        return deepcopy(self.custom_presets.get(name)) if name in self.custom_presets else None
+        return [DEFAULT_PRESET] + list(BUILTIN_PRESETS.keys()) + \
+            [n for n in self.custom_presets if n != DEFAULT_PRESET]
 
     def is_builtin(self, name: str) -> bool:
-        return name in BUILTIN_PRESETS
+        return name == DEFAULT_PRESET or name in BUILTIN_PRESETS
+
+    def preset_style(self, name: str, plugin_key: str, graph_name: str) -> dict:
+        """One graph's style as preset `name` defines it (full dict)."""
+        base = default_style_for(graph_name, plugin_key)
+        if name == DEFAULT_PRESET or name not in self.custom_presets and name not in BUILTIN_PRESETS:
+            return base
+        p = self.custom_presets.get(name) or BUILTIN_PRESETS.get(name) or {}
+        per_test = p.get("plugins") if isinstance(p.get("plugins"), dict) else None
+        s = (per_test.get(plugin_key) or {}).get(graph_name) if per_test else p.get(graph_name)
+        return {**base, **deepcopy(s or {})}
+
+    def preset(self, name: str):
+        """Whole preset as {plugin_key: {graph_name: style}}, or None."""
+        if not (name == DEFAULT_PRESET or name in BUILTIN_PRESETS or name in self.custom_presets):
+            return None
+        return {pk: {g: self.preset_style(name, pk, g) for g in GRAPH_NAMES}
+                for pk in ALL_PLUGIN_KEYS}
 
     def apply_preset(self, name: str, plugin_key: str = None) -> bool:
-        """Apply preset `name` to the plugin's bucket (default plugin if
-        not specified). Returns True on success."""
+        """Load preset `name` into every test's graphs and make it active."""
         p = self.preset(name)
         if p is None:
             return False
-        pkey = plugin_key or _DEFAULT_PLUGIN_KEY
-        bucket = self._ensure_plugin(pkey)
-        for gname in GRAPH_NAMES:
-            bucket[gname] = {**default_style_for(gname, pkey), **p.get(gname, {})}
+        for pk, graphs in p.items():
+            self.plugins[pk] = deepcopy(graphs)
+        self.active_preset = name
         return True
 
     def save_preset(self, name: str, plugin_key: str = None) -> None:
-        """Snapshot the focused plugin's active styles under `name`.
-        Built-in names are blocked. Presets are stored as a flat
-        {graph: style} dict so they can be re-applied to any plugin."""
-        if not name or name in BUILTIN_PRESETS:
+        """Store every test's current graphs as preset `name` (overwrites a
+        custom preset of that name) and make it the active preset."""
+        if not name or self.is_builtin(name):
             return
-        bucket = self._ensure_plugin(plugin_key or _DEFAULT_PLUGIN_KEY)
-        self.custom_presets[name] = deepcopy(bucket)
+        self.custom_presets[name] = {"plugins": {
+            pk: deepcopy(self._ensure_plugin(pk)) for pk in ALL_PLUGIN_KEYS}}
+        self.active_preset = name
+
+    def is_modified(self) -> bool:
+        """True when the current graphs differ from the active preset."""
+        p = self.preset(self.active_preset)
+        if p is None:
+            return True
+        for pk in ALL_PLUGIN_KEYS:
+            for g in GRAPH_NAMES:
+                if self.get_for(pk, g) != p[pk][g]:
+                    return True
+        return False
 
     def delete_preset(self, name: str) -> bool:
-        if name in BUILTIN_PRESETS:
+        if self.is_builtin(name) or name not in self.custom_presets:
             return False
-        if name in self.custom_presets:
-            del self.custom_presets[name]
-            return True
-        return False
+        del self.custom_presets[name]
+        if self.active_preset == name:
+            self.active_preset = DEFAULT_PRESET
+        return True
 
     # ── (de)serialize ───────────────────────────────────────────────────
     def to_dict(self) -> dict:
         return {
             "plugins": {k: deepcopy(v) for k, v in self.plugins.items()},
             "custom_presets": deepcopy(self.custom_presets),
+            "active_preset": self.active_preset,
         }
 
     @classmethod
@@ -663,7 +786,14 @@ class GraphStyleConfig:
         presets = d.get("custom_presets")
         if isinstance(presets, dict):
             for pname, pdata in presets.items():
-                if not isinstance(pdata, dict) or pname in BUILTIN_PRESETS:
+                if not isinstance(pdata, dict) or cfg.is_builtin(pname):
                     continue
-                cfg.custom_presets[pname] = _clean_bucket(pdata)
+                if isinstance(pdata.get("plugins"), dict):      # every test
+                    cfg.custom_presets[pname] = {"plugins": {
+                        pk: _clean_bucket(b, pk) for pk, b in pdata["plugins"].items()}}
+                else:                                            # older, flat
+                    cfg.custom_presets[pname] = _clean_bucket(pdata)
+        ap = d.get("active_preset")
+        if ap == DEFAULT_PRESET or ap in cfg.custom_presets:
+            cfg.active_preset = ap
         return cfg

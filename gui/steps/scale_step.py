@@ -12,6 +12,9 @@ from PyQt5.QtWidgets import (
 from gui import theme
 from gui.widgets_v2 import SegTabs
 
+# Default Scale = Auto from a 50 × 50 cm cage (Open Field / NOR arenas).
+DEFAULT_CAGE_CM = 50.0
+
 
 def build_scale_step(host):
     """Build the Scale card. Sets attributes on host:
@@ -33,6 +36,7 @@ def build_scale_step(host):
     radios = (host.rb_calib_auto, host.rb_calib_manual, host.rb_calib_none)
     for i, rb in enumerate(radios):
         host.calib_mode_group.addButton(rb, i)
+        rb._keep_hidden = True   # opening the card must not re-show it
         rb.hide()
         layout.addWidget(rb)
 
@@ -70,14 +74,14 @@ def build_scale_step(host):
     host.spin_cage_w.setDecimals(1)
     host.spin_cage_w.setSingleStep(1.0)
     host.spin_cage_w.setSuffix(" cm")
-    host.spin_cage_w.setValue(float(host.config.get("cage_w_cm", 30.0)))
+    host.spin_cage_w.setValue(float(host.config.get("cage_w_cm", DEFAULT_CAGE_CM)))
     host.spin_cage_w.valueChanged.connect(host._on_cage_size_changed)
     host.spin_cage_h = QDoubleSpinBox()
     host.spin_cage_h.setRange(0.1, 9999.0)
     host.spin_cage_h.setDecimals(1)
     host.spin_cage_h.setSingleStep(1.0)
     host.spin_cage_h.setSuffix(" cm")
-    host.spin_cage_h.setValue(float(host.config.get("cage_h_cm", 30.0)))
+    host.spin_cage_h.setValue(float(host.config.get("cage_h_cm", DEFAULT_CAGE_CM)))
     host.spin_cage_h.valueChanged.connect(host._on_cage_size_changed)
     theme.set_tone(host.lbl_cage_x, "faint")
 

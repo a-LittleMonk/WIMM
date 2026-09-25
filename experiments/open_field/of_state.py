@@ -95,13 +95,55 @@ def _ensure_cell_id_cache(host):
         center_mask = point_in_polygon_mask(xs, ys, center_px)
     else:
         center_mask = np.zeros(n, dtype=bool)
+    # Detected and inside the arena — the frames that are either center
+    # or periphery (same rule as analysis.open_field).
+    area_mask = ~(np.isnan(xs) | np.isnan(ys))
+    if arena and len(arena) >= 3:
+        area_mask &= point_in_polygon_mask(xs, ys, arena)
 
     host._cell_id_cache = {
         "key": key,
         "grid_ids": grid_ids,
         "center_mask": center_mask,
+        "area_mask": area_mask,
     }
     return grid_ids, center_mask
+
+
+def _periphery_cum_times(host):
+    """Running periphery time (s) per frame, same accounting as the
+    "Time in Periphery" result: detected + inside the arena + not in a
+    confirmed center visit. A center visit shorter than the min-dwell is
+    credited to periphery once it ends, so the counter never runs
+    backwards. Returns a float array (one value per frame) or None."""
+    grid_ids, center_mask = _ensure_cell_id_cache(host)
+    if grid_ids is None:
+        return None
+    cache = host._cell_id_cache
+    fps = float(host.fps or 30.0)
+    min_dwell = host._cell_min_dwell_s()
+    min_frames = max(1, int(round(min_dwell * fps))) if min_dwell > 0 else 1
+    pkey = (min_frames, fps)
+    if cache.get("periph_key") == pkey:
+        return cache["periph_cum"]
+    area = cache["area_mask"]
+    center = center_mask & area
+    add = (area & ~center).astype(float)
+    n = len(center)
+    i = 0
+    while i < n:
+        if not center[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and center[j]:
+            j += 1
+        if j - i < min_frames:
+            add[min(j, n - 1)] += j - i      # short visit → periphery
+        i = j
+    cum = np.cumsum(add) / fps
+    cache["periph_key"], cache["periph_cum"] = pkey, cum
+    return cum
 
 
 def _build_cell_id_sequence(host):
@@ -191,4 +233,8 @@ def _compute_cell_times_through(host, last_idx):
         if c_time > 0:
             times["C"] = c_time
             entries["C"] = c_entries
+    if host.zone_drawer.zone_mode != "grid" and n > 0:
+        periph = _periphery_cum_times(host)
+        if periph is not None:
+            times["P"] = float(periph[n - 1])
     return times, entries

@@ -46,6 +46,7 @@ class ZoneDrawer(QLabel):
     exclusion_changed = pyqtSignal()
     point_clicked     = pyqtSignal(float, float)   # norm x, norm y — correction mode
     mode_changed      = pyqtSignal(object)         # active tool changed (None = idle)
+    view_changed      = pyqtSignal()               # layer / cell-highlight look changed
 
     MODE_IDLE    = None
     MODE_CALIB   = "calibration"
@@ -151,8 +152,6 @@ class ZoneDrawer(QLabel):
         self.arena_label = ""            # "ARENA · 40.0 × 40.0 cm"
         self.cage_dims_cm = None         # (w_cm, h_cm) → ruler + scale bar
         self.center_pct = None           # for the CENTER 50 % tag
-        self.hud_left = ""               # "CAM 01 · 30 fps · F 000120"
-        self.hud_time = ""               # "00:03.9"
         self.marker_info = None          # {"norm": (x, y), "lines": [str, str]}
         self.heat_img = None             # QImage (RGBA) covering heat_rect
         self.heat_rect = None            # normalized (x0, y0, x1, y1)
@@ -276,11 +275,7 @@ class ZoneDrawer(QLabel):
         if name in self.layers and self.layers[name] != bool(on):
             self.layers[name] = bool(on)
             self.update()
-
-    def set_hud(self, left, time_text):
-        if (left, time_text) != (self.hud_left, self.hud_time):
-            self.hud_left, self.hud_time = left, time_text
-            self.update()
+            self.view_changed.emit()
 
     def set_marker_info(self, info):
         self.marker_info = info
@@ -316,22 +311,27 @@ class ZoneDrawer(QLabel):
     def set_cell_highlight_color(self, hex_color: str):
         self._cell_highlight_color = hex_color
         self.update()
+        self.view_changed.emit()
 
     def set_cell_highlight_alpha(self, alpha: int):
         self._cell_highlight_alpha = max(0, min(255, int(alpha)))
         self.update()
+        self.view_changed.emit()
 
     def set_cell_show_numbers(self, on: bool):
         self._cell_show_numbers = bool(on)
         self.update()
+        self.view_changed.emit()
 
     def set_cell_show_timer(self, on: bool):
         self._cell_show_timer = bool(on)
         self.update()
+        self.view_changed.emit()
 
     def set_cell_show_entries(self, on: bool):
         self._cell_show_entries = bool(on)
         self.update()
+        self.view_changed.emit()
 
     def set_arm_show_numbers(self, on: bool):
         self._arm_show_numbers = bool(on)
@@ -814,6 +814,27 @@ class ZoneDrawer(QLabel):
             painter.setPen(QColor("#121826"))
             painter.drawText(rect, Qt.AlignCenter, tag)
 
+        # Periphery tag (Open Field, Center + periphery mode) — inside the
+        # arena's bottom-left corner, with its running time.
+        if (self.center_zone and self.arena and show_zones
+                and self._overlay_renderer is not None and self.zone_mode != "grid"):
+            arena_color = QColor(self._colors["arena"])
+            apts = [self._norm_to_disp(p, ox, oy, dw, dh) for p in self.arena]
+            bits = ["PERIPHERY"]
+            if self._cell_show_timer:
+                bits.append(f"{self._cell_times.get('P', 0.0):.1f}s")
+            tag = " · ".join(bits)
+            painter.setFont(self._mono(9, True))
+            tw = painter.fontMetrics().horizontalAdvance(tag)
+            tx = min(p[0] for p in apts) + 4
+            ty = max(p[1] for p in apts) - 4
+            rect = QRectF(tx, ty - 14, tw + 10, 14)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(arena_color)
+            painter.drawRoundedRect(rect, 2, 2)
+            painter.setPen(QColor("#121826"))
+            painter.drawText(rect, Qt.AlignCenter, tag)
+
         # Arena corner preview
         if self.mode == self.MODE_ARENA and self._arena_clicks:
             n   = len(self._arena_clicks)
@@ -884,33 +905,6 @@ class ZoneDrawer(QLabel):
         # Marker info tag (Marker layer)
         if self.layers.get("marker", True) and self.marker_info:
             self._paint_marker_tag(painter, ox, oy, dw, dh)
-
-        # HUD — camera / fps / frame + clock, top-right of the frame, on a
-        # dark glass chip so it stays legible over bright footage
-        if self.hud_left or self.hud_time:
-            painter.setFont(self._mono(9))
-            fm = painter.fontMetrics()
-            parts_w = (fm.horizontalAdvance(self.hud_left) if self.hud_left else 0) + \
-                      ((fm.horizontalAdvance(self.hud_time) + 20) if self.hud_time else 0) + \
-                      (12 if (self.hud_left and self.hud_time) else 0)
-            y = max(oy + 20, 92)     # clear of the layer chips
-            chip = QRectF(ox + dw - 12 - parts_w - 16, y - 13, parts_w + 16, 19)
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(14, 17, 20, 165))
-            painter.drawRoundedRect(chip, 5, 5)
-            right = ox + dw - 12 - 8
-            if self.hud_time:
-                tw = fm.horizontalAdvance(self.hud_time)
-                painter.setPen(QColor("#E6EAEE"))
-                painter.drawText(right - tw, y, self.hud_time)
-                painter.setPen(Qt.NoPen)
-                painter.setBrush(QColor("#F2F4F7"))
-                painter.drawEllipse(QPointF(right - tw - 9, y - 3), 3, 3)
-                right -= tw + 20
-            if self.hud_left:
-                tw = fm.horizontalAdvance(self.hud_left)
-                painter.setPen(QColor("#AEB8C2"))
-                painter.drawText(right - tw - (12 if self.hud_time else 0), y, self.hud_left)
 
         # Instruction overlay
         n_clicks = len(self._arena_clicks)

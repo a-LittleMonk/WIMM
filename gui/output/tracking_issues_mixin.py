@@ -1,7 +1,8 @@
 """IssuesMixin — Tracking Issues tab (glitch detector + table + mini-map
 + inline frame preview + status / smoothing / CSV actions).
 
-Mixed into ExperimentTab. Owns the entire "Tracking Issues" tab UI plus
+Mixed into ExperimentTab. Owns the entire "Tracking Issues" UI (shown in a
+popup from the preview, with red marks on the frame slider) plus
 its persistence per-video (threshold, accel threshold, detector toggles,
 false-positive marks) inside the host's `config["tracking_issues"]`.
 
@@ -11,6 +12,7 @@ Reuses host attrs / methods:
     self._trim_start_frame, self._on_scrub, self._open_corrections_popup,
     self._populate_excel_tab.
 """
+import os
 import numpy as np
 
 from PyQt5.QtCore import Qt
@@ -296,6 +298,52 @@ class IssuesMixin:
         if self._issues_chk_gap.isChecked():     s.add(GAP_JUMP)
         return s
 
+    # ── Main-screen access: slider marks + popup ─────────────────────────
+    def _refresh_issue_marks(self):
+        """Red marks on the frame slider at every *active* issue, and the
+        count on the Tracking issues button."""
+        slider = getattr(self, "slider_scrub", None)
+        btn = getattr(self, "btn_issues", None)
+        df = getattr(self, "_issues_df", None)
+        marks = []
+        if df is not None and len(df) > 0:
+            trim = self._trim_start_frame()
+            active = df[df["Status"] == "active"]
+            for _, r in active.iterrows():
+                f = int(r["Frame"])
+                tip = f"Frame {trim + f}  ·  {float(r['Time (s)']):.2f} s\n{r['Reasons']}"
+                marks.append((trim + f, tip))
+        if hasattr(slider, "set_marks"):
+            slider.set_marks(marks)
+        if btn is not None:
+            n = len(marks)
+            btn._text.setText(f"Tracking issues ({n})" if n else "Tracking issues")
+            btn.updateGeometry()
+            btn.setEnabled(df is not None)
+
+    def _open_tracking_issues_popup(self):
+        """Non-modal window with the full tracking-issues tool (table, mini
+        map, frame preview, detectors, false-positive marks, smoothing)."""
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout
+        if self._issues_popup is None:
+            host = self.slider_scrub.window()
+            dlg = QDialog(host)
+            dlg.setWindowFlags(dlg.windowFlags() | Qt.WindowMaximizeButtonHint)
+            lay = QVBoxLayout(dlg)
+            lay.setContentsMargins(16, 14, 16, 16)
+            lay.addWidget(self._issues_widget)
+            dlg.resize(1100, 720)
+            self._issues_popup = dlg
+        name = os.path.basename(self.video_path) if getattr(self, "video_path", None) else ""
+        self._issues_popup.setWindowTitle(f"Tracking issues — {name}" if name else "Tracking issues")
+        try:
+            self._render_issues_mini_map()   # draw in the current theme
+        except Exception as e:
+            logger.warn(f"issues mini-map refresh failed: {e}", source="issues")
+        self._issues_popup.show()
+        self._issues_popup.raise_()
+        self._issues_popup.activateWindow()
+
     def _populate_tracking_issues_tab(self):
         """Called from _recompute_metrics_and_views after each tracking run.
         Loads persisted state for this video, then runs detection."""
@@ -309,6 +357,7 @@ class IssuesMixin:
             self._issues_table.setRowCount(0)
             self._issues_stats_lbl.setText("Run tracking first to see flagged frames.")
             self._render_issues_mini_map()
+            self._refresh_issue_marks()
             return
         _, arena, _, px_per_cm = self._graph_data()
         issues = detect_issues(
@@ -328,6 +377,7 @@ class IssuesMixin:
         self._fill_issues_table(issues)
         self._refresh_issues_stats(issues)
         self._render_issues_mini_map()
+        self._refresh_issue_marks()
         if save_state:
             self._save_tracking_issues_state()
 
@@ -583,6 +633,7 @@ class IssuesMixin:
             self._issues_fp_set.discard(int(frame))
         self._fill_issues_table(self._issues_df)
         self._refresh_issues_stats(self._issues_df)
+        self._refresh_issue_marks()
         self._render_issues_mini_map()
         self._save_tracking_issues_state()
 
@@ -627,7 +678,9 @@ class IssuesMixin:
         try:
             export = self._issues_df.drop(columns=["_row"], errors="ignore")
             export.to_csv(path, index=False)
-            QMessageBox.information(self, "Export CSV",
-                                    f"Saved {len(export)} row(s) to:\n{path}")
+            from gui.notify import show_done
+            show_done(self._issues_popup or self, "Tracking issues exported",
+                      f"{len(export)} flagged frame(s).", path=path)
         except Exception as e:
-            QMessageBox.warning(self, "Export CSV", f"Failed: {e}")
+            from gui.notify import show_done
+            show_done(self._issues_popup or self, "CSV export failed", str(e), kind="err")

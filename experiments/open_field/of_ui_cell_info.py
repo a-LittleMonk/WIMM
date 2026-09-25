@@ -286,7 +286,7 @@ def _refresh_cell_aggregation(host):
     if warn is not None:
         grid_mode = getattr(host.zone_drawer, "zone_mode", "grid") == "grid"
         warn.setText("" if grid_mode else
-                     "Zone style is “Center only” — switch to Grid 4×4 + center "
+                     "Zone style is “Center + periphery” — switch to Grid 4×4 + center "
                      "(Zones) to compute per-cell metrics.")
         warn.setVisible(not grid_mode)
 

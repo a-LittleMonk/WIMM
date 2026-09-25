@@ -2,16 +2,16 @@
 status pill, speed timeline + time ruler, measurements sidebar."""
 import math
 
-from PyQt5.QtCore import QEvent, QPointF, QRectF, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QObject, QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import (
     QColor, QFont, QImage, QLinearGradient, QPainter, QPainterPath, QPen,
 )
 from PyQt5.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
-    QSizePolicy, QVBoxLayout, QWidget,
+    QSizePolicy, QSlider, QStyle, QStyleOptionSlider, QToolTip, QVBoxLayout, QWidget,
 )
 
-from gui import theme
+from gui import icons, theme
 from gui.widgets_v2 import mono_font, prop, repolish
 
 
@@ -55,6 +55,36 @@ class SegmentedControl(QFrame):
             self.changed.emit(i)
 
 
+class ThemeToggle(SegmentedControl):
+    """Light | dark switch drawn with sun / moon icons (no font glyphs)."""
+
+    def __init__(self, current=0, parent=None):
+        super().__init__(["", ""], current, parent)
+        for b, name in zip(self._btns, ("sun", "moon")):
+            b.setProperty("icon_name", name)
+            b.setFixedWidth(38)
+            b.setIconSize(QSize(15, 15))
+        self.setToolTip("Light / dark theme")
+        theme.notifier.changed.connect(lambda _m: self._refresh_icons())
+        self.set_index(current, emit=False)
+
+    def set_index(self, i, emit=False):
+        super().set_index(i, emit=False)
+        self._refresh_icons()
+        if emit:
+            # Paint the new position first; the app-wide restyle follows.
+            self.repaint()
+            self.changed.emit(i)
+
+    def _refresh_icons(self):
+        if not hasattr(self, "_btns"):
+            return
+        for b in self._btns:
+            name = b.property("icon_name")
+            if name:
+                b.setIcon(icons.icon(name, 15, theme.TEXT if b.isChecked() else theme.FAINT))
+
+
 # ── Status pill (header "Tracking OF_M08 · 62%") ───────────────────────────
 class StatusPill(QLabel):
     def __init__(self, parent=None):
@@ -71,45 +101,28 @@ class StatusPill(QLabel):
             self.hide()
 
 
-# ── Speed timeline: plot + threshold + center strip + missed ticks ─────────
-class SpeedTimeline(QWidget):
-    """Speed-vs-time plot with threshold line, playhead, center strip and
-    missed-detection ticks. Click / drag seeks (emits fraction 0..1)."""
+# ── Timeline panels: speed · center / periphery · missed frames ──────────
+class _Track(QWidget):
+    """Base for the timeline panels: label column on the left, a plot area
+    on the right, a playhead, and click / drag to seek (emits 0..1)."""
     seek = pyqtSignal(float)
+    LEFT = 74          # label column
+    RIGHT = 12
 
-    LEFT = 80          # axis column (70) + gap (10)
-    TOP = 8            # room for the playhead diamond
-    PLOT_H = 70
-
-    def __init__(self, parent=None):
+    def __init__(self, min_h, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(self.TOP + self.PLOT_H + 6 + 12 + 4 + 10 + 2)
+        self.setMinimumHeight(min_h)
         self.setCursor(Qt.PointingHandCursor)
-        self._speed = []
-        self._center = []
-        self._missed = []
-        self._thr = 0.0
-        self._unit = "cm/s"
         self._frac = 0.0
-        theme.notifier.changed.connect(self._on_theme)
-
-    def _on_theme(self, _mode):
-        self.update()
-
-    def set_data(self, speed, center, missed, thr, unit):
-        self._speed = list(speed or [])
-        self._center = list(center or [])
-        self._missed = list(missed or [])
-        self._thr = float(thr or 0.0)
-        self._unit = unit
-        self.update()
+        theme.notifier.changed.connect(lambda _m: self.update())
 
     def set_cursor(self, frac):
         self._frac = max(0.0, min(1.0, float(frac)))
         self.update()
 
     def _plot_rect(self):
-        return QRectF(self.LEFT, self.TOP, max(1, self.width() - self.LEFT), self.PLOT_H)
+        return QRectF(self.LEFT, 10, max(1, self.width() - self.LEFT - self.RIGHT),
+                      max(1, self.height() - 16))
 
     def _emit_at(self, x):
         r = self._plot_rect()
@@ -122,27 +135,62 @@ class SpeedTimeline(QWidget):
         if e.buttons() & Qt.LeftButton:
             self._emit_at(e.x())
 
-    def paintEvent(self, _):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        r = self._plot_rect()
-        n = len(self._speed)
-        vmax = max(self._speed) if n else 1.0
-        vmax = max(vmax, self._thr * 1.2, 1e-6)
-        top = math.ceil(vmax / 4.0) * 4 if vmax > 4 else round(vmax, 1)
-        # axis labels
-        p.setFont(_mono(9))
-        p.setPen(QColor(theme.FAINT))
-        rl = QRectF(0, 0, self.LEFT - 10, 12)
-        p.drawText(QRectF(0, r.top() - 2, self.LEFT - 10, 12), Qt.AlignRight, f"{top:g}")
-        p.drawText(QRectF(0, r.bottom() - 10, self.LEFT - 10, 12), Qt.AlignRight, "0")
+    def _label(self, p, text, y, h):
         f = QFont(theme.sans_family())
         f.setPixelSize(10)
         f.setWeight(QFont.Medium)
         p.setFont(f)
         p.setPen(QColor(theme.TEXT_2))
-        p.drawText(QRectF(0, r.center().y() - 7, self.LEFT - 10, 14), Qt.AlignRight | Qt.AlignVCenter, "Speed")
-        # plot background + gridlines
+        p.drawText(QRectF(0, y, self.LEFT - 10, h), Qt.AlignRight | Qt.AlignVCenter, text)
+
+    def _lane(self, p, y, h):
+        r = self._plot_rect()
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(theme.SURFACE_2))
+        p.drawRoundedRect(QRectF(r.left(), y, r.width(), h), 3, 3)
+
+    def _playhead(self, p):
+        r = self._plot_rect()
+        x = r.left() + r.width() * self._frac
+        p.setPen(QPen(QColor(theme.ACCENT), 1))
+        p.drawLine(QPointF(x, 3), QPointF(x, r.bottom() + 2))
+        p.save()
+        p.translate(x, 5)
+        p.rotate(45)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(theme.ACCENT))
+        p.drawRect(QRectF(-3.5, -3.5, 7, 7))
+        p.restore()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        self._paint(p)
+        self._playhead(p)
+
+
+class SpeedTrack(_Track):
+    """Speed over time with the movement-threshold line."""
+
+    def __init__(self, parent=None):
+        super().__init__(70, parent)
+        self._speed, self._thr, self._unit = [], 0.0, "cm/s"
+
+    def set_data(self, speed, thr, unit):
+        self._speed, self._thr, self._unit = list(speed or []), float(thr or 0.0), unit
+        self.update()
+
+    def _paint(self, p):
+        r = self._plot_rect()
+        n = len(self._speed)
+        vmax = max(self._speed) if n else 1.0
+        vmax = max(vmax, self._thr * 1.2, 1e-6)
+        top = math.ceil(vmax / 4.0) * 4 if vmax > 4 else round(vmax, 1)
+        p.setFont(_mono(9))
+        p.setPen(QColor(theme.FAINT))
+        p.drawText(QRectF(0, r.top() - 2, self.LEFT - 10, 12), Qt.AlignRight, f"{top:g}")
+        p.drawText(QRectF(0, r.bottom() - 10, self.LEFT - 10, 12), Qt.AlignRight, "0")
+        self._label(p, self._unit, r.center().y() - 7, 14)
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(theme.SURFACE_2))
         p.drawRoundedRect(r, 4, 4)
@@ -150,7 +198,6 @@ class SpeedTimeline(QWidget):
         for k in (0.25, 0.5, 0.75):
             y = r.top() + r.height() * k
             p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y))
-        # speed curve: gradient area + line
         if n > 1:
             path = QPainterPath()
             for i, v in enumerate(self._speed):
@@ -177,7 +224,6 @@ class SpeedTimeline(QWidget):
             p.setBrush(Qt.NoBrush)
             p.drawPath(path)
             p.setClipping(False)
-        # movement threshold
         if self._thr > 0:
             y = r.bottom() - r.height() * 0.94 * min(1.0, self._thr / top)
             pen = QPen(QColor(theme.WARN), 1)
@@ -188,56 +234,101 @@ class SpeedTimeline(QWidget):
             p.setPen(QColor(theme.WARN))
             p.drawText(QRectF(r.left(), r.top() + 3, r.width() - 6, 12), Qt.AlignRight,
                        f"threshold {self._thr:.2f} {self._unit}")
-        # center strip
-        y0 = r.bottom() + 6
-        f2 = QFont(theme.sans_family())
-        f2.setPixelSize(10)
-        p.setFont(f2)
-        p.setPen(QColor(theme.TEXT_2))
-        p.drawText(QRectF(0, y0 - 1, self.LEFT - 10, 12), Qt.AlignRight | Qt.AlignVCenter, "Center")
+
+
+class ZoneTrack(_Track):
+    """Two lanes: when the animal was in the center, and in the periphery."""
+    LANE = 14
+
+    def __init__(self, parent=None):
+        super().__init__(2 * self.LANE + 26, parent)
+        self._center, self._periph = [], []
+
+    def set_data(self, center, periphery):
+        self._center, self._periph = list(center or []), list(periphery or [])
+        self.update()
+
+    def _runs(self, p, flags, y, color):
+        if not flags:
+            return
+        r = self._plot_rect()
+        m = len(flags)
+        p.save()
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(r.left(), y, r.width(), self.LANE), 3, 3)
+        p.setClipPath(clip)
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(theme.SURFACE_2))
-        p.drawRoundedRect(QRectF(r.left(), y0, r.width(), 12), 3, 3)
-        if self._center:
-            m = len(self._center)
-            start = None
-            p.save()
-            clip = QPainterPath()
-            clip.addRoundedRect(QRectF(r.left(), y0, r.width(), 12), 3, 3)
-            p.setClipPath(clip)
-            p.setBrush(QColor(theme.ACCENT))
-            for i, c in enumerate(self._center + [False]):
-                if c and start is None:
-                    start = i
-                elif not c and start is not None:
-                    x1 = r.left() + r.width() * start / m
-                    x2 = r.left() + r.width() * i / m
-                    p.drawRect(QRectF(x1, y0, max(1.0, x2 - x1), 12))
-                    start = None
-            p.restore()
-        # missed ticks
-        y1 = y0 + 12 + 4
-        p.setFont(f2)
-        p.setPen(QColor(theme.TEXT_2))
-        p.drawText(QRectF(0, y1 - 1, self.LEFT - 10, 10), Qt.AlignRight | Qt.AlignVCenter, "Missed")
+        p.setBrush(color)
+        start = None
+        for i, c in enumerate(list(flags) + [False]):
+            if c and start is None:
+                start = i
+            elif not c and start is not None:
+                x1 = r.left() + r.width() * start / m
+                x2 = r.left() + r.width() * i / m
+                p.drawRect(QRectF(x1, y, max(1.0, x2 - x1), self.LANE))
+                start = None
+        p.restore()
+
+    def _paint(self, p):
+        r = self._plot_rect()
+        y0 = r.top()
+        y1 = y0 + self.LANE + 6
+        self._label(p, "Center", y0, self.LANE)
+        self._label(p, "Periphery", y1, self.LANE)
+        self._lane(p, y0, self.LANE)
+        self._lane(p, y1, self.LANE)
+        self._runs(p, self._center, y0, QColor(theme.ACCENT))
+        per = QColor(theme.ACCENT)
+        per.setAlphaF(0.45)
+        self._runs(p, self._periph, y1, per)
+
+
+class MissedTrack(_Track):
+    """Red ticks at frames with no detection."""
+    LANE = 12
+
+    def __init__(self, parent=None):
+        super().__init__(self.LANE + 20, parent)
+        self._missed = []
+
+    def set_data(self, missed):
+        self._missed = list(missed or [])
+        self.update()
+
+    def _paint(self, p):
+        r = self._plot_rect()
+        y = r.top()
+        self._label(p, "Missed", y, self.LANE)
+        self._lane(p, y, self.LANE)
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(theme.SURFACE_2))
-        p.drawRoundedRect(QRectF(r.left(), y1, r.width(), 10), 3, 3)
         p.setBrush(QColor(theme.ERR))
         for fr in self._missed:
             x = r.left() + r.width() * fr
-            p.drawRoundedRect(QRectF(x - 1, y1 + 1, 2, 8), 1, 1)
-        # playhead: line through all rows + diamond
-        x = r.left() + r.width() * self._frac
-        p.setPen(QPen(QColor(theme.ACCENT), 1))
-        p.drawLine(QPointF(x, 1), QPointF(x, y1 + 10))
-        p.save()
-        p.translate(x, 4.5)
-        p.rotate(45)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor(theme.ACCENT))
-        p.drawRect(QRectF(-4.5, -4.5, 9, 9))
-        p.restore()
+            p.drawRoundedRect(QRectF(x - 1, y + 1, 2, self.LANE - 2), 1, 1)
+
+
+class TimelineTracks(QObject):
+    """The three timeline panels behind one interface (the old combined
+    SpeedTimeline API): set_data / set_cursor fan out, seek is merged."""
+    seek = pyqtSignal(float)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.speed = SpeedTrack()
+        self.zone = ZoneTrack()
+        self.missed = MissedTrack()
+        for t in (self.speed, self.zone, self.missed):
+            t.seek.connect(self.seek)
+
+    def set_data(self, speed, center, missed, thr, unit, periphery=None):
+        self.speed.set_data(speed, thr, unit)
+        self.zone.set_data(center, periphery)
+        self.missed.set_data(missed)
+
+    def set_cursor(self, frac):
+        for t in (self.speed, self.zone, self.missed):
+            t.set_cursor(frac)
 
 
 class TimeTicks(QWidget):
@@ -874,3 +965,85 @@ class MeasurementsPanel(QScrollArea):
         cum_unit = info.get("cum_unit", "")
         self.lbl_cum.setText(f"{info.get('cum', '—')}{self._unit_span(cum_unit, 10)}")
         self.bar_cum.set_fraction(info.get("cum_frac", 0.0))
+
+
+# ── Frame slider with tracking-issue marks ────────────────────────────────
+class IssueSlider(QSlider):
+    """The frame scrubber, with a thin red mark at every flagged frame.
+    Hovering a mark shows what was flagged; clicking seeks as usual."""
+    HIT = 4   # px either side of a mark that counts as hovering it
+
+    def __init__(self, parent=None):
+        super().__init__(Qt.Horizontal, parent)
+        self.setMouseTracking(True)
+        self.setMinimumHeight(22)
+        self._marks = []          # [(slider value, tooltip text)]
+        theme.notifier.changed.connect(lambda _m: self.update())
+
+    def set_marks(self, marks):
+        self._marks = sorted(marks or [], key=lambda m: m[0])
+        self.update()
+
+    def marks(self):
+        return list(self._marks)
+
+    def _x_of(self, value):
+        opt = QStyleOptionSlider()
+        self.initStyleOption(opt)
+        st = self.style()
+        groove = st.subControlRect(QStyle.CC_Slider, opt, QStyle.SC_SliderGroove, self)
+        handle = st.subControlRect(QStyle.CC_Slider, opt, QStyle.SC_SliderHandle, self)
+        span = max(1, groove.width() - handle.width())
+        pos = QStyle.sliderPositionFromValue(self.minimum(), self.maximum(), int(value), span)
+        return groove.x() + handle.width() / 2.0 + pos, groove
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        if not self._marks or self.maximum() <= self.minimum():
+            return
+        p = QPainter(self)
+        col = QColor(theme.ERR)
+        col.setAlphaF(0.9 if self.isEnabled() else 0.4)
+        p.setPen(QPen(col, 1.6, cap=Qt.FlatCap))
+        cy = self.height() / 2.0
+        for value, _tip in self._marks:
+            x, _g = self._x_of(value)
+            p.drawLine(QPointF(x, cy - 7), QPointF(x, cy + 7))
+        # Keep the handle on top of the marks.
+        opt = QStyleOptionSlider()
+        self.initStyleOption(opt)
+        opt.subControls = QStyle.SC_SliderHandle
+        self.style().drawComplexControl(QStyle.CC_Slider, opt, p, self)
+        p.end()
+
+    def _mark_near(self, x):
+        best, best_d = None, self.HIT + 1
+        for value, _tip in self._marks:
+            d = abs(self._x_of(value)[0] - x)
+            if d < best_d:
+                best, best_d = value, d
+        return best
+
+    def mousePressEvent(self, e):
+        # Clicking a red mark jumps straight to that flagged frame.
+        if e.button() == Qt.LeftButton and self._marks and self.isEnabled():
+            v = self._mark_near(e.x())
+            if v is not None:
+                self.setValue(int(v))
+                e.accept()
+                return
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        super().mouseMoveEvent(e)
+        if not self._marks:
+            return
+        best, best_d = None, self.HIT + 1
+        for value, tip in self._marks:
+            d = abs(self._x_of(value)[0] - e.x())
+            if d < best_d:
+                best, best_d = tip, d
+        if best is not None:
+            QToolTip.showText(e.globalPos(), best, self)
+        else:
+            QToolTip.hideText()

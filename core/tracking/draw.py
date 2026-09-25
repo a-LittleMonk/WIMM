@@ -26,6 +26,49 @@ def _dashed_circle(frame, center, radius, color, thickness=1,
         a += dash_deg + gap_deg
 
 
+# Body-marker shapes: (key, label) — shared by the View popover.
+MARKER_SHAPES = (
+    ("ring", "Dashed ring"), ("dot", "Filled dot"), ("circle", "Circle"),
+    ("cross", "Crosshair"), ("square", "Square"), ("diamond", "Diamond"),
+    ("triangle", "Triangle"),
+)
+
+
+def _draw_marker_shape(frame, c, shape, rad, col, sc):
+    """Centre marker of radius `rad` px around point `c`."""
+    x, y = c
+    th = max(1, int(round(1.5 * sc)))
+    core = max(2, int(round(2 * sc)))
+    if shape == "dot":
+        cv2.circle(frame, c, rad, col, -1, cv2.LINE_AA)
+        cv2.circle(frame, c, rad + 1, (10, 12, 14), 1, cv2.LINE_AA)
+        return
+    if shape == "circle":
+        cv2.circle(frame, c, rad, col, th, cv2.LINE_AA)
+    elif shape == "cross":
+        gap = max(2, rad // 3)
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            cv2.line(frame, (x + dx * gap, y + dy * gap), (x + dx * rad, y + dy * rad),
+                     col, th, cv2.LINE_AA)
+    elif shape in ("square", "diamond", "triangle"):
+        if shape == "square":
+            pts = [(x - rad, y - rad), (x + rad, y - rad), (x + rad, y + rad), (x - rad, y + rad)]
+        elif shape == "diamond":
+            pts = [(x, y - rad), (x + rad, y), (x, y + rad), (x - rad, y)]
+        else:
+            h = int(round(rad * 0.87))
+            pts = [(x, y - rad), (x + h, y + rad // 2), (x - h, y + rad // 2)]
+        cv2.polylines(frame, [np.array(pts, np.int32).reshape(-1, 1, 2)], True, col, th, cv2.LINE_AA)
+    else:  # "ring" — dashed ring with two tick marks (top and left)
+        _dashed_circle(frame, c, rad, col, 1)
+        a, b = int(round(rad * 1.47)), int(round(rad * 1.07))
+        cv2.line(frame, (x, y - a), (x, y - b), col, 1, cv2.LINE_AA)
+        cv2.line(frame, (x - a, y), (x - b, y), col, 1, cv2.LINE_AA)
+    # small centre dot on a white halo so the exact point stays readable
+    cv2.circle(frame, c, core + 1, (255, 255, 255), -1, cv2.LINE_AA)
+    cv2.circle(frame, c, core, col, -1, cv2.LINE_AA)
+
+
 def _draw_trail(frame, results, frame_idx, trail_len, trail_fade, color, sc):
     start = 0 if trail_len == 0 else max(0, frame_idx - trail_len)
     pts = []
@@ -35,26 +78,39 @@ def _draw_trail(frame, results, frame_idx, trail_len, trail_fade, color, sc):
             pts.append((int(tr["x"]), int(tr["y"])))
     if len(pts) < 2:
         return
-    thick = max(1, int(round(1.8 * sc)))
-    if trail_fade:
-        # Older segments: thin + translucent. Newest ~40 samples: solid.
-        cut = max(0, len(pts) - 40)
-        if cut > 1:
+    # One thin width along the whole trail.
+    thick = max(1, int(round(1.0 * sc)))
+
+    def _line(img, seg):
+        if len(seg) >= 2:
+            cv2.polylines(img, [np.array(seg, np.int32).reshape(-1, 1, 2)],
+                          False, color, thick, cv2.LINE_AA)
+
+    if not trail_fade:
+        _line(frame, pts)
+        return
+    # Fade = older parts gradually dimmer (never thinner): the newest ~40
+    # samples are solid, the rest is split into bands of rising opacity.
+    cut = max(0, len(pts) - 40)
+    if cut > 1:
+        alphas = (0.2, 0.35, 0.55)
+        n = len(alphas)
+        for k, alpha in enumerate(alphas):
+            lo = cut * k // n
+            hi = cut * (k + 1) // n
+            if hi - lo < 1:
+                continue
             overlay = frame.copy()
-            cv2.polylines(overlay, [np.array(pts[:cut + 1], np.int32).reshape(-1, 1, 2)],
-                          False, color, max(1, int(round(sc))), cv2.LINE_AA)
-            cv2.addWeighted(overlay, 0.45, frame, 0.55, 0, dst=frame)
-        cv2.polylines(frame, [np.array(pts[cut:], np.int32).reshape(-1, 1, 2)],
-                      False, color, thick, cv2.LINE_AA)
-    else:
-        cv2.polylines(frame, [np.array(pts, np.int32).reshape(-1, 1, 2)],
-                      False, color, thick, cv2.LINE_AA)
+            _line(overlay, pts[lo:hi + 1])   # +1 joins it to the next band
+            cv2.addWeighted(overlay, alpha, frame, 1.0 - alpha, 0, dst=frame)
+    _line(frame, pts[cut:])
 
 
 def draw_body_overlay(frame, r, frame_idx=None, results=None,
                      style="off", do_ellipse=False,
                      do_trail=False, trail_len=0, trail_fade=False,
-                     color_fn=None, tag_lines=None):
+                     color_fn=None, tag_lines=None,
+                     shape="ring", size=15):
     """Burn body / ellipse / trail overlays onto a numpy frame.
 
     Parameters
@@ -68,9 +124,12 @@ def draw_body_overlay(frame, r, frame_idx=None, results=None,
     results : list[dict] | None
         Full tracking results list (needed for trail).
     style : str
-        Body marker style. "none" = nothing; "off" = just the detection
-        point; "dot" = dashed-ring marker; "ends" = marker + nose (green) +
-        tail + axis line.
+        Body marker style. "none" / "off" = nothing; "dot" = centre marker;
+        "ends" = centre marker + nose (green) + tail + axis line.
+    shape : str
+        Centre marker shape — one of MARKER_SHAPES.
+    size : int
+        Centre marker radius in px, authored for a 640 px wide frame.
     do_ellipse, do_trail : bool
         Toggles for each overlay.
     trail_len : int
@@ -105,22 +164,11 @@ def draw_body_overlay(frame, r, frame_idx=None, results=None,
                         (max(1, int(sma)), max(1, int(smi))),
                         ang, 0, 360, _bgr("arena", (198, 180, 169)), 1, cv2.LINE_AA)
 
-    if style == "none" or cx is None:
+    if style in ("none", "off") or cx is None:
         return
     col = _bgr("body", (247, 244, 242))
     c = (int(cx), int(cy))
-    if style == "off":
-        cv2.circle(frame, c, max(2, int(round(3 * sc))), col, -1, cv2.LINE_AA)
-        cv2.circle(frame, c, max(3, int(round(4 * sc))), (10, 12, 14), 1, cv2.LINE_AA)
-    else:
-        ring = int(round(15 * sc))
-        _dashed_circle(frame, c, ring, col, 1)
-        cv2.circle(frame, c, max(2, int(round(2.8 * sc))), (255, 255, 255), -1, cv2.LINE_AA)
-        cv2.circle(frame, c, max(2, int(round(2 * sc))), col, -1, cv2.LINE_AA)
-        # tick marks pointing at the ring (top and left)
-        a, b = int(round(22 * sc)), int(round(16 * sc))
-        cv2.line(frame, (c[0], c[1] - a), (c[0], c[1] - b), col, 1, cv2.LINE_AA)
-        cv2.line(frame, (c[0] - a, c[1]), (c[0] - b, c[1]), col, 1, cv2.LINE_AA)
+    _draw_marker_shape(frame, c, shape, max(2, int(round(size * sc))), col, sc)
 
     # "ends" extras: nose + tail + axis line.
     if style == "ends":

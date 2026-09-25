@@ -177,10 +177,10 @@ def _step_geometry_of(host):
 
     # Zone style — hidden data holder (combo) + two tiles that drive it.
     host.combo_zone_mode = QComboBox()
-    host.combo_zone_mode.addItem("Center only",        "center_zone")
+    host.combo_zone_mode.addItem("Center + periphery", "center_zone")
     host.combo_zone_mode.addItem("Grid 4×4 + center",  "grid")
     host.combo_zone_mode.setToolTip(
-        "Center only: classic open-field (center zone vs periphery).\n"
+        "Center + periphery: classic open-field (center zone vs periphery).\n"
         "Grid 4×4 + center: arena split into 16 cells with a center zone rectangle on top."
     )
     _saved_mode = host.config.get("zone_mode", "center_zone")
@@ -195,7 +195,7 @@ def _step_geometry_of(host):
     tiles = QHBoxLayout(zone_style_widget)
     tiles.setContentsMargins(0, 0, 0, 0)
     tiles.setSpacing(6)
-    tile_center = ToggleTile("zone_center", "Center only")
+    tile_center = ToggleTile("zone_center", "Center + periphery")
     tile_grid = ToggleTile("zone_grid", "Grid 4×4")
     tile_grid.setToolTip("Grid 4×4 + center")
     tiles.addWidget(tile_center)

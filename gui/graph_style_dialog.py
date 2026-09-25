@@ -84,7 +84,19 @@ def maze_canonical_dirs(plugin_key):
     return []
 
 
+# Set by the chart editor's "Export preview" toggle: draw with the palette
+# exported files use ("light") instead of the app theme. None = app theme.
+_FIG_MODE_OVERRIDE = None
+
+
+def set_fig_mode_override(mode):
+    global _FIG_MODE_OVERRIDE
+    _FIG_MODE_OVERRIDE = mode
+
+
 def _fig_mode():
+    if _FIG_MODE_OVERRIDE:
+        return _FIG_MODE_OVERRIDE
     from gui import theme
     return theme.mode()
 
@@ -168,10 +180,10 @@ def _legend_kwargs_for(ax, st):
     if loc_choice == "custom":
         dx = float(st.get("legend_x_offset", 0.0))
         dy = float(st.get("legend_y_offset", 0.0))
-        # Clamp to axes so a stale custom anchor can't push the legend
-        # off the figure.
-        dx = max(0.0, min(1.0, dx))
-        dy = max(0.0, min(1.0, dy))
+        # The legend may sit anywhere on the figure, also outside the plot
+        # area; only a wildly stale anchor is pulled back into view.
+        dx = max(-1.0, min(2.0, dx))
+        dy = max(-1.0, min(2.0, dy))
         kwargs["loc"] = "lower left"
         kwargs["bbox_to_anchor"] = (dx, dy)
         kwargs["bbox_transform"] = ax.transAxes
@@ -1836,15 +1848,18 @@ class GraphStyleDialog(QDialog):
             ax.set_title(st["title"], fontsize=int(st.get("title_size", 12)),
                          fontweight="bold" if st.get("title_bold") else "normal",
                          fontfamily=fam,
-                         pad=max(0.0, title_pad))
+                         color=st.get("title_color") or st.get("text_color", "black"),
+                         pad=title_pad)   # may go negative: title dragged down into the plot
         if "xlabel" in allowed and st.get("xlabel"):
             ax.set_xlabel(st["xlabel"], fontsize=int(st.get("label_size", 10)),
                           fontweight="bold" if st.get("label_bold") else "normal",
-                          fontfamily=fam)
+                          fontfamily=fam,
+                          color=st.get("label_color") or st.get("text_color", "black"))
         if "ylabel" in allowed and st.get("ylabel"):
             ax.set_ylabel(st["ylabel"], fontsize=int(st.get("label_size", 10)),
                           fontweight="bold" if st.get("label_bold") else "normal",
-                          fontfamily=fam)
+                          fontfamily=fam,
+                          color=st.get("label_color") or st.get("text_color", "black"))
 
     def _maybe_legend(self, ax, st, allowed, handles_labels=None, handles=None):
         if "legend_show" not in allowed or not st.get("legend_show", True):
@@ -2269,7 +2284,8 @@ class GraphStyleDialog(QDialog):
                 cbar.set_label(label, fontsize=int(st.get("tick_size", 9)),
                                color=st.get("tick_color", "#333333"))
             cbar.outline.set_visible(False)
-            bot_margin = max(0.14, cb_rect[1] + cb_rect[3] + 0.04)
+            # Fixed margin: moving the colour bar must not resize the plot.
+            bot_margin = 0.14
             self._fig.subplots_adjust(top=0.96, bottom=bot_margin, left=0.04, right=0.96)
             return cax
         except Exception:

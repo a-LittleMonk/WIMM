@@ -52,7 +52,7 @@ class GraphsMixin:
                 return self._make_dual_heatmap_fig(x, y, panels)
             return self._make_heatmap_fig(x, y, arena)
 
-        return {
+        raw = {
             "Trajectory":      _traj_fig,
             "Heatmap":         _heat_fig,
             "Cell Time":       lambda: self._make_cell_time_heatmap_fig(arena),
@@ -62,6 +62,24 @@ class GraphsMixin:
             "Zone Time":       lambda: self._make_zone_bar_fig(),
             "Triplets":        lambda: self._make_triplets_fig(),
         }
+
+        # Chart-editor drag positions (title / axis titles / plot area) on
+        # every figure — screen, Excel images and file exports alike.
+        from gui.graph_style import apply_layout_overrides
+
+        def positioned(name, build):
+            def run():
+                fig = build()
+                if fig is not None:
+                    try:
+                        apply_layout_overrides(fig, self._gstyle(name))
+                    except Exception as e:
+                        logger.warn(f"layout overrides failed for '{name}': {e}",
+                                    source="graphs")
+                return fig
+            return run
+
+        return {name: positioned(name, build) for name, build in raw.items()}
 
     # ── Vector graph export (SVG / PDF / PNG) ────────────────────────────
 
@@ -94,7 +112,7 @@ class GraphsMixin:
         if builder is None:
             logger.warn(f"Export: unknown graph '{graph_name}'", source="graphs")
             return False
-        self._force_fig_mode = "light"      # files always use the light palette
+        self._force_fig_mode = "export"     # light palette, white / transparent ground
         try:
             fig = builder()
         except Exception as e:
@@ -143,11 +161,12 @@ class GraphsMixin:
         )
         if not path:
             return
-        ok = self._export_graph_to_path(name, path)
-        if not ok:
-            QMessageBox.warning(self, "Export failed",
-                                "Could not write the graph file. "
-                                "See the log for details.")
+        from gui.notify import show_done
+        if self._export_graph_to_path(name, path):
+            show_done(self, f"{name} graph exported", path=path)
+        else:
+            show_done(self, "Graph export failed",
+                      "Could not write the graph file. See Logs for details.", kind="err")
 
     def _populate_graph_tab(self, only=None):
         """Build (or refresh) the graphs.
@@ -191,18 +210,18 @@ class GraphsMixin:
                     logger.warn(f"Graph '{name}' failed to rasterize: {e}",
                                    source="graphs")
                     continue
-                if theme.mode() == "dark":
-                    # On-screen figure follows the dark theme; the PNG bytes
-                    # embedded in Excel / saved beside it stay light.
-                    self._force_fig_mode = "light"
-                    try:
-                        fig_l = builders[name]()
-                        if fig_l is not None:
-                            _p, png = self._fig_to_pixmap_and_bytes(fig_l)
-                    except Exception as e:
-                        logger.warn(f"Light render of '{name}' failed: {e}", source="graphs")
-                    finally:
-                        self._force_fig_mode = None
+                # On-screen figure follows the app theme; the PNG bytes
+                # embedded in Excel / saved beside it use the export look
+                # (light palette on a white or transparent background).
+                self._force_fig_mode = "export"
+                try:
+                    fig_l = builders[name]()
+                    if fig_l is not None:
+                        _p, png = self._fig_to_pixmap_and_bytes(fig_l)
+                except Exception as e:
+                    logger.warn(f"Export render of '{name}' failed: {e}", source="graphs")
+                finally:
+                    self._force_fig_mode = None
                 self._graph_pixmaps[name] = pix
                 self._graph_png_bytes[name] = png
 
@@ -269,6 +288,23 @@ class GraphsMixin:
         if extra:
             caps.update(extra)
         return caps
+
+    def _set_export_bg(self, choice):
+        """Output → Graphs 'White | Transparent': background of exported
+        graph files and Excel images. Saved in config["export_bg"]."""
+        from gui.graph_style import set_export_bg
+        set_export_bg(choice)
+        self.config["export_bg"] = choice
+        owner = getattr(self, "_batch_owner", None)
+        if owner is not None and isinstance(getattr(owner, "config", None), dict):
+            owner.config["export_bg"] = choice
+            if hasattr(owner, "_save_config"):
+                owner._save_config()
+        try:
+            if self.raw_df is not None and self._graph_pixmaps:
+                self._populate_graph_tab()      # refresh the Excel images
+        except Exception as e:
+            logger.warn(f"export background refresh failed: {e}", source="graphs")
 
     def _fig_mode(self):
         """Palette used for figures: the UI theme, or "light" while building
@@ -721,16 +757,19 @@ class GraphsMixin:
             title_pad = 6.0 + float(st.get("title_pad", 0.0))
             ax.set_title(st["title"], fontsize=int(st.get("title_size", 12)),
                          fontweight="bold" if st.get("title_bold") else "normal",
-                         fontfamily=fam, color=st.get("text_color", "black"),
-                         pad=max(0.0, title_pad))
+                         fontfamily=fam,
+                         color=st.get("title_color") or st.get("text_color", "black"),
+                         pad=title_pad)   # may go negative: title dragged down into the plot
         if "xlabel" in allowed and st.get("xlabel"):
             ax.set_xlabel(st["xlabel"], fontsize=int(st.get("label_size", 10)),
                           fontweight="bold" if st.get("label_bold") else "normal",
-                          fontfamily=fam, color=st.get("text_color", "black"))
+                          fontfamily=fam,
+                          color=st.get("label_color") or st.get("text_color", "black"))
         if "ylabel" in allowed and st.get("ylabel"):
             ax.set_ylabel(st["ylabel"], fontsize=int(st.get("label_size", 10)),
                           fontweight="bold" if st.get("label_bold") else "normal",
-                          fontfamily=fam, color=st.get("text_color", "black"))
+                          fontfamily=fam,
+                          color=st.get("label_color") or st.get("text_color", "black"))
 
     def _apply_legend(self, ax, name, st, handles=None):
         from gui.graph_style_dialog import _legend_kwargs_for
@@ -771,7 +810,7 @@ class GraphsMixin:
             pass
 
     def _open_graph_style_dialog(self):
-        from gui.graph_style_dialog import GraphStyleDialog
+        from gui.chart_editor import ChartEditor
 
         def rerender(_name=None):
             try:
@@ -781,7 +820,7 @@ class GraphsMixin:
                 pass
 
         plugins = self._collect_graph_style_plugins()
-        dlg = GraphStyleDialog(self._graph_style, self._graph_style_caps,
+        dlg = ChartEditor(self._graph_style, self._graph_style_caps,
                                rerender_cb=rerender,
                                persist_cb=self._save_graph_style_to_config,
                                plugins=plugins,
@@ -1180,7 +1219,9 @@ class GraphsMixin:
                                    color=st.get("text_color", "#333333"))
                 # Reserve a bit more bottom margin when the bar sits low so
                 # the imshow axes don't overlap it.
-                bot_margin = max(0.14, cb_rect[1] + cb_rect[3] + 0.04)
+                # Fixed margin: moving the colour bar must not resize the plot
+                # (the plot area is sized by its own chart-editor handles).
+                bot_margin = 0.14
                 if getattr(self, '_cm_axes_on', False):
                     bot_margin = max(bot_margin, 0.27)   # room for the X (cm) ruler
                 fig.subplots_adjust(top=0.96, bottom=bot_margin,
@@ -1301,7 +1342,9 @@ class GraphsMixin:
                     cbar.set_label(lbl,
                                    fontsize=int(st.get("tick_size", 9)),
                                    color=st.get("tick_color", "#333333"))
-                bot_margin = max(0.14, cb_rect[1] + cb_rect[3] + 0.04)
+                # Fixed margin: moving the colour bar must not resize the plot
+                # (the plot area is sized by its own chart-editor handles).
+                bot_margin = 0.14
                 if getattr(self, '_cm_axes_on', False):
                     bot_margin = max(bot_margin, 0.27)   # room for the X (cm) ruler
                 fig.subplots_adjust(top=0.96, bottom=bot_margin,

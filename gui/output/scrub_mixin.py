@@ -60,7 +60,16 @@ class ScrubMixin:
         cap = self._get_scrub_cap()
         if cap is None:
             return
-        cap.set(cv2.CAP_PROP_POS_FRAMES, value)
+        # Playing / stepping forward: read on from where the decoder is
+        # instead of seeking (a seek re-decodes from the last keyframe,
+        # which is what made playback crawl).
+        pos = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+        ahead = value - pos
+        if 0 <= ahead <= 30:
+            for _ in range(ahead):
+                cap.grab()
+        else:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, value)
         ret, frame = cap.read()
         if ret:
             if self._crop_rect is not None:

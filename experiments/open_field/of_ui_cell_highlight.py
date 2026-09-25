@@ -54,7 +54,7 @@ def _build_cell_highlight_controls(host):
     grid.addWidget(QLabel("Opacity:"), 1, 0)
     opacity = QSlider(Qt.Horizontal)
     opacity.setRange(0, 255)
-    opacity.setValue(100)
+    opacity.setValue(int(host.zone_drawer._cell_highlight_alpha))
     opacity.valueChanged.connect(host.zone_drawer.set_cell_highlight_alpha)
     grid.addWidget(opacity, 1, 1)
 

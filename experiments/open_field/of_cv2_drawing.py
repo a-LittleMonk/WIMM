@@ -60,6 +60,13 @@ def _center_tag_text(host, cell_times=None, cell_entries=None,
     return " · ".join(bits)
 
 
+def _periph_tag(host, frame, arena, text, sc):
+    """PERIPHERY tag inside the arena's bottom-left corner."""
+    x = min(int(p[0]) for p in arena) + int(4 * sc)
+    y = max(int(p[1]) for p in arena) - int(3 * sc)
+    _draw_tag(frame, x, y, text, host._bgr("arena"), (38, 24, 18), sc)
+
+
 def _draw_cell_overlay_cv2(host, frame, active_cell, cell_times, cell_entries,
                             draw_highlight=True, draw_numbers=True,
                             draw_timer=True, draw_entries=True):
@@ -131,6 +138,9 @@ def _draw_cell_overlay_cv2(host, frame, active_cell, cell_times, cell_entries,
         _draw_tag(frame, tx, ty,
                   _center_tag_text(host, cell_times, cell_entries, draw_timer, draw_entries),
                   host._bgr("center_zone"), (38, 24, 18), sc)
+        if zd.zone_mode != "grid" and draw_timer:
+            _periph_tag(host, frame, arena,
+                        f"PERIPHERY · {(cell_times or {}).get('P', 0.0):.1f}s", sc)
 
 
 def _draw_zones_on_frame_cv2(host, frame, draw_arena=True,
@@ -161,6 +171,8 @@ def _draw_zones_on_frame_cv2(host, frame, draw_arena=True,
                      dash=int(8 * sc), gap=int(4 * sc))
         _draw_tag(frame, min(p[0] for p in center), min(p[1] for p in center),
                   _center_tag_text(host), col, (38, 24, 18), sc)
+        if host.zone_drawer.zone_mode != "grid" and arena and len(arena) >= 3:
+            _periph_tag(host, frame, arena, "PERIPHERY", sc)
     if (draw_grid and host.zone_drawer.zone_mode == "grid"
             and arena and len(arena) == 4):
         TL, TR, BR, BL = host.zone_drawer._sorted_corners(arena)

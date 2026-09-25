@@ -82,7 +82,7 @@ class VideoExportThread(QThread):
             do_ellipse   = self._flag("ellipse", bool(of.chk_ellipse.isChecked()))
             do_trail     = self._flag("trail", bool(of.chk_trail.isChecked()))
             do_trail_fade = self._flag("trail_fade", bool(of.chk_trail_fade.isChecked()))
-            do_tag       = self._flag("marker_tag", True)
+            do_tag       = self._flag("marker_tag", bool(of.chk_marker_tag.isChecked()))
             trail_n      = int(self.flags.get("trail_len",
                                               of.spin_trail_len.value()))
             do_cell_hi   = self._flag("cell_highlight", True)
@@ -138,6 +138,10 @@ class VideoExportThread(QThread):
                             )
             c_pending = 0
             c_confirmed = False
+            # Running periphery time (Center + periphery mode).
+            periph_cum = (of._periphery_cum_times()
+                          if any_cell_overlay and of.zone_drawer.zone_mode != "grid"
+                          and hasattr(of, "_periphery_cum_times") else None)
 
             for i in range(self.start_frame, self.end_frame + 1):
                 if self._stop:
@@ -184,6 +188,8 @@ class VideoExportThread(QThread):
                     else:
                         c_pending = 0
                         c_confirmed = False
+                if periph_cum is not None and len(periph_cum):
+                    cell_times["P"] = float(periph_cum[min(max(rel_i, 0), len(periph_cum) - 1)])
                 # Crop → warp → preprocessing — same chain as the live preview.
                 if of._crop_rect is not None:
                     cx, cy, cw, ch = of._crop_rect

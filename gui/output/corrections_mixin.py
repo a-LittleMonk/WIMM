@@ -29,7 +29,12 @@ from gui import theme
 class CorrectionsMixin:
     def _open_corrections_popup(self):
         """Show the manual-corrections popup (Fix / Clear / Next miss /
-        Interpolate). Non-modal, draggable, can sit next to the video."""
+        Interpolate). Non-modal, draggable, can sit next to the video.
+        When the screen has a Frame corrections panel, show that instead."""
+        show_panel = getattr(self, "_show_corrections_panel", None)
+        if show_panel is not None:
+            show_panel()
+            return
         if self._corrections_popup is None:
             dlg = QDialog(self)
             dlg.setWindowTitle("Corrections")

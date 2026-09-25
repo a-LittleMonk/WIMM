@@ -19,7 +19,8 @@ from gui.realtime_scoring_tab import RealtimeScoringTab
 from gui.log_dialog import LogDialog
 from core import logger
 from gui import theme
-from gui.redesign_widgets import SegmentedControl, StatusPill
+from gui.backdrop import AuroraBackdrop
+from gui.redesign_widgets import SegmentedControl, StatusPill, ThemeToggle
 
 
 class _NoScrollFilter(QObject):
@@ -188,10 +189,16 @@ class MainWindow(QMainWindow):
         act_customize.triggered.connect(self._open_graph_style_for_active_tab)
         self.view_menu.addAction(act_customize)
         self.view_menu.addSeparator()
+        # Panels ▸ — show / hide the current test's movable panels.
+        self.panels_menu = self.view_menu.addMenu("Panels")
+        self.panels_menu.aboutToShow.connect(self._fill_panels_menu)
+        act_appearance = QAction("Appearance…", self)
+        act_appearance.setToolTip("Background palette for light and dark mode")
+        act_appearance.triggered.connect(self._open_appearance)
+        self.view_menu.addAction(act_appearance)
         self.act_simple_mode = QAction("Simple mode", self, checkable=True)
         self.act_simple_mode.setChecked(bool(self.config.get("simple_mode", True)))
         self.act_simple_mode.toggled.connect(self._on_simple_mode_toggled)
-        self.view_menu.addAction(self.act_simple_mode)
         self._log_dialog = None
         logger.info("Application started", source="app")
 
@@ -230,7 +237,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.stack.addWidget(self._build_launcher())  # index 0
         self.stack.addWidget(self.tabs)               # index 1
-        central = QWidget()
+        central = AuroraBackdrop()
         cv = QVBoxLayout(central)
         cv.setContentsMargins(0, 0, 0, 0)
         cv.setSpacing(0)
@@ -310,22 +317,7 @@ class MainWindow(QMainWindow):
         sep.setFixedSize(1, 22)
         h.addWidget(sep)
 
-        # Test picker (dropdown of behavioural tests) › output-folder crumb.
-        self.test_menu = QMenu(self)
-        for menu_name, _card, enabled, opener in self._TESTS:
-            act = self.test_menu.addAction(
-                menu_name if enabled else f"{menu_name}  (coming soon)")
-            act.setEnabled(enabled)
-            if opener:
-                act.triggered.connect(getattr(self, opener))
-        self.btn_test = QToolButton()
-        self.btn_test.setObjectName("TestPicker")
-        self.btn_test.setFixedHeight(30)
-        self.btn_test.setCursor(Qt.PointingHandCursor)
-        self.btn_test.setPopupMode(QToolButton.InstantPopup)
-        self.btn_test.setMenu(self.test_menu)
-        self.btn_test.setToolTip("Switch behavioral test")
-        h.addWidget(self.btn_test)
+        # Output-folder crumb (shown while a test is open).
         self.crumb_sep = QLabel("›")
         self.crumb_sep.setObjectName("CrumbSep")
         self.lbl_crumb = QLabel("")
@@ -349,21 +341,62 @@ class MainWindow(QMainWindow):
         self.act_simple_mode.toggled.connect(
             lambda on: self.seg_mode.set_index(0 if on else 1))
         h.addWidget(self.seg_mode)
-        self.seg_theme = SegmentedControl(
-            ["☀", "☾"], 1 if theme.mode() == "dark" else 0)
-        self.seg_theme.setToolTip("Light / dark theme")
-        self.seg_theme.setStyleSheet("QPushButton { font-size: 14px; padding: 0 8px; }")
+        self.seg_theme = ThemeToggle(1 if theme.mode() == "dark" else 0)
         self.seg_theme.changed.connect(self._on_theme_toggled)
         h.addWidget(self.seg_theme)
         b_logs = QPushButton("Logs")
         b_logs.setFixedHeight(28)
         b_logs.clicked.connect(self._open_log_dialog)
         h.addWidget(b_logs)
+        b_help = QPushButton("Help")
+        b_help.setFixedHeight(28)
+        b_help.setToolTip("Explanation of every setting, per experiment (F1)")
+        b_help.clicked.connect(self._open_help)
+        h.addWidget(b_help)
+        QShortcut(QKeySequence("F1"), self, activated=self._open_help)
         return self.header
+
+    def _open_help(self):
+        """Help window, opened on the tab of the experiment being used."""
+        from gui.help_dialog import HelpDialog
+        current = self.tabs.currentWidget() if self.stack.currentIndex() == 1 else None
+        title = {
+            id(self.of_tab): "Open Field",
+            id(self.ym_tab): "Y-Maze",
+            id(self.nor_tab): "Novel Object",
+            id(self.epm_tab): "Elevated Plus",
+        }.get(id(current), "Open Field") if current is not None else "Open Field"
+        if getattr(self, "_help_dialog", None) is None:
+            self._help_dialog = HelpDialog(self.config, self)
+        self._help_dialog.show_tab(title)
 
     def _refresh_brand(self, *_):
         self.brand_mark.setPixmap(_brand_pixmap(16, theme.ON_ACCENT))
         self._launcher_mark.setPixmap(_brand_pixmap(24, theme.ON_ACCENT))
+
+    def _current_panel_host(self):
+        if self.stack.currentIndex() != 1:
+            return None
+        return getattr(self.tabs.currentWidget(), "panel_host", None)
+
+    def _fill_panels_menu(self):
+        m = self.panels_menu
+        m.clear()
+        host = self._current_panel_host()
+        if host is None:
+            on_tool = self.stack.currentIndex() == 1
+            a = m.addAction("This screen has no movable panels" if on_tool
+                            else "Open a test to arrange its panels")
+            a.setEnabled(False)
+            return
+        for p in host.panels:
+            m.addAction(p.toggleViewAction())
+        m.addSeparator()
+        m.addAction("Reset panel layout", host.reset_layout)
+
+    def _open_appearance(self):
+        from gui.appearance_dialog import AppearanceDialog
+        AppearanceDialog(self.config, self._save_config, self).exec_()
 
     def _on_theme_toggled(self, index):
         new_mode = "dark" if index == 1 else "light"
@@ -376,12 +409,7 @@ class MainWindow(QMainWindow):
         self.crumb_sep.setVisible(on_tool)
         self.lbl_crumb.setVisible(on_tool)
         if on_tool:
-            idx = self.tabs.currentIndex()
-            current = self.tabs.tabText(idx)
-            self.btn_test.setText(f"{current}  ▾")
             self._refresh_crumb()
-        else:
-            self.btn_test.setText("Choose test  ▾")
 
     def _refresh_crumb(self):
         folder = self.config.get("output_folder") or ""
@@ -589,12 +617,15 @@ class MainWindow(QMainWindow):
         body_row = QHBoxLayout()
         body_row.addWidget(QLabel("Style:"))
         cmb_body = QComboBox()
-        cmb_body.addItem("Off (just detection point)", "off")
-        cmb_body.addItem("Dots",                       "dots")
-        cmb_body.addItem("Skeleton",                   "skeleton")
-        cmb_body.addItem("Dots + Skeleton",            "dots+skeleton")
+        # Same values as the View popover's "Body marker → Show" combo.
+        cmb_body.addItem("Off",                  "off")
+        cmb_body.addItem("Center",               "dot")
+        cmb_body.addItem("Center + nose + tail", "ends")
         cmb_body.setFixedHeight(24)
-        current = self.config.get("body_style", "off")
+        current = self.config.get("body_style", "dot")
+        # Older configs stored this launcher's previous values.
+        current = {"dots": "dot", "skeleton": "ends",
+                   "dots+skeleton": "ends"}.get(current, current)
         idx = cmb_body.findData(current)
         if idx >= 0:
             cmb_body.setCurrentIndex(idx)

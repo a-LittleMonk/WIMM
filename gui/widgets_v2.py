@@ -220,6 +220,8 @@ class CountPill(QLabel):
         super().__init__(text, parent)
         self.setProperty("role", "countpill")
         self.setAlignment(Qt.AlignCenter)
+        self.setFixedHeight(18)  # a pill, not a column: never stretch with the header
+        self.setMinimumWidth(22)
 
 
 def caps_label(text):
@@ -236,23 +238,34 @@ class PaneHeader(QWidget):
         super().__init__(parent)
         self.setObjectName("PaneHeader")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setFixedHeight(40)
+        self.setFixedHeight(42)
         self._lay = QHBoxLayout(self)
-        self._lay.setContentsMargins(12, 0, 12, 0)
+        self._lay.setContentsMargins(14, 0, 10, 0)
         self._lay.setSpacing(8)
         self._lay.addWidget(IconLabel(icon_name, 14, "TEXT_2"))
         self._lay.addWidget(caps_label(title))
         self._stretch_added = False
 
+    # Report the real (fixed) height: a dock panel sizes its title area from
+    # sizeHint(), and the layout's natural ~26 px would let the panel body
+    # slide up underneath the header.
+    def sizeHint(self):
+        s = super().sizeHint()
+        return QSize(s.width(), self.maximumHeight())
+
+    def minimumSizeHint(self):
+        s = super().minimumSizeHint()
+        return QSize(s.width(), self.maximumHeight())
+
     def add_left(self, widget):
-        self._lay.addWidget(widget)
+        self._lay.addWidget(widget, 0, Qt.AlignVCenter)
         return widget
 
     def add_right(self, widget):
         if not self._stretch_added:
             self._lay.addStretch(1)
             self._stretch_added = True
-        self._lay.addWidget(widget)
+        self._lay.addWidget(widget, 0, Qt.AlignVCenter)
         return widget
 
 
@@ -352,7 +365,7 @@ class SegTabs(QFrame):
 
 
 class ToggleTile(QPushButton):
-    """40 px checkable tile with a leading icon (Center only / Grid 4×4)."""
+    """40 px checkable tile with a leading icon (Center + periphery / Grid 4×4)."""
 
     def __init__(self, icon_name, text, size=16, parent=None):
         super().__init__(text, parent)

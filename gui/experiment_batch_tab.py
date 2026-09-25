@@ -24,6 +24,7 @@ Replaces the old steps-driven Open Field UI. Main UI is video-list-centric:
   - Per-video collapsible result cards
 """
 import os
+from contextlib import contextmanager
 import cv2
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget,
@@ -1102,6 +1103,32 @@ class ExperimentBatchTab(QWidget):
         batch_btn_row.addWidget(self.btn_combined_raw)
         batch_btn_row.addStretch(1)
         batch_box.body.addLayout(batch_btn_row)
+
+        # Graph style used for every graph written to disk (Excel images,
+        # combined Excel, SVG / PDF). Remembered in config.
+        class _PresetCombo(QComboBox):
+            def __init__(self, refill):
+                super().__init__()
+                self._refill = refill
+
+            def showPopup(self):            # pick up presets made meanwhile
+                self._refill()
+                super().showPopup()
+
+        self.combo_export_preset = _PresetCombo(self._fill_export_presets)
+        self.combo_export_preset.setToolTip(
+            "Preset used for exported graphs: Excel images, the combined "
+            "Excel and SVG / PDF files. Presets are made in Customize graphs."
+        )
+        self._fill_export_presets()
+        self.combo_export_preset.currentIndexChanged.connect(self._on_export_preset)
+        preset_row = QHBoxLayout()
+        preset_row.setSpacing(6)
+        preset_lbl = QLabel("Graph style")
+        theme.set_tone(preset_lbl, "text2", "font-size:11px;")
+        preset_row.addWidget(preset_lbl)
+        preset_row.addWidget(self.combo_export_preset, 1)
+        batch_box.body.addLayout(preset_row)
         hint = QLabel(
             "Per-video Excel files are saved automatically to the output "
             "folder when tracking finishes."
@@ -1130,7 +1157,19 @@ class ExperimentBatchTab(QWidget):
         )
         vec_row.addWidget(self.chk_export_pdf)
         vec_row.addStretch(1)
+        self.btn_export_vectors = QPushButton("Export graphs now")
+        self.btn_export_vectors.setFixedHeight(28)
+        self.btn_export_vectors.setToolTip(
+            "Write SVG / PDF graphs for every tracked video now (new runs "
+            "also write them automatically when tracking finishes)."
+        )
+        self.btn_export_vectors.clicked.connect(self._export_vectors_now)
+        vec_row.addWidget(self.btn_export_vectors)
         vec_box.body.addLayout(vec_row)
+        self.lbl_vec_status = QLabel("")
+        self.lbl_vec_status.setWordWrap(True)
+        theme.set_tone(self.lbl_vec_status, "text2", "font-size:11px;")
+        vec_box.body.addWidget(self.lbl_vec_status)
         vec_hint = QLabel(
             "Written next to the PNGs, one file per graph per video — ready "
             "for figures. SVG opens in Inkscape / Illustrator; PDF is "
@@ -1204,7 +1243,8 @@ class ExperimentBatchTab(QWidget):
         # can override here before clicking Render.
         self.combo_export_body_style = QComboBox()
         self.combo_export_body_style.addItem("Off", "off")
-        self.combo_export_body_style.addItem("Dot", "dot")
+        self.combo_export_body_style.addItem("Center", "dot")
+        self.combo_export_body_style.addItem("Center + nose + tail", "ends")
         self.combo_export_body_style.setCurrentIndex(1)
         video_box.body.addWidget(form_row("Body markers", self.combo_export_body_style, 96))
 
@@ -1567,6 +1607,20 @@ class ExperimentBatchTab(QWidget):
                 self._load_into_embedded(self._export_orig_path)
         except Exception:
             pass
+        from gui.notify import show_done
+        folder = self.config.get("output_folder") or None
+        if self._export_stop_requested:
+            show_done(self, "Video render cancelled",
+                      f"{ok} of {self._export_total} video(s) were saved before stopping.",
+                      folder=folder, kind="warn")
+        elif self._export_failed:
+            show_done(self, "Video render finished with errors",
+                      f"{ok} of {self._export_total} saved, {len(self._export_failed)} failed. "
+                      "See Logs for details.", folder=folder, kind="warn")
+        else:
+            show_done(self, "Videos rendered",
+                      "1 annotated video saved." if ok == 1 else f"{ok} annotated videos saved.",
+                      folder=folder)
 
     def _refresh_export_buttons(self):
         """Enable/disable Export-tab buttons based on current state."""
@@ -1678,10 +1732,174 @@ class ExperimentBatchTab(QWidget):
             from export.excel_export import export_combined_raw
             export_combined_raw(out_path, animals)
             self.lbl_export_status.setText(f"Wrote {out_path}")
+            from gui.notify import show_done
+            show_done(self, "Raw data exported",
+                      f"{len(animals)} animal(s) in one workbook.", path=out_path)
         except Exception as e:
             import traceback
             traceback.print_exc()
             self.lbl_export_status.setText(f"Raw-data export failed: {e}")
+            from gui.notify import show_done
+            show_done(self, "Raw-data export failed", str(e), kind="err")
+
+    # ── Export graph style (preset) ─────────────────────────────────────
+    def _chosen_export_preset(self):
+        """Saved export preset if it still exists, else the preset active
+        in Customize graphs, else "Default"."""
+        gs = getattr(getattr(self, "embedded_tab", None), "_graph_style", None)
+        if gs is None:
+            return None
+        names = gs.all_preset_names()
+        for cand in (self.config.get("export_graph_preset"), gs.active_preset):
+            if cand in names:
+                return cand
+        return names[0]
+
+    def _fill_export_presets(self):
+        combo = getattr(self, "combo_export_preset", None)
+        gs = getattr(getattr(self, "embedded_tab", None), "_graph_style", None)
+        if combo is None or gs is None:
+            return
+        names = gs.all_preset_names()
+        want = self._chosen_export_preset()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(names)
+        combo.setCurrentText(want)
+        combo.blockSignals(False)
+
+    def _on_export_preset(self, _i=None):
+        self.config["export_graph_preset"] = self.combo_export_preset.currentText()
+        self._save_config()
+
+    def _export_preset_name(self):
+        """Preset to render exports in, or None when the on-screen graphs
+        already are exactly that preset (cached images can be reused)."""
+        gs = getattr(getattr(self, "embedded_tab", None), "_graph_style", None)
+        name = self._chosen_export_preset()
+        if name is None or (name == gs.active_preset and not gs.is_modified()):
+            return None
+        return name
+
+    @contextmanager
+    def _export_style(self):
+        """Temporarily render the embedded tab's graphs in the export preset."""
+        et = self.embedded_tab
+        name = self._export_preset_name()
+        if name is None:
+            yield
+            return
+        from gui.graph_style import GraphStyleConfig
+        saved = et._graph_style
+        tmp = GraphStyleConfig.from_dict(saved.to_dict())
+        tmp.apply_preset(name)
+        et._graph_style = tmp
+        try:
+            yield
+        finally:
+            et._graph_style = saved
+
+    def _render_export_pngs(self):
+        """PNG bytes of every graph of the loaded video, export look +
+        export preset. {} if nothing to draw."""
+        et = self.embedded_tab
+        if et.raw_df is None or len(et.raw_df) == 0:
+            return {}
+        x = et.raw_df["X (px)"].dropna().values
+        y = et.raw_df["Y (px)"].dropna().values
+        if len(x) < 2:
+            return {}
+        out = {}
+        with self._export_style():
+            _, arena, _, _ = et._graph_data()
+            builders = et._make_graph_builders(x, y, arena)
+            et._force_fig_mode = "export"
+            try:
+                for gname, build in builders.items():
+                    try:
+                        fig = build()
+                        if fig is not None:
+                            out[gname] = et._fig_to_pixmap_and_bytes(fig)[1]
+                    except Exception as e:
+                        logger.warn(f"Export render of '{gname}' failed: {e}", source="graphs")
+            finally:
+                et._force_fig_mode = None
+        return out
+
+    def _for_each_completed(self, fn):
+        """Load each tracked video into the embedded tab, call fn(path),
+        then put back the video that was showing."""
+        from PyQt5.QtWidgets import QApplication
+        shown = self._embedded_loaded_path
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            for path in list(self._completed_data):
+                if self._embedded_loaded_path != path:
+                    self._load_into_embedded(path, read_only=True)
+                fn(path)
+                QApplication.processEvents()
+        finally:
+            if shown and self._embedded_loaded_path != shown:
+                self._load_into_embedded(shown)
+            QApplication.restoreOverrideCursor()
+
+    def _render_export_pngs_all(self):
+        """{path: png map} in the export preset, or {} when cached images match it."""
+        if self._export_preset_name() is None:
+            return {}
+        out = {}
+        self._for_each_completed(lambda p: out.__setitem__(p, self._render_export_pngs()))
+        return out
+
+    def _write_vector_graphs(self, name):
+        """SVG / PDF of the loaded video's graphs into <output>/<name>_graphs.
+        Returns the number of files written (0 when switched off)."""
+        out_folder = (self.config.get("output_folder") or "").strip()
+        want = [ext for ext, key in ((".svg", "export_svg"), (".pdf", "export_pdf"))
+                if self.config.get(key)]
+        et = self.embedded_tab
+        if not (out_folder and os.path.isdir(out_folder) and want):
+            return 0
+        graphs_dir = os.path.join(out_folder, f"{name}_graphs")
+        prefix = ""
+        try:
+            os.makedirs(graphs_dir, exist_ok=True)
+        except Exception as e:
+            logger.warn(f"Vector dir mkdir failed: {e}", source="graphs")
+            graphs_dir, prefix = out_folder, f"{name}_"   # don't overwrite other videos
+        n = 0
+        with self._export_style():
+            for gname in list(getattr(et, "_graph_pixmaps", {}) or {}):
+                slug = gname.lower().replace(" ", "_")
+                for ext in want:
+                    if et._export_graph_to_path(gname, os.path.join(graphs_dir, f"{prefix}{slug}{ext}")):
+                        n += 1
+        return n
+
+    def _export_vectors_now(self):
+        lbl = self.lbl_vec_status
+        if not (self.config.get("export_svg") or self.config.get("export_pdf")):
+            lbl.setText("Tick “Also save SVG” and/or “Also save PDF” first.")
+            return
+        out_folder = (self.config.get("output_folder") or "").strip()
+        if not out_folder or not os.path.isdir(out_folder):
+            lbl.setText("Set an output folder first.")
+            return
+        if not self._completed_data:
+            lbl.setText("Nothing to export — run tracking first.")
+            return
+        count = {"files": 0, "videos": 0}
+
+        def one(path):
+            n = self._write_vector_graphs(os.path.splitext(os.path.basename(path))[0])
+            count["files"] += n
+            count["videos"] += 1 if n else 0
+        self._for_each_completed(one)
+        if count["files"]:
+            lbl.setText(f"Wrote {count['files']} graph file(s) for {count['videos']} "
+                        f"video(s) to {out_folder}")
+        else:
+            lbl.setText("No graphs written — see View → Logs for details.")
 
     def _save_combined_excel(self):
         if not self._completed_data:
@@ -1698,6 +1916,7 @@ class ExperimentBatchTab(QWidget):
         ) else None
         exp_key = getattr(exp, "key", None) or "experiment"
         out_path = os.path.join(out_folder, f"{exp_key}_combined-{ts}.xlsx")
+        preset_pngs = self._render_export_pngs_all()   # {} when "current"
         animals = []
         for path, data in self._completed_data.items():
             meta = (self.video_settings.get(path) or {}).get("metadata") or {}
@@ -1710,7 +1929,7 @@ class ExperimentBatchTab(QWidget):
                 "metadata":  md,
                 "metrics":   data.get("metrics") or {},
                 "bin_df":    data.get("bin_df"),
-                "graph_pngs": data.get("graph_pngs") or {},
+                "graph_pngs": preset_pngs.get(path) or data.get("graph_pngs") or {},
                 "video_config": self.video_settings.get(path) or {},
                 "video_size":   data.get("video_size"),
             })
@@ -1730,10 +1949,15 @@ class ExperimentBatchTab(QWidget):
                     schema = None
             export_combined(out_path, animals, schema=schema)
             self.lbl_export_status.setText(f"Wrote {out_path}")
+            from gui.notify import show_done
+            show_done(self, "Combined Excel saved",
+                      f"Results of {len(animals)} animal(s) in one workbook.", path=out_path)
         except Exception as e:
             import traceback
             traceback.print_exc()
             self.lbl_export_status.setText(f"Combined export failed: {e}")
+            from gui.notify import show_done
+            show_done(self, "Combined export failed", str(e), kind="err")
 
     def _pane_header(self, text):
         """Small bold header label used at the top of each splitter pane."""
@@ -1744,17 +1968,13 @@ class ExperimentBatchTab(QWidget):
 
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(10, 10, 10, 10)  # gutter: aurora shows around the panes
         root.setSpacing(0)
-
-        # Splitter: left list, right preview + results
-        split = QSplitter(Qt.Horizontal)
-        root.addWidget(split, 1)
 
         # ── Left side: session queue
         left = QWidget()
         left.setObjectName("Pane")
-        left.setMinimumWidth(220)
+        left.setMinimumWidth(200)
         lv = QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
         lv.setSpacing(0)
@@ -1768,10 +1988,13 @@ class ExperimentBatchTab(QWidget):
         b_clear.clicked.connect(self._clear_videos)
         qh.add_right(b_add)
         qh.add_right(b_clear)
-        lv.addWidget(qh)
+        # qh becomes the Queue panel's title bar (drag handle) below.
 
         self.queue_stats = QueueStats()
-        lv.addWidget(self.queue_stats)
+        stats_row = QHBoxLayout()
+        stats_row.setContentsMargins(10, 0, 10, 4)
+        stats_row.addWidget(self.queue_stats)
+        lv.addLayout(stats_row)
 
         # Video list (rows are inserted before the drop hint + stretch)
         self.list_scroll = QScrollArea()
@@ -1780,7 +2003,7 @@ class ExperimentBatchTab(QWidget):
         self.list_host = QWidget()
         self.list_layout = QVBoxLayout(self.list_host)
         self.list_layout.setSpacing(2)
-        self.list_layout.setContentsMargins(6, 6, 6, 6)
+        self.list_layout.setContentsMargins(10, 6, 10, 6)  # same inset as the counters
         self.drop_hint = DropHint()
         self.drop_hint.clicked.connect(self._add_videos)
         self.list_layout.addWidget(self.drop_hint)
@@ -1813,8 +2036,6 @@ class ExperimentBatchTab(QWidget):
         self._batch_t0 = None
         self._running_path = None
         self._refresh_queue_stats()
-
-        split.addWidget(left)
 
         # ── Build embedded OpenFieldTab. We then steal its internal scroll
         # (config column) and right_tabs (preview) and re-parent them as
@@ -1881,7 +2102,7 @@ class ExperimentBatchTab(QWidget):
             "Copy selected fields from this video's panel to other videos."
         )
         self.btn_apply_to.clicked.connect(self._open_apply_to_dialog)
-        mv.addWidget(ch)
+        # ch becomes the Configuration panel's title bar below.
         if self._config_scroll is not None:
             # Let the scroll fill the middle pane; inner panel now has a
             # min width but no fixed width so it stretches with the scroll.
@@ -1893,6 +2114,7 @@ class ExperimentBatchTab(QWidget):
 
         # ── Right pane: just the preview tabs.
         right = QWidget()
+        right.setObjectName("Pane")
         rv = QVBoxLayout(right)
         rv.setContentsMargins(0, 0, 0, 0)
         rv.setSpacing(4)
@@ -1906,22 +2128,86 @@ class ExperimentBatchTab(QWidget):
 
         self._embedded_loaded_path = None
 
-        split.addWidget(middle)
-        split.addWidget(right)
-        left.setMinimumWidth(220)
-        middle.setMinimumWidth(300)
-        right.setMinimumWidth(420)
-        split.setStretchFactor(0, 0)
-        split.setStretchFactor(1, 0)
-        split.setStretchFactor(2, 1)
-        split.setCollapsible(0, False)
-        split.setCollapsible(1, False)
-        split.setCollapsible(2, False)
-        # Visible drag handles — Fusion's default 1px is too easy to miss.
-        split.setHandleWidth(1)
-        # Default layout: thin list, medium config, large preview.
-        split.setSizes([244, 324, 900])
+
+        # ── Panels: preview is the fixed centre; Queue / Configuration /
+        # Measurements are movable, closable panels (gui/panels.py).
+        from gui.panels import PanelHost
+        self.panel_host = PanelHost(right, self.config, type(self).__name__, self._save_config)
+        root.addWidget(self.panel_host, 1)
+        ph = self.panel_host
+        p_queue = ph.add_panel("queue", "Queue", left, qh, Qt.LeftDockWidgetArea, 200)
+        p_config = ph.add_panel("config", "Configuration", middle, ch, Qt.LeftDockWidgetArea, 250)
+        ph.splitDockWidget(p_queue, p_config, Qt.Horizontal)
+        sizes = [(p_queue, 244), (p_config, 324)]
+        mp = getattr(self.embedded_tab, "measure_panel", None)
+        if mp is not None:
+            mp.setParent(None)              # lift it out of the preview row
+            mp.setMinimumWidth(200)
+            mp.setMaximumWidth(16777215)
+            mh = PaneHeader("analysis", "Measurements")
+            p_meas = ph.add_panel("measure", "Measurements", mp, mh, Qt.RightDockWidgetArea, 200)
+            sizes.append((p_meas, 296))
+        heights = self._add_timeline_panels(ph, sizes)
+        ph.finish(sizes, heights)
         # Output folder + export buttons live in the Export sub-tab now.
+
+    def _add_timeline_panels(self, ph, sizes):
+        """Speed · Center / periphery · Missed frames · Frame corrections
+        panels, docked under the video by default. Returns default heights."""
+        et = self.embedded_tab
+        tl = getattr(et, "speed_timeline", None)
+        if tl is None or not hasattr(tl, "speed"):
+            return []
+        # Side panels run full height; the bottom area sits under the video.
+        ph.setCorner(Qt.BottomLeftCorner, Qt.LeftDockWidgetArea)
+        ph.setCorner(Qt.BottomRightCorner, Qt.RightDockWidgetArea)
+
+        def body(*widgets, margins=(10, 2, 10, 10)):
+            w = QWidget()
+            w.setObjectName("Pane")
+            v = QVBoxLayout(w)
+            v.setContentsMargins(*margins)
+            v.setSpacing(6)
+            for x in widgets:
+                if isinstance(x, QWidget):
+                    v.addWidget(x, 1 if isinstance(x, type(tl.speed)) else 0)
+                else:
+                    v.addLayout(x)
+            return w
+
+        def header(icon, title):
+            h = PaneHeader(icon, title)
+            h.setFixedHeight(38)
+            return h
+
+        area = Qt.BottomDockWidgetArea
+        p_speed = ph.add_panel("speed", "Speed", body(tl.speed), header("analysis", "Speed"), area)
+        p_zone = ph.add_panel("zone", "Center / periphery", body(tl.zone),
+                              header("zones", "Center / periphery"), area)
+        miss_row = QHBoxLayout()
+        miss_row.setSpacing(10)
+        miss_row.addWidget(et.btn_miss_card)
+        miss_row.addWidget(et.lbl_missed_count)
+        miss_row.addStretch(1)
+        p_miss = ph.add_panel("missed", "Missed frames", body(tl.missed, miss_row),
+                              header("detection", "Missed frames"), area)
+        hint = QLabel("Scrub to a frame, turn on Fix position, then click the "
+                      "animal on the video to override the tracked point.")
+        hint.setWordWrap(True)
+        theme.set_tone(hint, "faint", "font-size: 11px;")
+        for b in (et.btn_fix, et.btn_interpolate, et.btn_clear_fixes):
+            b.setMinimumHeight(28)
+        corr = body(hint, et.btn_fix, et.btn_interpolate, et.btn_clear_fixes,
+                    margins=(12, 2, 12, 12))
+        corr.layout().addStretch(1)
+        p_corr = ph.add_panel("corrections", "Frame corrections", corr,
+                              header("edit", "Frame corrections"), area, 220)
+        ph.splitDockWidget(p_speed, p_corr, Qt.Horizontal)
+        ph.splitDockWidget(p_speed, p_zone, Qt.Vertical)
+        ph.splitDockWidget(p_zone, p_miss, Qt.Vertical)
+        sizes.append((p_corr, 250))
+        et._show_corrections_panel = lambda: (p_corr.show(), p_corr.raise_())
+        return [(p_speed, 150), (p_zone, 96), (p_miss, 100)]
 
     # ── Drag-and-drop ─────────────────────────────────────────────────────
 
@@ -2353,7 +2639,7 @@ class ExperimentBatchTab(QWidget):
             glyph.setFixedWidth(20)
             row.addWidget(glyph)
             name = QLabel(os.path.basename(path))
-            name.setStyleSheet("font-family:monospace;")
+            name.setStyleSheet(f"font-family:'{theme.mono_family()}';")
             row.addWidget(name)
             row.addStretch()
             detail = ", ".join(msg for _, msg in reasons) if reasons else "ready"
@@ -2864,6 +3150,9 @@ class ExperimentBatchTab(QWidget):
         self._load_into_embedded(path)
         graph_images = dict(getattr(self.embedded_tab, "_graph_png_bytes", {}) or {})
         self._completed_data[path]["graph_pngs"] = graph_images
+        # Files use the export preset (the Output tab keeps the current look).
+        if self._export_preset_name() is not None:
+            graph_images = self._render_export_pngs() or graph_images
 
         # Autosave goes to the BACKUP folder (separate from the main output
         # folder driven by the manual Export button). xlsx only — no CSVs.
@@ -2889,32 +3178,12 @@ class ExperimentBatchTab(QWidget):
         # per-video Excel. Target folder = main output folder (publication
         # bundle goes with the main artifacts). Skips silently when neither
         # checkbox is on, or when the output folder isn't set.
-        out_folder_vec = (self.config.get("output_folder") or "").strip()
-        want_svg = bool(self.config.get("export_svg", False))
-        want_pdf = bool(self.config.get("export_pdf", False))
-        if out_folder_vec and os.path.isdir(out_folder_vec) and (want_svg or want_pdf):
-            et = self.embedded_tab
-            graphs_dir = os.path.join(out_folder_vec, f"{name}_graphs")
-            try:
-                os.makedirs(graphs_dir, exist_ok=True)
-            except Exception as e:
-                logger.warn(f"Vector dir mkdir failed: {e}", source="graphs")
-                graphs_dir = out_folder_vec
-            for gname in list(getattr(et, "_graph_pixmaps", {}) or {}):
-                slug = gname.lower().replace(" ", "_")
-                if want_svg:
-                    et._export_graph_to_path(
-                        gname, os.path.join(graphs_dir, f"{slug}.svg")
-                    )
-                if want_pdf:
-                    et._export_graph_to_path(
-                        gname, os.path.join(graphs_dir, f"{slug}.pdf")
-                    )
         else:
             logger.info(
                 "Backup skipped — no backup folder set (Settings → Set Backup Folder…)",
                 source="backup",
             )
+        self._write_vector_graphs(name)
 
     # ── Multi-Run helper ────────────────────────────────────────────────
     def _track_for_multirun(self, path, s, progress_cb=None):
