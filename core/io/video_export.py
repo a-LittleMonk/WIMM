@@ -82,6 +82,7 @@ class VideoExportThread(QThread):
             do_ellipse   = self._flag("ellipse", bool(of.chk_ellipse.isChecked()))
             do_trail     = self._flag("trail", bool(of.chk_trail.isChecked()))
             do_trail_fade = self._flag("trail_fade", bool(of.chk_trail_fade.isChecked()))
+            do_tag       = self._flag("marker_tag", True)
             trail_n      = int(self.flags.get("trail_len",
                                               of.spin_trail_len.value()))
             do_cell_hi   = self._flag("cell_highlight", True)
@@ -211,6 +212,8 @@ class VideoExportThread(QThread):
                     )
                 if results_for_export and 0 <= rel_i < len(results_for_export):
                     r = results_for_export[rel_i]
+                    tag = (of._marker_tag_lines(rel_i)
+                           if (do_tag and body_style not in ("none", "off")) else None)
                     of._draw_body_on_frame(
                         frame, r, rel_i,
                         body_style=body_style,
@@ -219,6 +222,7 @@ class VideoExportThread(QThread):
                         trail_len=trail_n,
                         trail_fade=do_trail_fade,
                         results_override=results_for_export,
+                        tag_lines=tag,
                     )
                 # Make sure the frame matches writer resolution (defensive).
                 if frame.shape[1] != w or frame.shape[0] != h:

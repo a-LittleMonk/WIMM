@@ -14,9 +14,43 @@ Reuses host attrs / methods:
     self._graph_pixmaps, self._graph_lbl, self.snapshot_settings,
     self._refresh_cell_aggregation.
 """
-from PyQt5.QtWidgets import QTableWidgetItem
+import os
+
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QBrush, QColor, QFont
+from PyQt5.QtWidgets import QHeaderView, QTableWidgetItem
 
 from core import logger
+from gui import theme
+
+# (title, keywords) — first match wins. Metrics that match nothing go into an
+# untitled trailing group; if NOTHING matches (other experiments) the table is
+# shown flat.
+_SUMMARY_GROUPS = [
+    ("Recording", ("duration", "total frames", "frames detected", "detection rate", "fps")),
+    ("Thigmotaxis & habituation", ("thigmotaxis", "habituation")),
+    ("Locomotion", ("distance", "speed", "mobility", "immobil", "movement", "tortuosity", "mobile")),
+    ("Center zone", ("center", "periphery", "entries", "dwell", "latency", "inter-entry")),
+]
+# display order of the groups
+_GROUP_ORDER = ["Recording", "Locomotion", "Center zone", "Thigmotaxis & habituation", "Other"]
+
+
+def _split_unit(key):
+    """'Total Distance (cm)' → ('Total Distance', 'cm')."""
+    k = str(key)
+    if k.endswith(")") and "(" in k:
+        i = k.rfind("(")
+        return k[:i].strip(), k[i + 1:-1]
+    if k.startswith("%"):
+        return k, "%"
+    return k, ""
+
+
+def _mono(px=12):
+    f = QFont(theme.mono_family())
+    f.setPixelSize(px)
+    return f
 
 
 class OutputTabsMixin:
@@ -25,6 +59,8 @@ class OutputTabsMixin:
         pix = self._graph_pixmaps.get(name)
         if pix:
             self._graph_lbl.setPixmap(pix)
+        if hasattr(self, "_sync_graph_panel"):
+            self._sync_graph_panel(name)
 
     def _refresh_raw_data_columns(self, col_names):
         """Surgically rewrite the given columns in the Raw Data table from
@@ -80,15 +116,81 @@ class OutputTabsMixin:
             rows = [(k, metrics.get(k)) for k in keys]
         else:
             rows = list(metrics.items())
-        self._table_summary.setUpdatesEnabled(False)
-        self._table_summary.setSortingEnabled(False)
+        # group rows for display
+        items = []
+        for k, v in rows:
+            label, unit = _split_unit(k)
+            items.append((label, "" if v is None else str(v), unit))
+        groups = {}
+        order = []
+        matched_any = False
+        for (k, _v), it in zip(rows, items):
+            low = str(k).lower()
+            title = None
+            for gt, words in _SUMMARY_GROUPS:
+                if any(w in low for w in words):
+                    title = gt
+                    matched_any = True
+                    break
+            title = title or ("Other" if matched_any else None)
+            if title not in groups:
+                groups[title] = []
+                order.append(title)
+            groups[title].append(it)
+        order = sorted(order, key=lambda g: (_GROUP_ORDER.index(g) if g in _GROUP_ORDER else 99))
+        tb = self._table_summary
+        tb.setUpdatesEnabled(False)
+        tb.setSortingEnabled(False)
         try:
-            self._table_summary.setRowCount(len(rows))
-            for row, (k, v) in enumerate(rows):
-                self._table_summary.setItem(row, 0, QTableWidgetItem(str(k)))
-                self._table_summary.setItem(row, 1, QTableWidgetItem(str(v)))
+            tb.clearSpans()
+            n_rows = sum(len(g) for g in groups.values()) + sum(1 for g in order if g)
+            tb.setRowCount(n_rows)
+            hdr = tb.horizontalHeader()
+            hdr.setSectionResizeMode(0, QHeaderView.Stretch)
+            hdr.setSectionResizeMode(1, QHeaderView.Fixed)
+            hdr.setSectionResizeMode(2, QHeaderView.Fixed)
+            tb.setColumnWidth(1, 120)
+            tb.setColumnWidth(2, 64)
+            r = 0
+            for gt in order:
+                if gt:
+                    it = QTableWidgetItem(gt.upper())
+                    f = QFont(theme.sans_family())
+                    f.setPixelSize(10)
+                    f.setBold(True)
+                    f.setLetterSpacing(QFont.AbsoluteSpacing, 0.6)
+                    it.setFont(f)
+                    it.setForeground(QBrush(QColor(theme.FAINT)))
+                    it.setBackground(QBrush(QColor(theme.SURFACE_2)))
+                    it.setFlags(Qt.ItemIsEnabled)
+                    tb.setItem(r, 0, it)
+                    tb.setSpan(r, 0, 1, 3)
+                    r += 1
+                for label, val, unit in groups[gt]:
+                    a0 = QTableWidgetItem(label)
+                    a0.setForeground(QBrush(QColor(theme.TEXT)))
+                    a1 = QTableWidgetItem(val)
+                    a1.setFont(_mono(12))
+                    a1.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    a1.setForeground(QBrush(QColor(theme.TEXT)))
+                    a2 = QTableWidgetItem(unit)
+                    a2.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    a2.setForeground(QBrush(QColor(theme.FAINT)))
+                    tb.setItem(r, 0, a0)
+                    tb.setItem(r, 1, a1)
+                    tb.setItem(r, 2, a2)
+                    r += 1
+            tb.resizeRowsToContents()
+            for rr in range(tb.rowCount()):
+                tb.setRowHeight(rr, 30)
         finally:
-            self._table_summary.setUpdatesEnabled(True)
+            tb.setUpdatesEnabled(True)
+        if hasattr(self, "_summary_panel"):
+            name = os.path.basename(self.video_path) if getattr(self, "video_path", None) else ""
+            self._summary_panel.set_title("Summary", f"· {name}" if name else "")
+            self._summary_panel.show()
+            # panel grows with content; keep the table from scrolling internally
+            tb.setMinimumHeight(min(tb.rowCount() * 30 + 4, 900))
         try:
             self._refresh_cell_aggregation()
         except Exception as e:
@@ -118,6 +220,8 @@ class OutputTabsMixin:
         if hasattr(self, "lbl_raw_placeholder"):
             self.lbl_raw_placeholder.setVisible(False)
             self._table_raw.setVisible(True)
+            if hasattr(self, "_raw_panel"):
+                self._raw_panel.show()
         # Summary + cell aggregation + Video Config — all in the helper.
         self._refresh_summary_table()
 
@@ -130,6 +234,9 @@ class OutputTabsMixin:
             self._table_raw.setRowCount(len(display))
             self._table_raw.setColumnCount(len(cols))
             self._table_raw.setHorizontalHeaderLabels(cols)
+            if hasattr(self, "_raw_panel"):
+                self._raw_panel.set_title(
+                    "Raw data", f"· {len(display)} of {len(df)} frames")
             # Cache iloc rows once — repeated .iloc[r] inside the loop is slow.
             rows = display.itertuples(index=False, name=None)
             for r, row in enumerate(rows):
@@ -138,7 +245,11 @@ class OutputTabsMixin:
                         text = "" if val != val else (f"{val:.3f}" if isinstance(val, float) else str(val))
                     except Exception:
                         text = str(val)
-                    self._table_raw.setItem(r, c, QTableWidgetItem(text))
+                    it = QTableWidgetItem(text)
+                    it.setFont(_mono(11))
+                    if c > 0 or True:
+                        it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    self._table_raw.setItem(r, c, it)
         finally:
             self._table_raw.setUpdatesEnabled(True)
         if len(df) > 5000:
@@ -176,7 +287,11 @@ class OutputTabsMixin:
         try:
             t.setRowCount(len(rows))
             for r, (label, value) in enumerate(rows):
-                t.setItem(r, 0, QTableWidgetItem(str(label)))
-                t.setItem(r, 1, QTableWidgetItem("" if value is None else str(value)))
+                a0 = QTableWidgetItem(str(label))
+                a0.setForeground(QBrush(QColor(theme.TEXT_2)))
+                a1 = QTableWidgetItem("" if value is None else str(value))
+                a1.setFont(_mono(11.5 if False else 11))
+                t.setItem(r, 0, a0)
+                t.setItem(r, 1, a1)
         finally:
             t.setUpdatesEnabled(True)

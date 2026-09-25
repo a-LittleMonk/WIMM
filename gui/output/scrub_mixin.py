@@ -72,6 +72,8 @@ class ScrubMixin:
             else:
                 self._render_current_frame()
         self._update_scrub_label(value, self.slider_scrub.maximum() + 1)
+        if hasattr(self, "_sync_redesign"):
+            self._sync_redesign(value)
         # Push body position + cumulative cell-time to the zone drawer.
         self._push_cell_state_for_frame(value)
 
@@ -152,6 +154,10 @@ class ScrubMixin:
         cur = (self.slider_scrub.value() - lo) / fps
         tot = (hi - lo + 1) / fps
         def fmt(s):
-            m, sec = divmod(int(s), 60)
-            return f"{m:02d}:{sec:02d}"
-        self.lbl_scrub.setText(f"{fmt(cur)} / {fmt(tot)}")
+            m, sec = divmod(max(0.0, s), 60)
+            return f"{int(m):02d}:{sec:04.1f}"
+        self.lbl_scrub.setText(fmt(cur))
+        if hasattr(self, "lbl_total"):
+            self.lbl_total.setText(f"/ {fmt(tot)}")
+        if hasattr(self, "time_ticks"):
+            self.time_ticks.set_duration(tot)

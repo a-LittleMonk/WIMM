@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
     QCheckBox,
 )
 
+from gui.info_box import attach_info_box
 from .zones import (
     ARM_NAMES, ARM_LABELS, ARM_COLORS, NEUTRAL_DEFAULT_COLOR,
     build_template_arms, build_schema_from_arms, build_arm_label_positions,
@@ -19,6 +20,9 @@ from .zones import (
     default_y_template_geometry, y_template_overlay_zone,
     neutral_zone,
 )
+
+
+from gui import theme
 
 
 def build_geometry_step(host):
@@ -172,7 +176,7 @@ def build_geometry_step(host):
     }
     host._ym_color_btns = {}
     color_label = QLabel("Zone colors:")
-    color_label.setStyleSheet("font-size:11px; color:#bbb;")
+    theme.set_tone(color_label, "text2", "font-size:11px;")
     layout.addWidget(color_label)
     color_row = QHBoxLayout()
     color_row.setSpacing(4)
@@ -205,7 +209,7 @@ def build_geometry_step(host):
     # ── Status
     host.lbl_ym_zones = QLabel("No arms defined")
     host.lbl_ym_zones.setWordWrap(True)
-    host.lbl_ym_zones.setStyleSheet("color:#888; font-size:11px;")
+    theme.set_tone(host.lbl_ym_zones, "faint", "font-size:11px;")
     layout.addWidget(host.lbl_ym_zones)
 
     # Seed empty arm zones into the drawer the moment it exists. The
@@ -229,6 +233,15 @@ def build_geometry_step(host):
             pass
     QTimer.singleShot(0, _wire)
 
+    attach_info_box(grp, [
+        ("Arm A", host.btn_ym_arm_a),
+        ("Arm B", host.btn_ym_arm_b),
+        ("Arm C", host.btn_ym_arm_c),
+        ("Neutral zone (N)", host.btn_ym_arm_n),
+        ("Arm width", host.spin_ym_arm_width),
+        ("Perspective correction", host.chk_ym_perspective),
+        ("Neutral zone", host.spin_ym_neutral_size),
+    ])
     return grp
 
 
@@ -424,7 +437,7 @@ def _refresh_color_swatches(host):
         text_c = "#000" if _is_light(c) else "#fff"
         btn.setStyleSheet(
             f"QPushButton {{ background:{c}; color:{text_c}; "
-            f"border:1px solid #555; border-radius:3px; font-weight:bold; }}"
+            f"border:1px solid #D3D8DE; border-radius:3px; font-weight:bold; }}"
         )
 
 
@@ -552,11 +565,11 @@ def _refresh_ym_label(host):
             defined.append(ARM_LABELS[name])
     if defined:
         lbl.setText(" | ".join(defined) + " defined")
-        lbl.setStyleSheet("color:#4CAF50; font-size:11px;")
+        theme.set_tone(lbl, "ok", "font-size:11px;")
         host.set_step_status("geometry", "ok" if len(defined) == 3 else "warn")
     else:
         lbl.setText("No arms defined")
-        lbl.setStyleSheet("color:#888; font-size:11px;")
+        theme.set_tone(lbl, "faint", "font-size:11px;")
         host.set_step_status("geometry", "blocked")
 
 

@@ -43,7 +43,7 @@ class NORExperiment(Experiment):
             float(m.get("object_a_total_time_s", 0.0) or 0.0),
             float(m.get("object_b_total_time_s", 0.0) or 0.0),
         ]
-        colors = ["#FF7043", "#42A5F5"]
+        colors = ["#E8A87C", "#7FA6D9"]
         return (labels, values, colors, lambda v: f"{v:.1f}s",
                 "Object Exploration Time", "Time (s)")
 

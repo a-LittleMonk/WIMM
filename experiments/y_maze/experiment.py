@@ -166,7 +166,7 @@ class YMazeExperiment(Experiment):
                     "time_neutral_zone_s")]
         total = sum(times_s)
         values = [(t / total * 100.0) if total > 0 else 0.0 for t in times_s]
-        colors = ["#FF7043", "#42A5F5", "#9CCC65", "#FFB74D"]
+        colors = ["#E8A87C", "#7FA6D9", "#8FC79A", "#E4D3AE"]
         return (labels, values, colors, lambda v: f"{v:.1f}%",
                 "Time per Arm (%)", "Share (%)")
 

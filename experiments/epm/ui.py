@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (
     QLineEdit,
 )
 
+from gui.info_box import attach_info_box
 from .zones import (
     ARM_NAMES, ARM_LABELS, KIND_COLORS, CENTER_DEFAULT_COLOR,
     DEFAULT_ARM_KINDS, KIND_STYLE,
@@ -26,6 +27,9 @@ KIND_CHOICES = [
     ("Closed",  "closed"),
     ("Custom",  "custom"),
 ]
+
+
+from gui import theme
 
 
 def build_geometry_step(host):
@@ -181,7 +185,7 @@ def build_geometry_step(host):
     host._epm_kind_combos = {}
     host._epm_name_edits = {}
     kind_label = QLabel("Arm labels:")
-    kind_label.setStyleSheet("font-size:11px; color:#bbb;")
+    theme.set_tone(kind_label, "text2", "font-size:11px;")
     layout.addWidget(kind_label)
     for name in ARM_NAMES:
         row = QHBoxLayout()
@@ -227,7 +231,7 @@ def build_geometry_step(host):
     host._epm_colors["center_zone"] = CENTER_DEFAULT_COLOR
     host._epm_color_btns = {}
     color_label = QLabel("Zone colors:")
-    color_label.setStyleSheet("font-size:11px; color:#bbb;")
+    theme.set_tone(color_label, "text2", "font-size:11px;")
     layout.addWidget(color_label)
     color_row = QHBoxLayout()
     color_row.setSpacing(4)
@@ -259,7 +263,7 @@ def build_geometry_step(host):
     # ── Status label
     host.lbl_epm_zones = QLabel("No arms defined")
     host.lbl_epm_zones.setWordWrap(True)
-    host.lbl_epm_zones.setStyleSheet("color:#888; font-size:11px;")
+    theme.set_tone(host.lbl_epm_zones, "faint", "font-size:11px;")
     layout.addWidget(host.lbl_epm_zones)
 
     # Seed empty zones once zone_drawer exists.
@@ -279,6 +283,12 @@ def build_geometry_step(host):
             pass
     QTimer.singleShot(0, _wire)
 
+    attach_info_box(grp, [
+        ("Arm width", host.spin_epm_arm_width),
+        ("Perspective correction", host.chk_epm_perspective),
+        ("Adjust…", host.btn_epm_perspective_adjust),
+        ("Center zone", host.spin_epm_center_size),
+    ])
     return grp
 
 
@@ -460,7 +470,7 @@ def _refresh_color_swatches(host):
         text_c = "#000" if _is_light(c) else "#fff"
         btn.setStyleSheet(
             f"QPushButton {{ background:{c}; color:{text_c}; "
-            f"border:1px solid #555; border-radius:3px; font-weight:bold; }}"
+            f"border:1px solid #D3D8DE; border-radius:3px; font-weight:bold; }}"
         )
 
 
@@ -640,14 +650,14 @@ def _refresh_epm_label(host):
         text = " | ".join(defined) + f" defined ({n_open} open, {n_closed} closed)"
         lbl.setText(text)
         if len(defined) == 4 and n_open > 0 and n_closed > 0:
-            lbl.setStyleSheet("color:#4CAF50; font-size:11px;")
+            theme.set_tone(lbl, "ok", "font-size:11px;")
             host.set_step_status("geometry", "ok")
         else:
-            lbl.setStyleSheet("color:#FFB300; font-size:11px;")
+            theme.set_tone(lbl, "warn", "font-size:11px;")
             host.set_step_status("geometry", "warn")
     else:
         lbl.setText("No arms defined")
-        lbl.setStyleSheet("color:#888; font-size:11px;")
+        theme.set_tone(lbl, "faint", "font-size:11px;")
         host.set_step_status("geometry", "blocked")
 
 

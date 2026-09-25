@@ -16,6 +16,9 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from openpyxl import Workbook
 
 
+from gui import theme
+
+
 class RealtimeScoringTab(QWidget):
     DEFAULT_VALUES = [0, 1, 2, 3, 4, 5, 6]
 
@@ -99,29 +102,28 @@ class RealtimeScoringTab(QWidget):
         preset_row.addWidget(self.btn_preset_del)
         root.addLayout(preset_row)
 
-        # Chart — build once, mutate in place
-        self.figure = Figure(figsize=(6, 3), facecolor="white")
+        # Chart — build once, mutate in place; colours follow the theme
+        from gui.out_widgets import OutPanel
+        self.figure = Figure(figsize=(6, 3))
         self.canvas = FigureCanvas(self.figure)
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self._ax = self.figure.add_subplot(111, facecolor="white")
-        self._ax.tick_params(colors="#333")
-        for sp in self._ax.spines.values():
-            sp.set_edgecolor("#888")
-        self._ax.set_xlabel("Time (s)", color="#333")
-        self._ax.set_ylabel("Score", color="#333")
-        self._ax.grid(True, color="#DDD", linewidth=0.5)
-        (self._line,) = self._ax.plot(
-            [], [], color="#1976D2", linewidth=1.8, drawstyle="steps-post"
-        )
+        self._ax = self.figure.add_subplot(111)
+        self._ax.set_xlabel("Time (s)")
+        self._ax.set_ylabel("Score")
+        (self._line,) = self._ax.plot([], [], linewidth=1.4, drawstyle="steps-post")
         self._current_hline = self._ax.axhline(
-            y=0, color="#FF8A00", linewidth=1.0, linestyle="--", alpha=0.6, visible=False
+            y=0, linewidth=1.0, linestyle="--", alpha=0.6, visible=False
         )
-        root.addWidget(self.canvas, 1)
+        self._apply_chart_theme()
+        theme.notifier.changed.connect(lambda _m: self._apply_chart_theme())
+        chart_panel = OutPanel()
+        chart_panel.body.addWidget(self.canvas)
+        root.addWidget(chart_panel, 1)
 
         # Per-value duration summary
         self.lbl_duration = QLabel("")
         self.lbl_duration.setAlignment(Qt.AlignCenter)
-        self.lbl_duration.setStyleSheet("color:#555; font-size:11px;")
+        theme.set_tone(self.lbl_duration, "muted", "font-size:11px;")
         root.addWidget(self.lbl_duration)
 
         # Radio buttons (current value selector)
@@ -135,14 +137,14 @@ class RealtimeScoringTab(QWidget):
 
         hint = QLabel("Press 0–9 or A–Z to pick value (digits also pick by position: 1=1st, 2=2nd…)")
         hint.setAlignment(Qt.AlignCenter)
-        hint.setStyleSheet("color:#888; font-size:11px;")
+        theme.set_tone(hint, "faint", "font-size:11px;")
         root.addWidget(hint)
 
         # Output folder row
         out_row = QHBoxLayout()
         out_row.addWidget(QLabel("Output:"))
         self.lbl_output_dir = QLabel()
-        self.lbl_output_dir.setStyleSheet("color:#555; font-size:11px;")
+        theme.set_tone(self.lbl_output_dir, "muted", "font-size:11px;")
         self.lbl_output_dir.setTextInteractionFlags(Qt.TextSelectableByMouse)
         out_row.addWidget(self.lbl_output_dir, 1)
         self.btn_change_dir = QPushButton("Change…")
@@ -161,6 +163,7 @@ class RealtimeScoringTab(QWidget):
         btn_row = QHBoxLayout()
         btn_row.setAlignment(Qt.AlignCenter)
         self.btn_new = QPushButton("New")
+        self.btn_new.setProperty("primary", True)
         self.btn_stop_resume = QPushButton("Stop")
         self.btn_reset = QPushButton("Reset")
         self.btn_export = QPushButton("Export")
@@ -178,8 +181,23 @@ class RealtimeScoringTab(QWidget):
 
         self.lbl_status = QLabel("Idle. Press New to start.")
         self.lbl_status.setAlignment(Qt.AlignCenter)
-        self.lbl_status.setStyleSheet("color:#888; font-size:11px;")
+        theme.set_tone(self.lbl_status, "faint", "font-size:11px;")
         root.addWidget(self.lbl_status)
+
+    def _apply_chart_theme(self):
+        """Figure / axes / line colours from the active UI theme."""
+        fig, ax = self.figure, self._ax
+        fig.set_facecolor(theme.SURFACE)
+        ax.set_facecolor(theme.SURFACE)
+        ax.tick_params(colors=theme.TEXT_2)
+        for sp in ax.spines.values():
+            sp.set_edgecolor(theme.TEXT)
+        ax.xaxis.label.set_color(theme.TEXT)
+        ax.yaxis.label.set_color(theme.TEXT)
+        ax.grid(True, color=theme.BORDER, linewidth=0.6)
+        self._line.set_color(theme.ACCENT)
+        self._current_hline.set_color(theme.WARN)
+        self.canvas.draw_idle()
 
     def _bind_shortcuts(self):
         keys = list(_string.digits) + list(_string.ascii_uppercase)
@@ -546,7 +564,7 @@ class RealtimeScoringTab(QWidget):
         path = self._current_output_dir()
         if path:
             self.lbl_output_dir.setText(path)
-            self.lbl_output_dir.setStyleSheet("color:#555; font-size:11px;")
+            theme.set_tone(self.lbl_output_dir, "muted", "font-size:11px;")
         else:
             self.lbl_output_dir.setText("(not set — will prompt on Export)")
             self.lbl_output_dir.setStyleSheet("color:#999; font-size:11px; font-style:italic;")
@@ -578,5 +596,5 @@ class RealtimeScoringTab(QWidget):
     def _show(self, msg, error=False):
         self.lbl_status.setText(msg)
         self.lbl_status.setStyleSheet(
-            f"color:{'#f44336' if error else '#888'}; font-size:11px;"
+            f"color:{theme.ERR if error else theme.FAINT}; font-size:11px;"
         )

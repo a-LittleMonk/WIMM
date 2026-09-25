@@ -13,12 +13,16 @@ from PyQt5.QtWidgets import (
 from core import logger
 
 
-_LEVEL_COLORS = {
-    "DEBUG": "#7f8c8d",
-    "INFO":  "#dcdcdc",
-    "WARN":  "#f39c12",
-    "ERROR": "#e74c3c",
+# level → theme token (resolved at render time so the log follows light / dark)
+_LEVEL_TOKENS = {
+    "DEBUG": "FAINT",
+    "INFO":  "TEXT_2",
+    "WARN":  "WARN",
+    "ERROR": "ERR",
 }
+
+
+from gui import theme
 
 
 class LogDialog(QDialog):
@@ -76,15 +80,14 @@ class LogDialog(QDialog):
 
         self.text = QPlainTextEdit()
         self.text.setReadOnly(True)
-        f = QFont("Consolas", 9)
-        if not f.exactMatch():
-            f = QFont("Courier New", 9)
+        f = QFont(theme.mono_family())
+        f.setPixelSize(11)
         self.text.setFont(f)
-        self.text.setStyleSheet("background:#1e1e1e; color:#dcdcdc;")
+        theme.notifier.changed.connect(lambda _m: self._refresh())
         v.addWidget(self.text, 1)
 
         self.lbl_status = QLabel("")
-        self.lbl_status.setStyleSheet("color:#888; font-size:11px;")
+        theme.set_tone(self.lbl_status, "faint", "font-size:11px;")
         v.addWidget(self.lbl_status)
 
     def _on_filter_changed(self, level: str):
@@ -104,15 +107,15 @@ class LogDialog(QDialog):
             t = time.strftime("%H:%M:%S", time.localtime(ts))
             ms = int((ts - int(ts)) * 1000)
             src = f"[{source}] " if source else ""
-            color = _LEVEL_COLORS.get(level, "#dcdcdc")
+            color = getattr(theme, _LEVEL_TOKENS.get(level, "TEXT_2"))
             line = (
-                f'<span style="color:#888;">{t}.{ms:03d}</span>  '
+                f'<span style="color:{theme.FAINT};">{t}.{ms:03d}</span>  '
                 f'<span style="color:{color};font-weight:bold;">{level:<5}</span>  '
-                f'<span style="color:#9cdcfe;">{src}</span>'
-                f'<span style="color:#dcdcdc;">{self._escape(msg)}</span>'
+                f'<span style="color:{theme.ACCENT};">{src}</span>'
+                f'<span style="color:{theme.TEXT};">{self._escape(msg)}</span>'
             )
             lines.append(line)
-        html = "<br>".join(lines) if lines else '<span style="color:#666;">(no log entries)</span>'
+        html = "<br>".join(lines) if lines else f'<span style="color:{theme.FAINT};">(no log entries)</span>'
         self.text.setUpdatesEnabled(False)
         self.text.clear()
         self.text.appendHtml(html)

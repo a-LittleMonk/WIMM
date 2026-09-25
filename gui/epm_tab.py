@@ -65,6 +65,8 @@ class EPMTab(OpenFieldTab):
             "Physical hub-to-tip distance of one arm in cm. Auto-"
             "calibration uses mean pixel spoke length ÷ this value = px/cm."
         )
+        from gui.info_box import attach_info_box
+        attach_info_box(self._step_groups["scale"], [("Arm length", spin)])
 
         def _on_change(v):
             self.config["epm_arm_length_cm"] = float(v)

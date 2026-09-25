@@ -11,7 +11,7 @@ from gui.experiment_batch_tab import (
     ExperimentBatchTab,
     # Status / styling
     STATUS_NEEDS, STATUS_READY, STATUS_RUNNING, STATUS_DONE, STATUS_ERROR,
-    STATUS_ICONS, _STATUS_BG,
+    STATUS_ICONS,
     APPLY_FIELD_GROUPS, APPLY_DEFAULTS_ON,
     VIDEO_EXTS,
     # Dialog / widget classes (not user-public but referenced by tests / imports).

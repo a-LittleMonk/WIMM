@@ -13,6 +13,9 @@ from export.excel_export import export_results
 VIDEO_EXTS = (".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv")
 
 
+from gui import theme
+
+
 class BatchDialog(QDialog):
     """Run current Open-Field settings on multiple videos sequentially."""
 
@@ -62,7 +65,7 @@ class BatchDialog(QDialog):
         self.progress_video.setVisible(False)
         v.addWidget(self.progress_video)
         self.lbl_status = QLabel("")
-        self.lbl_status.setStyleSheet("color:#555; font-size:11px;")
+        theme.set_tone(self.lbl_status, "muted", "font-size:11px;")
         self.lbl_status.setWordWrap(True)
         v.addWidget(self.lbl_status)
 

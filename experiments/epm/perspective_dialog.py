@@ -24,6 +24,9 @@ from PyQt5.QtWidgets import (
 )
 
 
+from gui import theme
+
+
 def _bgr_to_qimage(bgr):
     if bgr is None:
         return None
@@ -460,7 +463,7 @@ class PerspectiveDialog(QDialog):
 
         self.lbl_info = QLabel("")
         self.lbl_info.setWordWrap(True)
-        self.lbl_info.setStyleSheet("color:#aaa; font-size:11px;")
+        theme.set_tone(self.lbl_info, "faint", "font-size:11px;")
         outer.addWidget(self.lbl_info)
 
         body = QHBoxLayout()
@@ -475,9 +478,7 @@ class PerspectiveDialog(QDialog):
         side.addWidget(QLabel("Warped preview:"))
         self.preview_lbl = QLabel("(drag a corner to preview)")
         self.preview_lbl.setFixedSize(260, 220)
-        self.preview_lbl.setStyleSheet(
-            "background:#111; border:1px solid #444; color:#666;"
-        )
+        theme.set_tone(self.preview_lbl, "muted", "background:#101316; border:1px solid #E2E5E9;")
         self.preview_lbl.setAlignment(Qt.AlignCenter)
         side.addWidget(self.preview_lbl)
 
@@ -520,7 +521,7 @@ class PerspectiveDialog(QDialog):
         out_row.addStretch()
         side.addLayout(out_row)
         out_hint = QLabel("Square output side. Smaller = faster tracking.")
-        out_hint.setStyleSheet("color:#888; font-size:10px;")
+        theme.set_tone(out_hint, "faint", "font-size:10px;")
         out_hint.setWordWrap(True)
         side.addWidget(out_hint)
 
@@ -558,7 +559,7 @@ class PerspectiveDialog(QDialog):
             "Arm width = thickness of each arm rectangle in the output, "
             "as a fraction of side. Margin = empty space at each arm tip."
         )
-        plus_hint.setStyleSheet("color:#888; font-size:10px;")
+        theme.set_tone(plus_hint, "faint", "font-size:10px;")
         plus_hint.setWordWrap(True)
         pl.addWidget(plus_hint)
         btn_swap = QPushButton("Swap open ↔ closed")

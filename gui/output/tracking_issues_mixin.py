@@ -16,7 +16,7 @@ import numpy as np
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QPixmap
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSplitter,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSplitter, QFrame,
     QTableWidget, QTableWidgetItem, QCheckBox, QDoubleSpinBox,
     QFileDialog, QMessageBox,
 )
@@ -24,23 +24,31 @@ from PyQt5.QtWidgets import (
 from core import logger
 
 
+from gui import theme
+
+
 class IssuesMixin:
     def _build_tracking_issues_tab(self):
-        """Glitch finder UI: threshold + detector toggles + table + mini
+        """Glitch finder UI: threshold + detector chips + table + mini
         trajectory map + action buttons. Populated in
         `_populate_tracking_issues_tab` after each tracking run."""
         from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
         import matplotlib.pyplot as plt
+        from gui.out_widgets import OutPanel, Section
 
         w = QWidget()
         vlay = QVBoxLayout(w)
-        vlay.setContentsMargins(6, 6, 6, 6)
-        vlay.setSpacing(6)
+        vlay.setContentsMargins(0, 0, 0, 0)
+        vlay.setSpacing(12)
 
-        # Row 1: thresholds. Speed (with Auto) + Accel.
-        row1 = QHBoxLayout()
-        row1.setSpacing(6)
-        row1.addWidget(QLabel("Speed:"))
+        # ── Parameter bar: Speed > [ ] Auto · Accel > [ ] · Detectors [chips]
+        params = Section("")
+        params.title.hide()
+        params.body.setContentsMargins(14, 10, 14, 10)
+        pr = QHBoxLayout()
+        pr.setSpacing(10)
+        params.body.addLayout(pr)
+        pr.addWidget(self._issues_lbl("Speed >"))
         self._issues_thresh = QDoubleSpinBox()
         self._issues_thresh.setRange(5.0, 1000.0)
         self._issues_thresh.setSuffix(" cm/s")
@@ -48,63 +56,67 @@ class IssuesMixin:
         self._issues_thresh.setSingleStep(10.0)
         self._issues_thresh.setValue(120.0)
         self._issues_thresh.setFixedWidth(120)
-        row1.addWidget(self._issues_thresh)
+        pr.addWidget(self._issues_thresh)
         self._issues_chk_auto = QCheckBox("Auto")
         self._issues_chk_auto.setToolTip(
             "Self-calibrate to max(threshold, 2.5 × p99.9 of session speed)."
         )
         self._issues_chk_auto.setChecked(True)
-        row1.addWidget(self._issues_chk_auto)
-        row1.addSpacing(16)
-        row1.addWidget(QLabel("Accel:"))
+        pr.addWidget(self._issues_chk_auto)
+        pr.addSpacing(6)
+        pr.addWidget(self._issues_lbl("Accel >"))
         self._issues_accel_thresh = QDoubleSpinBox()
         self._issues_accel_thresh.setRange(50.0, 5000.0)
         self._issues_accel_thresh.setSuffix(" cm/s²")
         self._issues_accel_thresh.setDecimals(0)
         self._issues_accel_thresh.setSingleStep(50.0)
         self._issues_accel_thresh.setValue(500.0)
-        self._issues_accel_thresh.setFixedWidth(130)
+        self._issues_accel_thresh.setFixedWidth(132)
         self._issues_accel_thresh.setToolTip(
             "Flag frames where |Δspeed| × fps exceeds this. Mice can hit "
             "~300 cm/s² in a real burst; >500 is usually a tracker artifact."
         )
-        row1.addWidget(self._issues_accel_thresh)
-        row1.addStretch()
-        vlay.addLayout(row1)
-
-        # Row 2: detector toggles + Recompute.
-        row2 = QHBoxLayout()
-        row2.setSpacing(6)
-        row2.addWidget(QLabel("Detectors:"))
-        self._issues_chk_speed   = QCheckBox("Speed")
+        pr.addWidget(self._issues_accel_thresh)
+        pr.addSpacing(6)
+        pr.addWidget(self._issues_lbl("Detectors"))
+        self._issues_chk_speed   = QCheckBox("Speed spike")
         self._issues_chk_outside = QCheckBox("Outside arena")
-        self._issues_chk_accel   = QCheckBox("Accel")
+        self._issues_chk_accel   = QCheckBox("Accel spike")
         self._issues_chk_gap     = QCheckBox("Gap+jump")
         for cb in (self._issues_chk_speed, self._issues_chk_outside,
                    self._issues_chk_accel, self._issues_chk_gap):
             cb.setChecked(True)
-            row2.addWidget(cb)
-        row2.addStretch()
+            cb.setProperty("chip", True)
+            cb.setCursor(Qt.PointingHandCursor)
+            pr.addWidget(cb)
+        pr.addStretch(1)
         self._issues_btn_recompute = QPushButton("Recompute")
-        self._issues_btn_recompute.setFixedHeight(24)
+        self._issues_btn_recompute.setFixedHeight(26)
         self._issues_btn_recompute.clicked.connect(
             lambda: self._recompute_tracking_issues(save_state=True)
         )
-        row2.addWidget(self._issues_btn_recompute)
-        vlay.addLayout(row2)
+        pr.addWidget(self._issues_btn_recompute)
+        vlay.addWidget(params)
 
-        # Row 2: stats summary.
-        self._issues_stats_lbl = QLabel(
-            "Run tracking first to see flagged frames."
-        )
-        self._issues_stats_lbl.setStyleSheet("color:#666; font-size:11px;")
-        vlay.addWidget(self._issues_stats_lbl)
+        # ── Table panel: title + stats · table · action strip
+        panel = OutPanel("")
+        panel.bar.show()
+        self._issues_panel = panel
+        self._issues_stats_lbl = QLabel("Run tracking first to see flagged frames.")
+        self._issues_stats_lbl.setObjectName("IssuesStats")
+        theme.set_tone(self._issues_stats_lbl, "faint", "font-size:11px;")
+        panel.title.setText("Tracking issues")
+        panel._bar_layout.insertWidget(1, self._issues_stats_lbl)
 
-        # Middle: table | mini map.
         middle = QSplitter(Qt.Horizontal)
         middle.setChildrenCollapsible(False)
 
         self._issues_table = QTableWidget()
+        self._issues_table.setProperty("out", True)
+        self._issues_table.setShowGrid(False)
+        self._issues_table.setFrameShape(QFrame.NoFrame)
+        self._issues_table.verticalHeader().setVisible(False)
+        self._issues_table.verticalHeader().setDefaultSectionSize(28)
         self._issues_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._issues_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._issues_table.setSelectionMode(QTableWidget.SingleSelection)
@@ -131,8 +143,7 @@ class IssuesMixin:
         self._issues_video_lbl.setWordWrap(True)
         self._issues_video_lbl.setMinimumHeight(160)
         self._issues_video_lbl.setStyleSheet(
-            "background:#1A1A1A; color:#888; padding:8px; border-radius:3px;"
-        )
+            "background:#0A0C0E; color:#8F99A3; padding:8px; border-radius:0;")
         self._issues_video_frame_no = None  # for redraws on resize
 
         # Wrap preview + a prev/next frame strip so user can compare with
@@ -144,19 +155,19 @@ class IssuesMixin:
         video_lay.addWidget(self._issues_video_lbl, 1)
 
         nav_row = QHBoxLayout()
-        nav_row.setContentsMargins(0, 0, 0, 0)
+        nav_row.setContentsMargins(6, 3, 6, 3)
         nav_row.setSpacing(4)
         self._issues_btn_prev = QPushButton("◀")
-        self._issues_btn_prev.setFixedWidth(40)
+        self._issues_btn_prev.setFixedSize(34, 26)
         self._issues_btn_prev.setToolTip("Previous frame")
         self._issues_btn_prev.clicked.connect(lambda: self._step_issue_frame(-1))
         nav_row.addWidget(self._issues_btn_prev)
         self._issues_frame_lbl = QLabel("—")
         self._issues_frame_lbl.setAlignment(Qt.AlignCenter)
-        self._issues_frame_lbl.setStyleSheet("color:#888; font-size:10px;")
+        theme.set_tone(self._issues_frame_lbl, "faint", "font-size:10px;")
         nav_row.addWidget(self._issues_frame_lbl, 1)
         self._issues_btn_next = QPushButton("▶")
-        self._issues_btn_next.setFixedWidth(40)
+        self._issues_btn_next.setFixedSize(34, 26)
         self._issues_btn_next.setToolTip("Next frame")
         self._issues_btn_next.clicked.connect(lambda: self._step_issue_frame(+1))
         nav_row.addWidget(self._issues_btn_next)
@@ -165,12 +176,16 @@ class IssuesMixin:
         right_split.addWidget(video_wrap)
         right_split.setSizes([260, 240])
         middle.addWidget(right_split)
-        middle.setSizes([520, 280])
+        middle.setSizes([560, 300])
+        panel.body.addWidget(middle, 1)
 
-        vlay.addWidget(middle, 1)
-
-        # Action buttons. (Seek happens automatically on row selection.)
-        act = QHBoxLayout()
+        # Action strip (seek happens automatically on row selection).
+        strip = QWidget()
+        strip.setObjectName("OutPanelBar")
+        strip.setAttribute(Qt.WA_StyledBackground, True)
+        act = QHBoxLayout(strip)
+        act.setContentsMargins(14, 10, 14, 10)
+        act.setSpacing(6)
         self._issues_btn_fp = QPushButton("✓ Mark false-positive")
         self._issues_btn_fp.setToolTip(
             "Dismiss the selected glitch. Will be excluded from smoothing + "
@@ -185,7 +200,6 @@ class IssuesMixin:
             lambda: self._set_issue_status("active")
         )
         act.addWidget(self._issues_btn_unmark)
-        act.addSpacing(12)
         self._issues_btn_smooth = QPushButton("~ Smooth flagged")
         self._issues_btn_smooth.setToolTip(
             "Linear-interp active flagged frames into X_clean / Y_clean "
@@ -193,19 +207,36 @@ class IssuesMixin:
         )
         self._issues_btn_smooth.clicked.connect(self._smooth_flagged_frames)
         act.addWidget(self._issues_btn_smooth)
+        act.addStretch(1)
         self._issues_btn_csv = QPushButton("Export CSV")
         self._issues_btn_csv.clicked.connect(self._export_issues_csv)
         act.addWidget(self._issues_btn_csv)
-        self._issues_btn_corrections = QPushButton("Open Corrections")
+        self._issues_btn_corrections = QPushButton("Open corrections")
+        self._issues_btn_corrections.setProperty("primary", True)
         self._issues_btn_corrections.clicked.connect(self._open_corrections_popup)
         act.addWidget(self._issues_btn_corrections)
-        act.addStretch()
-        vlay.addLayout(act)
+        panel.body.addWidget(strip)
+        vlay.addWidget(panel, 1)
 
         # Internal state.
         self._issues_df = None
         self._issues_fp_set = set()   # frame numbers user marked false-positive
+        theme.notifier.changed.connect(self._on_theme_issues)
         return w
+
+    @staticmethod
+    def _issues_lbl(text):
+        lb = QLabel(text)
+        theme.set_tone(lb, "text2")
+        return lb
+
+    def _on_theme_issues(self, _mode):
+        try:
+            if self._issues_df is not None:
+                self._fill_issues_table(self._issues_df)
+            self._render_issues_mini_map()
+        except Exception:
+            pass
 
     def _tracking_issues_state_key(self):
         """Persistence key in `config["tracking_issues"]` — keyed by video
@@ -327,17 +358,24 @@ class IssuesMixin:
                     item.setData(Qt.DisplayRole, int(val))
                 else:
                     item.setText(str(val))
-                # Severity → color dot via bg gradient on row.
+                # Severity → tinted cell (error / warning / neutral)
                 if col == "Severity":
                     sev = float(row.get("Severity", 0.0))
                     if sev >= 0.75:
-                        item.setBackground(QColor("#FF6464"))    # red
+                        item.setBackground(QColor(theme.ERR_BG))
+                        item.setForeground(QColor(theme.ERR))
                     elif sev >= 0.4:
-                        item.setBackground(QColor("#FFB347"))    # orange
+                        item.setBackground(QColor(theme.WARN_BG))
+                        item.setForeground(QColor(theme.WARN))
                     else:
-                        item.setBackground(QColor("#FFE066"))    # yellow
+                        item.setBackground(QColor(theme.SURFACE_2))
+                        item.setForeground(QColor(theme.TEXT_2))
                 if col == "Status" and str(val) == "false_positive":
-                    item.setForeground(QColor("#888888"))
+                    item.setForeground(QColor(theme.FAINT))
+                elif col == "Status":
+                    item.setForeground(QColor(theme.TEXT_2))
+                if col in ("Frame", "Time (s)", speed_col, accel_col, "Severity"):
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 # Stash the underlying raw_df row index in user data.
                 if c == 0:
                     item.setData(Qt.UserRole, int(row.get("_row", -1)))
@@ -368,24 +406,25 @@ class IssuesMixin:
         acc = float(self._issues_accel_thresh.value())
         auto = " (auto)" if self._issues_chk_auto.isChecked() else ""
         self._issues_stats_lbl.setText(
-            f"Flagged: {active} active / {flagged} total / {total} frames "
-            f"({pct:.2f}%)   Speed: {thr:.0f} cm/s{auto}   "
-            f"Accel: {acc:.0f} cm/s²{peak_txt}"
+            f"· {active} active / {flagged} flagged of {total} frames ({pct:.2f}%)  ·  "
+            f"speed {thr:.0f} cm/s{auto}  ·  accel {acc:.0f} cm/s²{peak_txt.replace('  |  ', '  ·  ')}"
         )
 
     def _render_issues_mini_map(self):
         """Draw trajectory + red dots at flagged frames in the mini canvas."""
         self._issues_mini_fig.clear()
+        self._issues_mini_fig.set_facecolor(theme.SURFACE)
         ax = self._issues_mini_fig.add_subplot(111)
+        ax.set_facecolor(theme.SURFACE)
         if self.raw_df is None or len(self.raw_df) == 0:
             ax.text(0.5, 0.5, "No data", ha="center", va="center",
-                    transform=ax.transAxes, color="#888")
+                    transform=ax.transAxes, color=theme.FAINT)
             ax.set_xticks([]); ax.set_yticks([])
             self._issues_mini_canvas.draw_idle()
             return
         xs = self.raw_df["X (px)"].values.astype(float)
         ys = self.raw_df["Y (px)"].values.astype(float)
-        ax.plot(xs, ys, color="#777777", linewidth=0.7, alpha=0.6, zorder=1)
+        ax.plot(xs, ys, color=theme.FAINT, linewidth=0.7, alpha=0.8, zorder=1)
         # Active vs FP markers.
         if self._issues_df is not None and len(self._issues_df) > 0:
             active = self._issues_df[self._issues_df["Status"] == "active"]
@@ -393,12 +432,12 @@ class IssuesMixin:
             if len(active) > 0:
                 ax.scatter(xs[active["_row"].values],
                            ys[active["_row"].values],
-                           s=12, c="#FF4444", edgecolors="white",
+                           s=12, c=theme.ERR, edgecolors=theme.SURFACE,
                            linewidths=0.4, zorder=3, label="Active")
             if len(fp) > 0:
                 ax.scatter(xs[fp["_row"].values],
                            ys[fp["_row"].values],
-                           s=10, c="#BBBBBB", edgecolors="white",
+                           s=10, c=theme.BORDER_2, edgecolors=theme.SURFACE,
                            linewidths=0.3, zorder=2, label="FP")
         # Arena outline if available.
         try:
@@ -406,7 +445,7 @@ class IssuesMixin:
             if arena and len(arena) >= 3:
                 from matplotlib.patches import Polygon as MplPolygon
                 ax.add_patch(MplPolygon(arena, closed=True, fill=False,
-                                         edgecolor="#444444", linewidth=1.0,
+                                         edgecolor=theme.TEXT_2, linewidth=1.0,
                                          zorder=2))
         except Exception as e:
             logger.warn(f"mini-map arena draw failed: {e}", source="issues")
@@ -414,7 +453,7 @@ class IssuesMixin:
         ax.invert_yaxis()
         ax.set_xticks([]); ax.set_yticks([])
         for s in ax.spines.values():
-            s.set_color("#BBBBBB")
+            s.set_color(theme.BORDER_2)
         self._issues_mini_fig.tight_layout()
         self._issues_mini_canvas.draw_idle()
 
@@ -457,7 +496,7 @@ class IssuesMixin:
             ys = self.raw_df["Y (px)"].values.astype(float)
             ax = self._issues_mini_fig.axes[0]
             ax.scatter([xs[r]], [ys[r]], s=80, facecolor="none",
-                       edgecolor="#FFD700", linewidths=2.0, zorder=5)
+                       edgecolor=theme.ACCENT, linewidths=2.0, zorder=5)
             self._issues_mini_canvas.draw_idle()
         except Exception as e:
             logger.warn(f"mini-map highlight failed: {e}", source="issues")

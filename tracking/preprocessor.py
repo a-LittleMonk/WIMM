@@ -103,7 +103,7 @@ def make_overlay(frame_bgr: np.ndarray, mask: np.ndarray, color_bgr=(0, 0, 140),
 
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if contours:
-        cv2.drawContours(overlay, contours, -1, color_bgr, 2, cv2.LINE_AA)
+        cv2.drawContours(overlay, contours, -1, color_bgr, 1, cv2.LINE_AA)
         largest = max(contours, key=cv2.contourArea)
         if cv2.contourArea(largest) > 150:
             M = cv2.moments(largest)
@@ -112,13 +112,11 @@ def make_overlay(frame_bgr: np.ndarray, mask: np.ndarray, color_bgr=(0, 0, 140),
                 cy = int(M["m01"] / M["m00"])
                 cv2.circle(overlay, (cx, cy), 14, color_bgr, 2)
                 cv2.circle(overlay, (cx, cy), 4, color_bgr, -1)
-    cv2.putText(overlay, "Overlay", (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
     return overlay
 
 
 def make_mask_view(mask: np.ndarray) -> np.ndarray:
     view = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-    cv2.putText(view, "Detection Mask", (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 2)
     return view
 
 

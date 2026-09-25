@@ -83,7 +83,7 @@ class EPMExperiment(Experiment):
             float(m.get("time_closed_total_s", 0.0) or 0.0),
             float(m.get("time_center_s", 0.0) or 0.0),
         ]
-        colors = ["#FF7043", "#42A5F5", "#FFB74D"]
+        colors = ["#E8A87C", "#7FA6D9", "#E4D3AE"]
         return (labels, values, colors, lambda v: f"{v:.1f}s",
                 "Time per Arm Type", "Time (s)")
 

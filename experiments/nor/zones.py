@@ -16,7 +16,7 @@ import math
 # Object slot identifiers (fixed — two objects per NOR run).
 OBJECT_NAMES = ["object_a", "object_b"]
 OBJECT_LABELS = {"object_a": "Object A", "object_b": "Object B"}
-OBJECT_COLORS = {"object_a": "#FF7043", "object_b": "#42A5F5"}
+OBJECT_COLORS = {"object_a": "#E8A87C", "object_b": "#7FA6D9"}
 
 # Per-object zone name suffixes — footprint = visible object outline,
 # zone = inflated interaction circle/polygon (the one that fills live).

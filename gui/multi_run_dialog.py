@@ -46,6 +46,9 @@ SWEPT_VARS = [
 ]
 
 
+from gui import theme
+
+
 class MultiRunDialog(QDialog):
     """Pick one swept variable + values, run N tracker passes, write xlsx."""
 
@@ -71,14 +74,14 @@ class MultiRunDialog(QDialog):
             "chosen variable is locked to the current snapshot."
         )
         info.setWordWrap(True)
-        info.setStyleSheet("color:#aaa; font-size:11px;")
+        theme.set_tone(info, "faint", "font-size:11px;")
         outer.addWidget(info)
 
         form = QFormLayout()
         form.setSpacing(6)
 
         self.lbl_video = QLabel("(no video loaded)")
-        self.lbl_video.setStyleSheet("color:#ccc;")
+        theme.set_tone(self.lbl_video, "text2", "")
         form.addRow("Video:", self.lbl_video)
 
         self.combo_var = QComboBox()
@@ -127,7 +130,7 @@ class MultiRunDialog(QDialog):
 
         # Progress.
         self.lbl_status = QLabel("")
-        self.lbl_status.setStyleSheet("color:#ccc; font-size:11px;")
+        theme.set_tone(self.lbl_status, "text2", "font-size:11px;")
         outer.addWidget(self.lbl_status)
         self.progress_total = QProgressBar()
         self.progress_total.setFormat("Variant %v / %m")

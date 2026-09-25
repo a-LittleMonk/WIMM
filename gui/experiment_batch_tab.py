@@ -40,6 +40,13 @@ from tracking.tracker import TrackerThread
 from analysis.open_field import compute_metrics
 from export.excel_export import export_results
 from core import logger
+from gui import theme
+from gui.widgets_v2 import (
+    ElidingLabel, IconButton, IconTextButton, PaneHeader, CountPill, KeyHint,
+)
+from gui.queue_widgets import (
+    VideoRow, QueueStats, DropHint, RunPanel, _ProgressProxy,
+)
 
 VIDEO_EXTS = (".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv")
 
@@ -52,44 +59,15 @@ STATUS_DONE   = "done"
 STATUS_ERROR  = "error"
 
 STATUS_ICONS = {
-    STATUS_NEEDS:   ("⚙", "#888",    "Needs setup — click row to configure"),
-    STATUS_READY:   ("⏳", "#3498db", "Configured — ready to run"),
-    STATUS_RUNNING: ("▶", "#FF9800", "Running…"),
-    STATUS_DONE:    ("✅", "#4CAF50", "Completed"),
-    STATUS_ERROR:   ("❌", "#f44336", "Error"),
+    STATUS_NEEDS:   ("⚙", "#8A8F95",    "Needs setup — click row to configure"),
+    STATUS_READY:   ("⏳", "#1B2436", "Configured — ready to run"),
+    STATUS_RUNNING: ("▶", "#1B2436", "Running…"),
+    STATUS_DONE:    ("✅", "#2F7A4B", "Completed"),
+    STATUS_ERROR:   ("❌", "#B3382E", "Error"),
 }
 
 
-class ElidingLabel(QLabel):
-    """QLabel that elides its text in the middle when too narrow."""
-    def __init__(self, text="", parent=None):
-        super().__init__(text, parent)
-        self._full = text
-        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        self.setMinimumWidth(0)
 
-    def setText(self, text):
-        self._full = text or ""
-        self._update_elided()
-
-    def resizeEvent(self, e):
-        super().resizeEvent(e)
-        self._update_elided()
-
-    def _update_elided(self):
-        fm = self.fontMetrics()
-        elided = fm.elidedText(self._full, Qt.ElideMiddle, max(0, self.width()))
-        super().setText(elided)
-        self.setToolTip(self._full)
-
-
-_STATUS_BG = {
-    STATUS_NEEDS:   ("#e0e0e0", "#666"),
-    STATUS_READY:   ("#ffffff", "#222"),
-    STATUS_RUNNING: ("#FFE0B2", "#222"),
-    STATUS_DONE:    ("#C8E6C9", "#1b5e20"),
-    STATUS_ERROR:   ("#FFCDD2", "#b71c1c"),
-}
 
 
 # Maps a user-facing field-group label → list of snapshot_settings() keys.
@@ -245,16 +223,16 @@ class _RangeSlider(QWidget):
         ty = (h - self.TRACK_H) // 2
         # Inactive track
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor("#444"))
+        painter.setBrush(QColor(theme.BORDER_2))
         painter.drawRoundedRect(x0, ty, x1 - x0, self.TRACK_H, 2, 2)
         # Active range
         sx = self._value_to_x(self._start)
         ex = self._value_to_x(self._end)
-        painter.setBrush(QColor("#2A82DA"))
+        painter.setBrush(QColor(theme.ACCENT))
         painter.drawRoundedRect(sx, ty, ex - sx, self.TRACK_H, 2, 2)
         # Handles
-        painter.setBrush(QColor("#FFFFFF"))
-        painter.setPen(QPen(QColor("#2A82DA"), 2))
+        painter.setBrush(QColor(theme.SURFACE))
+        painter.setPen(QPen(QColor(theme.ACCENT), 2))
         for x in (sx, ex):
             painter.drawEllipse(x - self.HANDLE_W // 2,
                                  (h - self.HANDLE_W) // 2,
@@ -270,7 +248,7 @@ class _CropFrameLabel(QLabel):
         super().__init__()
         self.setMinimumSize(320, 240)
         self.setAlignment(Qt.AlignCenter)
-        self.setStyleSheet("background:#1e1e1e;")
+        self.setStyleSheet("background:#0A0C0E;")
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         self.setMouseTracking(True)
         self._pixmap = None      # full-resolution QPixmap of current frame
@@ -448,10 +426,10 @@ class _CropFrameLabel(QLabel):
             painter.fillRect(br[0], tl[1], self.width() - br[0],
                               br[1] - tl[1], dim)
             # Crop outline.
-            painter.setPen(QPen(QColor("#FFD740"), 2))
+            painter.setPen(QPen(QColor("#E8C547"), 2))
             painter.drawRect(tl[0], tl[1], br[0] - tl[0], br[1] - tl[1])
             # Corner handles.
-            painter.setBrush(QColor("#FFD740"))
+            painter.setBrush(QColor("#E8C547"))
             for cx, cy in self._crop_corners_widget().values():
                 painter.drawRect(cx - 5, cy - 5, 10, 10)
 
@@ -491,7 +469,7 @@ class TrimCropDialog(QDialog):
         v.addWidget(self.frame_lbl, 1)
 
         self.lbl_showing = QLabel("Showing: start")
-        self.lbl_showing.setStyleSheet("color:#888; font-size:11px;")
+        theme.set_tone(self.lbl_showing, "faint", "font-size:11px;")
         v.addWidget(self.lbl_showing)
 
         # Single timeline with two handles (left=start, right=end).
@@ -506,7 +484,7 @@ class TrimCropDialog(QDialog):
         labels_row = QHBoxLayout()
         self.lbl_start = QLabel("Start: 0.00 s")
         self.lbl_dur   = QLabel("Duration: 0.00 s")
-        self.lbl_dur.setStyleSheet("font-weight:bold; color:#2A82DA;")
+        theme.set_tone(self.lbl_dur, "accent", "font-weight:bold;")
         self.lbl_end   = QLabel("End: 0.00 s")
         labels_row.addWidget(self.lbl_start)
         labels_row.addStretch()
@@ -752,7 +730,7 @@ class _Spinner(QLabel):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self.setFixedWidth(14)
-        self.setStyleSheet("font-size:14px; color:#E65100;")
+        theme.set_tone(self, "accent", "font-size:14px;")
         self.setAlignment(Qt.AlignCenter)
 
     def start(self):
@@ -769,125 +747,14 @@ class _Spinner(QLabel):
         self.setText(self._FRAMES[self._i])
 
 
-class VideoRow(QFrame):
-    """Single row in the video list."""
 
-    def __init__(self, path, on_edit, on_run, on_remove, on_trim, parent=None):
-        super().__init__(parent)
-        self.path = path
-        self.status = STATUS_NEEDS
-        self.animal_id = ""
-        self.selected = False
-        self._on_edit_cb = on_edit
-        # Use NoFrame so the stylesheet `border:` rule isn't overridden by the
-        # native frame painter (Fusion style draws its own border on
-        # StyledPanel which fights with our stylesheet).
-        self.setFrameShape(QFrame.NoFrame)
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setMinimumHeight(28)
-        self.setMaximumHeight(30)
-        self.setCursor(Qt.PointingHandCursor)
-
-        h = QHBoxLayout(self)
-        h.setContentsMargins(8, 1, 4, 1)
-        h.setSpacing(4)
-
-        self.lbl_name = ElidingLabel(os.path.basename(path))
-        h.addWidget(self.lbl_name, 1)
-
-        self.lbl_aid = QLabel("")
-        self.lbl_aid.setStyleSheet("color:#555; font-size:10px;")
-        self.lbl_aid.setMaximumWidth(80)
-        self.lbl_aid.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
-        self.lbl_aid.hide()
-        h.addWidget(self.lbl_aid)
-
-        self.spinner = _Spinner()
-        self.spinner.hide()
-        h.addWidget(self.spinner)
-
-        def _btn(txt, slot, w=24):
-            b = QPushButton(txt)
-            b.setFixedSize(w, 22)
-            b.setStyleSheet("font-size:10px; padding:0 2px;")
-            b.clicked.connect(slot)
-            b.setCursor(Qt.ArrowCursor)
-            return b
-
-        self.btn_trim   = _btn("✂", lambda: on_trim(self.path))
-        self.btn_trim.setToolTip("Trim — set start time and duration")
-        self.btn_run    = _btn("▶",  lambda: on_run(self.path))
-        self.btn_remove = _btn("✕",  lambda: on_remove(self.path))
-        h.addWidget(self.btn_trim)
-        h.addWidget(self.btn_run)
-        h.addWidget(self.btn_remove)
-        self._refresh_status()
-
-    def mousePressEvent(self, e):
-        if e.button() == Qt.LeftButton:
-            self._on_edit_cb(self.path)
-        super().mousePressEvent(e)
-
-    def mouseDoubleClickEvent(self, e):
-        # Treat as a single click; the press already fired the select callback.
-        # Avoids re-entering _load_video_path while bg_builder is still starting.
-        e.accept()
-
-    def set_status(self, status):
-        self.status = status
-        self._refresh_status()
-
-    def set_animal_id(self, aid):
-        self.animal_id = aid or ""
-        self.lbl_aid.setText(self.animal_id)
-        self.lbl_aid.setVisible(bool(self.animal_id))
-
-    def set_selected(self, on):
-        # Always re-apply the stylesheet — never short-circuit. Avoids stuck
-        # borders if previous state got out of sync with widget appearance.
-        self.selected = bool(on)
-        self._refresh_status()
-        self.style().unpolish(self)
-        self.style().polish(self)
-        self.update()
-
-    def _refresh_status(self):
-        _, _, tip = STATUS_ICONS[self.status]
-        bg, text_col = _STATUS_BG.get(self.status, ("#ffffff", "#222"))
-        self.setToolTip(tip)
-        if self.selected:
-            border = "2px solid #2A82DA"
-            hover_border = "2px solid #2A82DA"
-        else:
-            border = "1px solid #ccc"
-            hover_border = "1px solid #888"
-        # Use the widget's objectName-based selector so the rule applies only
-        # to this row, never bleeds into child widgets, and isn't masked by
-        # native QFrame painting in Fusion style.
-        self.setObjectName("VideoRow")
-        self.setStyleSheet(
-            f"QFrame#VideoRow {{ background:{bg}; border:{border}; border-radius:2px; }}"
-            f"QFrame#VideoRow:hover {{ border:{hover_border}; }}"
-        )
-        italic = "italic" if self.status == STATUS_NEEDS else "normal"
-        self.lbl_name.setStyleSheet(
-            f"font-size:12px; font-weight:600; color:{text_col}; font-style:{italic};"
-        )
-        self.lbl_aid.setText(self.animal_id or "")
-        self.lbl_aid.setVisible(bool(self.animal_id))
-        if self.status == STATUS_RUNNING:
-            self.spinner.start()
-        else:
-            self.spinner.stop()
 
 
 class ResultCard(QFrame):
     def __init__(self, video_path, animal_id, metrics, parent=None):
         super().__init__(parent)
         self.setFrameShape(QFrame.StyledPanel)
-        self.setStyleSheet(
-            "QFrame { background:#f7faff; border:1px solid #c8d6e5; border-radius:3px; }"
-        )
+        self.setObjectName("ResultCard")  # styled in theme.py
         v = QVBoxLayout(self)
         v.setContentsMargins(8, 6, 8, 6)
         v.setSpacing(2)
@@ -905,7 +772,7 @@ class ResultCard(QFrame):
         ]
         for k in keys:
             if k in metrics:
-                row = QLabel(f"<span style='color:#555;'>{k}:</span> "
+                row = QLabel(f"<span style='color:{theme.MUTED};'>{k}:</span> "
                              f"<b>{metrics[k]}</b>")
                 row.setStyleSheet("font-size:11px;")
                 v.addWidget(row)
@@ -982,7 +849,7 @@ class ExcelPreviewDialog(QDialog):
         v.addWidget(t, 1)
         if len(df) > cap:
             note = QLabel(f"Showing first {cap} of {len(df)} frames. Saved .xlsx contains all rows.")
-            note.setStyleSheet("color:#888; font-size:10px;")
+            theme.set_tone(note, "faint", "font-size:10px;")
             v.addWidget(note)
         return wrap
 
@@ -1013,7 +880,7 @@ class ExcelPreviewDialog(QDialog):
         scroll.setWidgetResizable(True)
         self._graph_lbl = QLabel("(no plot)")
         self._graph_lbl.setAlignment(Qt.AlignCenter)
-        self._graph_lbl.setStyleSheet("background:#111;")
+        self._graph_lbl.setStyleSheet("background:#0A0C0E;")
         scroll.setWidget(self._graph_lbl)
         v.addWidget(scroll, 1)
 
@@ -1071,17 +938,15 @@ class ExcelPreviewDialog(QDialog):
             vw, vh = self.data["video_size"]
             arena = self.data.get("arena_px")
 
-        is_dark = (kind == "Speed over time")
-        bg = "#111" if is_dark else "white"
+        is_dark = False          # preview plots use the light figure palette
+        bg = "#FBFBF9"
         fig, ax = plt.subplots(figsize=(7, 7 * vh / vw), facecolor=bg)
         ax.set_facecolor(bg)
         ax.set_xlim(0, vw); ax.set_ylim(vh, 0)
         ax.set_xticks([]); ax.set_yticks([])
         for spine in ax.spines.values():
             spine.set_visible(is_dark)
-            if is_dark:
-                spine.set_color("#444")
-        edge_color = "#FF9F4A"
+        edge_color = "#A9B4C6"
         if arena and not is_dark:
             xs = [p[0] for p in arena] + [arena[0][0]]
             ys = [p[1] for p in arena] + [arena[0][1]]
@@ -1092,29 +957,29 @@ class ExcelPreviewDialog(QDialog):
             ax.plot(xs, ys, color="#888", linewidth=1)
 
         if kind == "Trajectory" and len(x) > 1:
-            ax.plot(x, y, color="#7A2E8E", linewidth=2.2, alpha=0.9,
+            ax.plot(x, y, color="#1B2436", linewidth=1.2, alpha=0.9,
                     solid_capstyle="round", solid_joinstyle="round")
-            ax.plot([x[0]], [y[0]], "o", color="#23C552",
-                    markersize=9, markeredgecolor="white", markeredgewidth=1.5)
-            ax.plot([x[-1]], [y[-1]], "o", color="#E5484D",
-                    markersize=9, markeredgecolor="white", markeredgewidth=1.5)
+            ax.plot([x[0]], [y[0]], "o", color="#2F7A4B",
+                    markersize=7, markeredgecolor="#FBFBF9", markeredgewidth=1.0)
+            ax.plot([x[-1]], [y[-1]], "s", color="#B3382E",
+                    markersize=7, markeredgecolor="#FBFBF9", markeredgewidth=1.0)
         elif kind == "Heatmap" and len(x) > 0:
-            ax.hexbin(x, y, gridsize=40, cmap="jet", mincnt=1)
+            ax.hexbin(x, y, gridsize=40, cmap="viridis", mincnt=1)
         elif kind == "Speed over time":
             ax.clear()
-            ax.set_facecolor("#111")
+            ax.set_facecolor(bg)
             t_col = "Time (s)" if "Time (s)" in df.columns else None
             s_col = "Speed (cm/s)" if "Speed (cm/s)" in df.columns else (
                 "Speed (px/s)" if "Speed (px/s)" in df.columns else None)
             if t_col and s_col:
-                ax.plot(df[t_col], df[s_col], color="#4CAF50", linewidth=0.7)
-                ax.set_xlabel("Time (s)", color="#ccc")
-                ax.set_ylabel(s_col, color="#ccc")
-                ax.tick_params(colors="#888")
+                ax.plot(df[t_col], df[s_col], color="#1B2436", linewidth=0.8)
+                ax.set_xlabel("Time (s)", color="#16181B")
+                ax.set_ylabel(s_col, color="#16181B")
+                ax.tick_params(colors="#4D535A")
                 for spine in ax.spines.values():
-                    spine.set_color("#444")
+                    spine.set_color("#16181B")
             else:
-                ax.text(0.5, 0.5, "Speed columns missing", color="#aaa",
+                ax.text(0.5, 0.5, "Speed columns missing", color="#8A8F95",
                         ha="center", va="center", transform=ax.transAxes)
 
         buf = BytesIO()
@@ -1170,43 +1035,54 @@ class ExperimentBatchTab(QWidget):
 
     def _build_export_tab(self):
         """Export tab — output folder + per-video and batch re-export buttons."""
+        from PyQt5.QtWidgets import QGridLayout, QRadioButton, QButtonGroup, QScrollArea
+        from gui.out_widgets import Section
+        from gui.widgets_v2 import SegTabs, form_row
+        from gui.responsive import FlowLayout
         w = QWidget()
-        v = QVBoxLayout(w)
-        v.setContentsMargins(10, 10, 10, 10)
-        v.setSpacing(10)
+        w.setObjectName("OutPage")
+        outer = QVBoxLayout(w)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(0)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(16)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
 
         # ── Output folder section
-        folder_box = QGroupBox("Output folder")
-        fl = QHBoxLayout(folder_box)
-        self.lbl_output = QLabel("(not set)")
-        self.lbl_output.setStyleSheet("color:#555; font-size:11px;")
+        folder_box = Section("Output folder")
+        fl = QHBoxLayout()
+        fl.setSpacing(6)
+        self.lbl_output = ElidingLabel("(not set)")
+        self.lbl_output.setObjectName("PathBox")
+        self.lbl_output.setFixedHeight(28)
         self.lbl_output.setTextInteractionFlags(Qt.TextSelectableByMouse)
         fl.addWidget(self.lbl_output, 1)
         b_change = QPushButton("Change…")
-        b_change.setFixedWidth(80)
         b_change.clicked.connect(self._change_output_folder)
         fl.addWidget(b_change)
         b_open = QPushButton("Open")
-        b_open.setFixedWidth(60)
         b_open.clicked.connect(self._open_output_folder)
         fl.addWidget(b_open)
-        v.addWidget(folder_box)
+        folder_box.body.addLayout(fl)
+        self.lbl_backup_note = QLabel("")
+        self.lbl_backup_note.setTextFormat(Qt.RichText)
+        self.lbl_backup_note.setWordWrap(True)
+        theme.set_tone(self.lbl_backup_note, "faint", "font-size:11px;")
+        folder_box.body.addWidget(self.lbl_backup_note)
+        grid.addWidget(folder_box, 0, 0)
 
         # ── Batch downloads
-        batch_box = QGroupBox("Downloads")
-        bl = QVBoxLayout(batch_box)
+        batch_box = Section("Downloads")
         self.lbl_export_batch = QLabel("Completed: 0 video(s).")
-        self.lbl_export_batch.setStyleSheet("color:#555; font-size:11px;")
-        bl.addWidget(self.lbl_export_batch)
-        hint = QLabel(
-            "Per-video Excel files are saved automatically to the output "
-            "folder when tracking finishes."
-        )
-        hint.setStyleSheet("color:#888; font-size:10px; font-style:italic;")
-        hint.setWordWrap(True)
-        bl.addWidget(hint)
+        theme.set_tone(self.lbl_export_batch, "text2", "font-size:11px;")
+        batch_box.header.addWidget(self.lbl_export_batch)
         batch_btn_row = QHBoxLayout()
+        batch_btn_row.setSpacing(6)
         self.btn_combined_excel = QPushButton("Combined Excel")
+        self.btn_combined_excel.setProperty("primary", True)
+        self.btn_combined_excel.setFixedHeight(28)
         self.btn_combined_excel.setEnabled(False)
         self.btn_combined_excel.setToolTip(
             "One xlsx with All Animals master sheet + per-animal dashboard "
@@ -1214,7 +1090,8 @@ class ExperimentBatchTab(QWidget):
         )
         self.btn_combined_excel.clicked.connect(self._save_combined_excel)
         batch_btn_row.addWidget(self.btn_combined_excel)
-        self.btn_combined_raw = QPushButton("Download Raw Data")
+        self.btn_combined_raw = QPushButton("Download raw data")
+        self.btn_combined_raw.setFixedHeight(28)
         self.btn_combined_raw.setEnabled(False)
         self.btn_combined_raw.setToolTip(
             "One xlsx with one sheet per animal. Each sheet has the "
@@ -1223,22 +1100,21 @@ class ExperimentBatchTab(QWidget):
         )
         self.btn_combined_raw.clicked.connect(self._save_combined_raw)
         batch_btn_row.addWidget(self.btn_combined_raw)
-        batch_btn_row.addStretch()
-        bl.addLayout(batch_btn_row)
-        v.addWidget(batch_box)
+        batch_btn_row.addStretch(1)
+        batch_box.body.addLayout(batch_btn_row)
+        hint = QLabel(
+            "Per-video Excel files are saved automatically to the output "
+            "folder when tracking finishes."
+        )
+        theme.set_tone(hint, "faint", "font-size:11px;")
+        hint.setWordWrap(True)
+        batch_box.body.addWidget(hint)
+        grid.addWidget(batch_box, 0, 1)
 
         # ── Vector graphs (auto-save SVG / PDF beside each per-video Excel)
-        vec_box = QGroupBox("Vector graph exports")
-        vl = QVBoxLayout(vec_box)
-        vec_hint = QLabel(
-            "When tracking finishes, also save every output graph as a "
-            "vector file beside the Excel. SVG opens in Inkscape / "
-            "Illustrator; PDF is publication-ready."
-        )
-        vec_hint.setStyleSheet("color:#888; font-size:10px; font-style:italic;")
-        vec_hint.setWordWrap(True)
-        vl.addWidget(vec_hint)
+        vec_box = Section("Vector graph exports")
         vec_row = QHBoxLayout()
+        vec_row.setSpacing(16)
         self.chk_export_svg = QCheckBox("Also save SVG")
         self.chk_export_svg.setChecked(bool(self.config.get("export_svg", False)))
         self.chk_export_svg.toggled.connect(
@@ -1253,32 +1129,39 @@ class ExperimentBatchTab(QWidget):
                        self._save_config())
         )
         vec_row.addWidget(self.chk_export_pdf)
-        vec_row.addStretch()
-        vl.addLayout(vec_row)
-        v.addWidget(vec_box)
+        vec_row.addStretch(1)
+        vec_box.body.addLayout(vec_row)
+        vec_hint = QLabel(
+            "Written next to the PNGs, one file per graph per video — ready "
+            "for figures. SVG opens in Inkscape / Illustrator; PDF is "
+            "publication-ready."
+        )
+        theme.set_tone(vec_hint, "faint", "font-size:11px;")
+        vec_hint.setWordWrap(True)
+        vec_box.body.addWidget(vec_hint)
+        vec_box.body.addStretch(1)
+        grid.addWidget(vec_box, 1, 0, Qt.AlignTop)
 
         # ── Annotated video (per-loaded-video render with overlays burned in)
-        video_box = QGroupBox("Annotated video")
-        vv = QVBoxLayout(video_box)
+        video_box = Section("Annotated video")
         hint_av = QLabel(
-            "Save a copy of the loaded video with the overlays you pick\n"
+            "Save a copy of the loaded video with the overlays you pick "
             "below burned into the frames. Range: trim window."
         )
-        hint_av.setStyleSheet("color:#888; font-size:10px; font-style:italic;")
+        theme.set_tone(hint_av, "faint", "font-size:11px;")
         hint_av.setWordWrap(True)
-        vv.addWidget(hint_av)
+        video_box.body.addWidget(hint_av)
 
         # Overlay checkboxes — two-column grid for compactness.
-        from PyQt5.QtWidgets import QGridLayout
         chk_grid = QGridLayout()
         chk_grid.setHorizontalSpacing(12)
-        chk_grid.setVerticalSpacing(2)
+        chk_grid.setVerticalSpacing(4)
+
         def _mk_chk(label, tip=""):
             c = QCheckBox(label)
             c.setChecked(True)
             if tip:
                 c.setToolTip(tip)
-            c.setStyleSheet("font-size:11px;")
             return c
         self.chk_export_arena     = _mk_chk("Arena outline")
         self.chk_export_center    = _mk_chk("Center zone")
@@ -1289,14 +1172,16 @@ class ExperimentBatchTab(QWidget):
         self.chk_export_trail     = _mk_chk("Trail")
         self.chk_export_trail_fade = _mk_chk("Trail fade",
             "On: older trail segments dimmer/thinner.\n"
-            "Off (default): solid body-color trail throughout.")
-        self.chk_export_trail_fade.setChecked(False)
+            "Off: solid body-color trail throughout.")
+        self.chk_export_trail_fade.setChecked(True)
+        self.chk_export_tag       = _mk_chk("Marker info tag",
+            "Small tag next to the marker: animal · speed / x y position.")
         self.chk_export_cell_hi   = _mk_chk("Cell highlight",
             "Semi-transparent fill on the cell currently containing the body.")
         self.chk_export_cell_num  = _mk_chk("Cell numbers",
-            "Cell ids drawn at each cell center (1–16 in Grid mode, 'C' in Center mode).")
+            "Cell ids drawn at each cell corner (1–16 in Grid mode).")
         self.chk_export_cell_tim  = _mk_chk("Cell timer",
-            "Cumulative seconds per cell, drawn under the cell number.")
+            "Cumulative seconds per cell, drawn in the cell.")
         self.chk_export_cell_ent  = _mk_chk("Cell entries",
             "Cumulative entry count per cell.")
         self.chk_export_view_fx   = _mk_chk("Apply preprocessing",
@@ -1306,72 +1191,47 @@ class ExperimentBatchTab(QWidget):
             self.chk_export_arena,     self.chk_export_center,
             self.chk_export_grid,      self.chk_export_exclusion,
             self.chk_export_ellipse,   self.chk_export_trail,
-            self.chk_export_trail_fade,
+            self.chk_export_trail_fade, self.chk_export_tag,
             self.chk_export_cell_hi,   self.chk_export_cell_num,
             self.chk_export_cell_tim,  self.chk_export_cell_ent,
             self.chk_export_view_fx,
         ]
         for i, c in enumerate(chks):
             chk_grid.addWidget(c, i // 2, i % 2)
-        vv.addLayout(chk_grid)
+        video_box.body.addLayout(chk_grid)
 
-        # Body-style dropdown — replaces the old "Body markers" checkbox.
-        # Mirrors the View popup's combo (synced at render time); user can
-        # override here before clicking Render.
-        body_row = QHBoxLayout()
-        body_row.setSpacing(6)
-        lbl_body = QLabel("Body markers:")
-        lbl_body.setStyleSheet("font-size:11px;")
-        body_row.addWidget(lbl_body)
+        # Body-style dropdown — mirrors the View popover's combo; the user
+        # can override here before clicking Render.
         self.combo_export_body_style = QComboBox()
         self.combo_export_body_style.addItem("Off", "off")
         self.combo_export_body_style.addItem("Dot", "dot")
         self.combo_export_body_style.setCurrentIndex(1)
-        self.combo_export_body_style.setFixedHeight(24)
-        self.combo_export_body_style.setStyleSheet("font-size:11px;")
-        body_row.addWidget(self.combo_export_body_style)
-        body_row.addStretch()
-        vv.addLayout(body_row)
+        video_box.body.addWidget(form_row("Body markers", self.combo_export_body_style, 96))
 
-        # Trail length + smoothing window spinboxes.
-        trail_row = QHBoxLayout()
-        trail_row.setSpacing(6)
-        trail_row.addWidget(QLabel("Trail length:"))
         self.spin_export_trail_len = QSpinBox()
         self.spin_export_trail_len.setRange(0, 100000)
         self.spin_export_trail_len.setValue(0)  # "All frames" by default
         self.spin_export_trail_len.setSuffix(" frames")
         self.spin_export_trail_len.setSpecialValueText("All frames")
-        self.spin_export_trail_len.setFixedWidth(120)
-        self.spin_export_trail_len.setFixedHeight(24)
         self.spin_export_trail_len.setToolTip(
             "Length of the trail drawn behind the body.\n"
             "0 = full path from start of video."
         )
-        trail_row.addWidget(self.spin_export_trail_len)
-        trail_row.addSpacing(12)
-        trail_row.addWidget(QLabel("Smooth path:"))
+        video_box.body.addWidget(form_row("Trail length", self.spin_export_trail_len, 96))
+
         self.spin_export_smooth = QSpinBox()
         self.spin_export_smooth.setRange(0, 30)
         self.spin_export_smooth.setValue(0)
         self.spin_export_smooth.setSuffix(" frames")
         self.spin_export_smooth.setSpecialValueText("Off")
-        self.spin_export_smooth.setFixedWidth(95)
-        self.spin_export_smooth.setFixedHeight(24)
         self.spin_export_smooth.setToolTip(
             "Moving-average window applied to the body-center track\n"
             "before drawing the trail and body marker in the export.\n"
             "Doesn't change the live preview or the saved metrics. 0 = off."
         )
-        trail_row.addWidget(self.spin_export_smooth)
-        trail_row.addStretch()
-        vv.addLayout(trail_row)
+        video_box.body.addWidget(form_row("Smooth path", self.spin_export_smooth, 96))
 
-        # Target scope.
-        from PyQt5.QtWidgets import QRadioButton, QButtonGroup
-        scope_row = QHBoxLayout()
-        scope_row.setSpacing(8)
-        scope_row.addWidget(QLabel("Render:"))
+        # Target scope: hidden radios (data) + segmented selector.
         self.rb_export_current = QRadioButton("Current video")
         self.rb_export_all     = QRadioButton("All completed")
         self.rb_export_pick    = QRadioButton("Pick…")
@@ -1380,21 +1240,24 @@ class ExperimentBatchTab(QWidget):
         self._export_scope_group.addButton(self.rb_export_current, 0)
         self._export_scope_group.addButton(self.rb_export_all, 1)
         self._export_scope_group.addButton(self.rb_export_pick, 2)
-        for rb in (self.rb_export_current, self.rb_export_all, self.rb_export_pick):
-            rb.setStyleSheet("font-size:11px;")
-            scope_row.addWidget(rb)
-        scope_row.addStretch()
-        vv.addLayout(scope_row)
+        radios = (self.rb_export_current, self.rb_export_all, self.rb_export_pick)
+        for rb in radios:
+            rb.hide()
+            video_box.body.addWidget(rb)
+        scope_seg = SegTabs(["Current video", "All completed", "Pick…"])
+        scope_seg.changed.connect(lambda i: radios[i].setChecked(True))
+        video_box.body.addWidget(form_row("Render", scope_seg, 96))
 
         av_row = QHBoxLayout()
         av_row.setSpacing(6)
         self.btn_export_video = QPushButton("Render…")
-        self.btn_export_video.setFixedHeight(24)
+        self.btn_export_video.setProperty("primary", True)
+        self.btn_export_video.setFixedHeight(28)
         self.btn_export_video.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.btn_export_video.clicked.connect(self._on_export_video_clicked)
         av_row.addWidget(self.btn_export_video)
         self.btn_export_video_stop = QPushButton("Stop")
-        self.btn_export_video_stop.setFixedHeight(24)
+        self.btn_export_video_stop.setFixedHeight(28)
         self.btn_export_video_stop.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.btn_export_video_stop.setEnabled(False)
         self.btn_export_video_stop.clicked.connect(self._on_export_video_stop)
@@ -1403,23 +1266,42 @@ class ExperimentBatchTab(QWidget):
         self.progress_export_video.setRange(0, 100)
         self.progress_export_video.setVisible(False)
         av_row.addWidget(self.progress_export_video, 1)
-        vv.addLayout(av_row)
+        video_box.body.addLayout(av_row)
         self.lbl_export_video = QLabel("")
-        self.lbl_export_video.setStyleSheet("color:#888; font-size:11px;")
+        theme.set_tone(self.lbl_export_video, "faint", "font-size:11px;")
         self.lbl_export_video.setWordWrap(True)
-        vv.addWidget(self.lbl_export_video)
-        v.addWidget(video_box)
+        video_box.body.addWidget(self.lbl_export_video)
+        grid.addWidget(video_box, 1, 1, Qt.AlignTop)
         self._export_video_thread = None
+
+        wrap = QWidget()
+        wl = QHBoxLayout(wrap)
+        wl.setContentsMargins(0, 0, 0, 0)
+        gw = QWidget()
+        gw.setLayout(grid)
+        gw.setMaximumWidth(1040)
+        wl.addWidget(gw)
+        wl.addStretch(1)
+        outer.addWidget(wrap)
 
         # Status line
         self.lbl_export_status = QLabel("")
-        self.lbl_export_status.setStyleSheet("color:#1A6EA8; font-size:11px;")
+        theme.set_tone(self.lbl_export_status, "accent", "font-size:11px;")
         self.lbl_export_status.setWordWrap(True)
-        v.addWidget(self.lbl_export_status)
+        outer.addSpacing(10)
+        outer.addWidget(self.lbl_export_status)
 
-        v.addStretch(1)
+        outer.addStretch(1)
         self._refresh_output_label()
-        return w
+        # Scrollable: at small window sizes the tab scrolls (vertically and,
+        # if needed, horizontally) instead of squashing/overlapping controls.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setWidget(w)
+        return scroll
 
     # ── Annotated-video export handlers (button lives in the Export tab,
     # rendering uses the embedded OpenFieldTab's state).
@@ -1436,6 +1318,7 @@ class ExperimentBatchTab(QWidget):
             "ellipse":        self.chk_export_ellipse.isChecked(),
             "trail":          self.chk_export_trail.isChecked(),
             "trail_fade":     self.chk_export_trail_fade.isChecked(),
+            "marker_tag":     self.chk_export_tag.isChecked(),
             "trail_len":      int(self.spin_export_trail_len.value()),
             "smooth_n":       int(self.spin_export_smooth.value()),
             "cell_highlight": self.chk_export_cell_hi.isChecked(),
@@ -1529,7 +1412,7 @@ class ExperimentBatchTab(QWidget):
                 return
             if not picked:
                 self.lbl_export_video.setText("Nothing selected.")
-                self.lbl_export_video.setStyleSheet("color:#aaa; font-size:11px;")
+                theme.set_tone(self.lbl_export_video, "faint", "font-size:11px;")
                 return
             targets = picked
         # Output folder is the one configured in the Output folder section
@@ -1587,7 +1470,7 @@ class ExperimentBatchTab(QWidget):
         self.lbl_export_video.setText(
             f"Rendering {idx}/{self._export_total}: {os.path.basename(path)}…"
         )
-        self.lbl_export_video.setStyleSheet("color:#aaa; font-size:11px;")
+        theme.set_tone(self.lbl_export_video, "faint", "font-size:11px;")
         # Load the target into the embedded tab if it isn't already loaded.
         et = self.embedded_tab
         if getattr(et, "video_path", None) != path:
@@ -1665,18 +1548,18 @@ class ExperimentBatchTab(QWidget):
             self.lbl_export_video.setText(
                 f"Cancelled. Saved {ok} of {self._export_total}."
             )
-            self.lbl_export_video.setStyleSheet("color:#E5A23C; font-size:11px;")
+            theme.set_tone(self.lbl_export_video, "warn", "font-size:11px;")
         elif self._export_failed:
             self.lbl_export_video.setText(
                 f"Saved {ok} / {self._export_total}. "
                 f"{len(self._export_failed)} failed."
             )
-            self.lbl_export_video.setStyleSheet("color:#f44336; font-size:11px;")
+            theme.set_tone(self.lbl_export_video, "err", "font-size:11px;")
         else:
             self.lbl_export_video.setText(
                 f"Saved {ok} video(s)." if ok != 1 else "Saved 1 video."
             )
-            self.lbl_export_video.setStyleSheet("color:#4CAF50; font-size:11px;")
+            theme.set_tone(self.lbl_export_video, "ok", "font-size:11px;")
         # Restore the originally-loaded video.
         try:
             if (self._export_orig_path and
@@ -1701,8 +1584,14 @@ class ExperimentBatchTab(QWidget):
         self._track_timer.start()
         self._render_track_time(per_video=0.0, finishing=False)
 
+    def _set_pill(self, text):
+        win = self.window()
+        if hasattr(win, "set_tracking_status"):
+            win.set_tracking_status(text)
+
     def _stop_track_timer(self):
         self._track_timer.stop()
+        self._set_pill(None)
         if self._track_t0 is not None:
             import time as _time
             elapsed = _time.monotonic() - self._track_t0
@@ -1717,15 +1606,42 @@ class ExperimentBatchTab(QWidget):
         self._render_track_time(per_video=elapsed, finishing=False)
 
     def _render_track_time(self, per_video, finishing):
-        """Render label as '<state> [· Batch total: X]' where state is the
-        per-video elapsed/done time. Batch total only appears in batch runs."""
-        per_label = (f"Done in {self._fmt_elapsed(per_video)}" if finishing
-                     else f"Elapsed: {self._fmt_elapsed(per_video)}")
+        """Bottom of the run panel: 'elapsed mm:ss' (batch total when a batch
+        is running) and an ETA estimated from the progress so far."""
+        import time as _time
+        vp = float(self.progress_video.value() or 0)
         if self._batch_t0 is not None:
-            import time as _time
             total = _time.monotonic() - self._batch_t0
-            per_label += f"  ·  Batch total: {self._fmt_elapsed(total)}"
-        self.lbl_track_time.setText(per_label)
+            n = max(1, int(self.progress_overall.maximum() or 1))
+            idx = float(self.progress_overall.value() or 0)
+            frac = (idx + vp / 100.0) / n
+            elapsed_txt = f"elapsed {self._fmt_elapsed(total)}"
+            eta = (total / frac - total) if frac > 0.01 else None
+        else:
+            elapsed_txt = (f"done in {self._fmt_elapsed(per_video)}" if finishing
+                           else f"elapsed {self._fmt_elapsed(per_video)}")
+            eta = (per_video / (vp / 100.0) - per_video) if (vp > 1 and not finishing) else None
+        self.lbl_track_time.setText(elapsed_txt)
+        self.lbl_eta.setText("" if (finishing or eta is None) else f"eta {self._fmt_elapsed(eta)}")
+
+    def _refresh_queue_stats(self, *_):
+        """Queue counters, count pill and batch segments from row states."""
+        if not hasattr(self, "queue_stats"):
+            return
+        rows = [self.row_widgets[p] for p in self.videos if p in self.row_widgets]
+        n = len(rows)
+
+        def cnt(s):
+            return sum(1 for r in rows if r.status == s)
+
+        done, running = cnt(STATUS_DONE), cnt(STATUS_RUNNING)
+        self.pill_count.setText(str(n))
+        self.queue_stats.set_counts(done, running, cnt(STATUS_READY),
+                                    cnt(STATUS_NEEDS) + cnt(STATUS_ERROR))
+        vp = float(self.progress_video.value() or 0) if running else 0.0
+        frac = ((done + vp / 100.0) / n) if n else 0.0
+        tok = {STATUS_DONE: "OK", STATUS_RUNNING: "ACCENT", STATUS_ERROR: "ERR"}
+        self.run_panel.set_batch(done, n, frac * 100.0, [tok.get(r.status, "BORDER") for r in rows])
 
     @staticmethod
     def _fmt_elapsed(seconds):
@@ -1821,83 +1737,72 @@ class ExperimentBatchTab(QWidget):
 
     def _pane_header(self, text):
         """Small bold header label used at the top of each splitter pane."""
-        lbl = QLabel(text)
-        lbl.setStyleSheet(
-            "color:#444; font-size:11px; font-weight:bold; "
-            "padding:2px 4px; background:#eaeaea; border-radius:2px;"
-        )
-        lbl.setFixedHeight(18)
+        lbl = QLabel(text.upper())
+        lbl.setProperty("role", "pane-header")
+        lbl.setFixedHeight(36)
         return lbl
 
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(6)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
         # Splitter: left list, right preview + results
         split = QSplitter(Qt.Horizontal)
         root.addWidget(split, 1)
 
-        # ── Left side: video list + controls
+        # ── Left side: session queue
         left = QWidget()
+        left.setObjectName("Pane")
         left.setMinimumWidth(220)
         lv = QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
-        lv.setSpacing(4)
-        lv.addWidget(self._pane_header("Videos"))
+        lv.setSpacing(0)
 
-        # Add row
-        add_row = QHBoxLayout()
-        b_add = QPushButton("➕ Add videos…")
+        qh = PaneHeader("queue", "Queue")
+        self.pill_count = qh.add_left(CountPill("0"))
+        b_add = IconTextButton("plus", "Add", 11, height=26)
+        b_add.setToolTip("Add videos")
         b_add.clicked.connect(self._add_videos)
-        add_row.addWidget(b_add)
-        b_clear = QPushButton("Clear")
+        b_clear = IconButton("trash", 13, "FAINT", "TEXT", "Clear queue", 26)
         b_clear.clicked.connect(self._clear_videos)
-        add_row.addWidget(b_clear)
-        add_row.addStretch()
-        lv.addLayout(add_row)
+        qh.add_right(b_add)
+        qh.add_right(b_clear)
+        lv.addWidget(qh)
 
-        # Drag-drop hint
-        dd_hint = QLabel("Drag and drop video files anywhere on this panel.")
-        dd_hint.setStyleSheet("color:#888; font-size:10px; font-style:italic;")
-        lv.addWidget(dd_hint)
+        self.queue_stats = QueueStats()
+        lv.addWidget(self.queue_stats)
 
-        # Video list
+        # Video list (rows are inserted before the drop hint + stretch)
         self.list_scroll = QScrollArea()
         self.list_scroll.setWidgetResizable(True)
         self.list_scroll.setFrameShape(QFrame.NoFrame)
         self.list_host = QWidget()
         self.list_layout = QVBoxLayout(self.list_host)
-        self.list_layout.setSpacing(3)
-        self.list_layout.setContentsMargins(2, 2, 2, 2)
+        self.list_layout.setSpacing(2)
+        self.list_layout.setContentsMargins(6, 6, 6, 6)
+        self.drop_hint = DropHint()
+        self.drop_hint.clicked.connect(self._add_videos)
+        self.list_layout.addWidget(self.drop_hint)
         self.list_layout.addStretch()
         self.list_scroll.setWidget(self.list_host)
         lv.addWidget(self.list_scroll, 1)
 
-        # Run controls
-        ctl_row = QHBoxLayout()
-        self.btn_run_all = QPushButton("▶ Run All")
-        self.btn_run_all.setFixedHeight(30)
-        self.btn_run_all.setStyleSheet("font-weight:bold; font-size:12px;")
-        self.btn_run_all.clicked.connect(self._run_all)
-        ctl_row.addWidget(self.btn_run_all)
-        self.btn_stop = QPushButton("⏹ Stop")
-        self.btn_stop.setFixedHeight(30)
-        self.btn_stop.setEnabled(False)
-        self.btn_stop.clicked.connect(self._stop)
-        ctl_row.addWidget(self.btn_stop)
-        ctl_row.addStretch()
-        lv.addLayout(ctl_row)
+        self.lbl_status = QLabel("")
+        theme.set_tone(self.lbl_status, "muted", "font-size:11px;")
+        self.lbl_status.setWordWrap(True)
+        self.lbl_status.setContentsMargins(12, 4, 12, 4)
+        lv.addWidget(self.lbl_status)
 
-        self.progress_overall = QProgressBar()
-        self.progress_overall.setVisible(False)
-        lv.addWidget(self.progress_overall)
-        self.progress_video = QProgressBar()
-        self.progress_video.setVisible(False)
-        lv.addWidget(self.progress_video)
-        self.lbl_track_time = QLabel("")
-        self.lbl_track_time.setStyleSheet("color:#1A6EA8; font-size:11px; font-weight:bold;")
-        lv.addWidget(self.lbl_track_time)
+        # Run controls + batch progress
+        self.run_panel = RunPanel(self._run_all, self._stop)
+        self.btn_run_all = self.run_panel.btn_run_all
+        self.btn_stop = self.run_panel.btn_stop
+        self.progress_overall = _ProgressProxy(self._refresh_queue_stats)
+        self.progress_video = _ProgressProxy(self._refresh_queue_stats)
+        self.lbl_track_time = self.run_panel.lbl_elapsed
+        self.lbl_eta = self.run_panel.lbl_eta
+        lv.addWidget(self.run_panel)
         # Timer that updates the elapsed-time label while tracking is running.
         self._track_timer = QTimer(self)
         self._track_timer.setInterval(1000)
@@ -1906,11 +1811,8 @@ class ExperimentBatchTab(QWidget):
         # Set when a batch (Run All) is in progress, so the per-video timer
         # can also show "Batch total: …".
         self._batch_t0 = None
-
-        self.lbl_status = QLabel("")
-        self.lbl_status.setStyleSheet("color:#555; font-size:11px;")
-        self.lbl_status.setWordWrap(True)
-        lv.addWidget(self.lbl_status)
+        self._running_path = None
+        self._refresh_queue_stats()
 
         split.addWidget(left)
 
@@ -1928,8 +1830,6 @@ class ExperimentBatchTab(QWidget):
         # presets) can write to the live MainWindow config dict.
         self.embedded_tab._batch_owner = self
         try:
-            if hasattr(self.embedded_tab, "btn_export"):
-                self.embedded_tab.btn_export.setVisible(False)
             # Keep both tabs — rename "Excel Output" to "Output" so the user
             # sees: [Video Preview] [Output] [Export].
             if hasattr(self.embedded_tab, "right_tabs"):
@@ -1937,6 +1837,8 @@ class ExperimentBatchTab(QWidget):
                 for i in range(rt.count()):
                     if rt.tabText(i).strip().lower() in ("excel output", "output"):
                         rt.setTabText(i, "Output")
+                    elif rt.tabText(i).strip().lower() in ("video preview", "preview"):
+                        rt.setTabText(i, "Preview")
                 # Add the Export tab.
                 rt.addTab(self._build_export_tab(), "Export")
         except Exception:
@@ -1969,46 +1871,46 @@ class ExperimentBatchTab(QWidget):
 
         # ── Middle pane: config column (was fixed-width inside embedded_tab).
         middle = QWidget()
+        middle.setObjectName("Pane")
         mv = QVBoxLayout(middle)
         mv.setContentsMargins(0, 0, 0, 0)
         mv.setSpacing(4)
-        mv.addWidget(self._pane_header("Configuration"))
-        if self._config_scroll is not None:
-            # Let the scroll fill the middle pane; inner panel now has a
-            # min width but no fixed width so it stretches with the scroll.
-            self._config_scroll.setMinimumWidth(0)
-            self._config_scroll.setMaximumWidth(16777215)
-            self._config_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            mv.addWidget(self._config_scroll, 1)
-
-        # Apply-to button — lives in the configuration (middle) pane.
-        self.btn_apply_to = QPushButton("Apply to…")
-        self.btn_apply_to.setFixedHeight(26)
+        ch = PaneHeader("config", "Configuration")
+        self.btn_apply_to = ch.add_right(IconTextButton("copy", "Apply to…", 12, height=26))
         self.btn_apply_to.setToolTip(
             "Copy selected fields from this video's panel to other videos."
         )
         self.btn_apply_to.clicked.connect(self._open_apply_to_dialog)
-        mv.insertWidget(1, self.btn_apply_to)  # below the "Configuration" header
+        mv.addWidget(ch)
+        if self._config_scroll is not None:
+            # Let the scroll fill the middle pane; inner panel now has a
+            # min width but no fixed width so it stretches with the scroll.
+            self._config_scroll.setFrameShape(QFrame.NoFrame)
+            self._config_scroll.setMinimumWidth(0)
+            self._config_scroll.setMaximumWidth(16777215)
+            self._config_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            mv.addWidget(self._config_scroll, 1)
 
         # ── Right pane: just the preview tabs.
         right = QWidget()
         rv = QVBoxLayout(right)
         rv.setContentsMargins(0, 0, 0, 0)
         rv.setSpacing(4)
-        rv.addWidget(self._pane_header("Preview"))
 
         if hasattr(self.embedded_tab, "right_tabs"):
+            from gui.main_tabs import MainTabHeader
             preview_widget = self.embedded_tab.right_tabs
             preview_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            rv.addWidget(MainTabHeader(preview_widget, self.embedded_tab))
             rv.addWidget(preview_widget, 1)
 
         self._embedded_loaded_path = None
 
         split.addWidget(middle)
         split.addWidget(right)
-        left.setMinimumWidth(200)
-        middle.setMinimumWidth(280)
-        right.setMinimumWidth(320)
+        left.setMinimumWidth(220)
+        middle.setMinimumWidth(300)
+        right.setMinimumWidth(420)
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 0)
         split.setStretchFactor(2, 1)
@@ -2016,13 +1918,9 @@ class ExperimentBatchTab(QWidget):
         split.setCollapsible(1, False)
         split.setCollapsible(2, False)
         # Visible drag handles — Fusion's default 1px is too easy to miss.
-        split.setHandleWidth(4)
-        split.setStyleSheet(
-            "QSplitter::handle { background:#cfcfcf; }"
-            "QSplitter::handle:hover { background:#7aa9d9; }"
-        )
+        split.setHandleWidth(1)
         # Default layout: thin list, medium config, large preview.
-        split.setSizes([220, 320, 660])
+        split.setSizes([244, 324, 900])
         # Output folder + export buttons live in the Export sub-tab now.
 
     # ── Drag-and-drop ─────────────────────────────────────────────────────
@@ -2082,7 +1980,9 @@ class ExperimentBatchTab(QWidget):
                        self._on_trim)
         self.row_widgets[path] = row
         # insert before stretch
-        self.list_layout.insertWidget(self.list_layout.count() - 1, row)
+        row.status_changed.connect(self._refresh_queue_stats)
+        self.list_layout.insertWidget(self.list_layout.count() - 2, row)
+        self._refresh_queue_stats()
         self._refresh_video_combo()
         # First video added → auto-select it so the user lands on a real
         # frame instead of an empty embedded panel.
@@ -2115,6 +2015,7 @@ class ExperimentBatchTab(QWidget):
             else:
                 self._clear_embedded_panel()
         self._refresh_export_buttons()
+        self._refresh_queue_stats()
 
     def _clear_videos(self):
         for p in list(self.videos):
@@ -2305,6 +2206,8 @@ class ExperimentBatchTab(QWidget):
             et.slider_scrub.setValue(0)
             et.btn_step_prev.setEnabled(False)
             et.btn_step_next.setEnabled(False)
+            if hasattr(et, "_sync_redesign_reset"):
+                et._sync_redesign_reset()
         except Exception:
             import traceback
             traceback.print_exc()
@@ -2428,7 +2331,7 @@ class ExperimentBatchTab(QWidget):
         wants to proceed, False to cancel."""
         from PyQt5.QtWidgets import QDialog, QDialogButtonBox
         glyphs = {"ok": "✓", "warn": "⚠", "blocked": "✗"}
-        colors = {"ok": "#4CAF50", "warn": "#E5A23C", "blocked": "#FF6B6B"}
+        colors = {"ok": theme.OK, "warn": theme.WARN, "blocked": theme.ERR}
         any_blocked = any(st == "blocked" for _, st, _ in report)
         any_warn    = any(st == "warn"    for _, st, _ in report)
         if not any_blocked and not any_warn:
@@ -2569,6 +2472,9 @@ class ExperimentBatchTab(QWidget):
         if row:
             row.set_status(STATUS_RUNNING)
         self.lbl_status.setText(f"Tracking: {os.path.basename(path)}")
+        self._running_name = os.path.splitext(os.path.basename(path))[0]
+        self._running_path = path
+        self._set_pill(f"Tracking {self._running_name} · 0%")
         self.progress_video.setVisible(True)
         self.progress_video.setRange(0, 100)
         self.progress_video.setValue(0)
@@ -3267,6 +3173,10 @@ class ExperimentBatchTab(QWidget):
         # event loop (repaints etc.) — doing that per frame dominates run time.
         # Throttle the pump to ~20 Hz; the bar value still updates every frame.
         self.progress_video.setValue(int(p))
+        _row = self.row_widgets.get(self._running_path)
+        if _row is not None:
+            _row.set_progress(int(p))
+        self._set_pill(f"Tracking {getattr(self, '_running_name', '')} · {int(p)}%")
         import time
         now = time.time()
         if now - getattr(self, "_last_progress_pump", 0.0) >= 0.05:
@@ -3569,6 +3479,10 @@ class ExperimentBatchTab(QWidget):
                 if et.raw_df is not None and et.metrics:
                     et._populate_excel_tab()
                 self._hydrate_cached_graphs(et, cached.get("graph_pngs") or {})
+                # timeline / sidebar / heat layer aren't part of the cache
+                et._refresh_redesign_data()
+                if theme.mode() == "dark" and et.raw_df is not None:
+                    et._populate_graph_tab()    # cached PNGs are the light renders
             except Exception:
                 import traceback
                 traceback.print_exc()
@@ -3647,6 +3561,13 @@ class ExperimentBatchTab(QWidget):
             return
         f = self.config.get("output_folder")
         self.lbl_output.setText(f if f else "(not set)")
+        if hasattr(self, "lbl_backup_note"):
+            bk = self.config.get("backup_folder")
+            mono = theme.mono_family()
+            self.lbl_backup_note.setText(
+                f"Backup folder: <span style=\"font-family:'{mono}'; color:{theme.TEXT_2}\">"
+                f"{bk if bk else 'Not set'}</span> — set in Settings to autosave "
+                f"Excel after each run.")
 
     def _change_output_folder(self):
         start = self.config.get("output_folder") or os.path.expanduser("~")

@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
     QColorDialog, QFrame,
 )
 
+from gui.info_box import attach_info_box
 from .zones import (
     OBJECT_NAMES, OBJECT_LABELS, OBJECT_COLORS,
     SHAPE_CIRCLE, SHAPE_SQUARE, SHAPE_TRIANGLE, SHAPE_CUSTOM,
@@ -23,6 +24,9 @@ from .zones import (
     default_object_state, build_schema,
     footprint_name, zone_name, empty_footprint_zone, empty_zone,
 )
+
+
+from gui import theme
 
 
 def build_geometry_step(host):
@@ -47,45 +51,43 @@ def build_geometry_step(host):
     layout.setSpacing(4)
 
     # ── Arena (delegates to existing host methods) ──────────────────────
-    arena_btn = QToolButton()
-    arena_btn.setText("Define arena ▾")
-    arena_btn.setPopupMode(QToolButton.InstantPopup)
-    arena_btn.setStyleSheet("padding:4px 10px;")
-    arena_btn.setFixedHeight(26)
+    from gui.widgets_v2 import ArenaModeButton, IconButton, SwitchBox
+    arena_btn = ArenaModeButton()
+    arena_btn.setText("Define arena")
     arena_menu = QMenu(arena_btn)
-    arena_menu.addAction(
-        "Manual — click 4 corners",
-        lambda: (_set_arena_mode(host, "manual"), host._start_draw_arena())
-    )
-    arena_menu.addAction(
-        "Premade square arena",
-        lambda: (_set_arena_mode(host, "square"),
-                 host._apply_premade_square_arena())
-    )
+
+    def _arena_action(label, mode_key, fn):
+        arena_menu.addAction(
+            label,
+            lambda: (_set_arena_mode(host, mode_key), arena_btn.setText(label), fn())
+        )
+    _arena_action("Manual — click 4 corners", "manual", host._start_draw_arena)
+    _arena_action("Premade square arena", "square", host._apply_premade_square_arena)
     # "Auto — from movement (next run)" is gated behind an Extra Features
     # toggle (off by default). Re-enable from launcher → Settings → Extra
     # features.
     if host.config.get("enable_auto_movement_arena", False):
-        arena_menu.addAction(
-            "Auto — from movement (next run)",
-            lambda: (_set_arena_mode(host, "movement"),
-                     host._enable_auto_movement_arena())
-        )
+        _arena_action("Auto — from movement (next run)", "movement",
+                      host._enable_auto_movement_arena)
     arena_btn.setMenu(arena_menu)
     host.btn_define_arena = arena_btn
     host.btn_arena = arena_btn
     host.btn_auto_arena = arena_btn
-    btn_clear_arena = host._btn("Clear", width=50)
+    btn_clear_arena = IconButton("x", 11, "FAINT", "TEXT", "Clear arena", 28)
     btn_clear_arena.clicked.connect(host._clear_arena)
     host.btn_clear_arena = btn_clear_arena
-    layout.addLayout(host._row(arena_btn, btn_clear_arena))
+    arena_btn.follow(btn_clear_arena)
+    arow = QHBoxLayout()
+    arow.setSpacing(6)
+    arow.addWidget(arena_btn, 1)
+    arow.addWidget(btn_clear_arena)
+    layout.addLayout(arow)
 
     # ── Perspective correction (warp arena → axis-aligned rect) ────────
     # Base ExperimentTab owns the toggle handler (_on_perspective_toggled)
     # and auto-enables the checkbox once the arena is drawn. Same hookup
     # OF uses — we just place the widget here so NOR has it on Step 2.
-    host.chk_perspective = QCheckBox("Correct perspective")
-    host.chk_perspective.setStyleSheet("font-size:11px;")
+    host.chk_perspective = SwitchBox("Correct perspective")
     host.chk_perspective.setToolTip(
         "Warp video so the arena trapezoid becomes a true axis-aligned "
         "rectangle.\nUse when camera is at an angle. Improves distance / "
@@ -107,7 +109,7 @@ def build_geometry_step(host):
 
     # ── Direction filter ────────────────────────────────────────────────
     angle_row = QHBoxLayout()
-    chk = QCheckBox("Require nose facing object")
+    chk = SwitchBox("Require nose facing object")
     chk.setToolTip(
         "Only count nose-in-zone frames when the nose also points toward "
         "the object center within the angle threshold. Helps reject "
@@ -143,7 +145,7 @@ def build_geometry_step(host):
     # ── Status label ────────────────────────────────────────────────────
     host.lbl_nor_status = QLabel("Define arena + place both objects")
     host.lbl_nor_status.setWordWrap(True)
-    host.lbl_nor_status.setStyleSheet("color:#888; font-size:11px;")
+    theme.set_tone(host.lbl_nor_status, "faint", "font-size:11px;")
     layout.addWidget(host.lbl_nor_status)
 
     # ── Wire deferred init (zone_drawer is built later) ─────────────────
@@ -175,6 +177,20 @@ def build_geometry_step(host):
         _refresh_status(host)
     QTimer.singleShot(0, _wire)
 
+    _info = [("Correct perspective", host.chk_perspective)]
+    for obj_id in OBJECT_NAMES:
+        _w = host._nor_widgets[obj_id]
+        _lbl = OBJECT_LABELS[obj_id]
+        _info += [
+            (f"{_lbl} — Name", _w["name"]),
+            (f"{_lbl} — Role", _w["role"]),
+            (f"{_lbl} — Place", _w["place"]),
+            (f"{_lbl} — Size", _w["size"]),
+            (f"{_lbl} — Pad", _w["padding"]),
+            (f"{_lbl} — Corners", _w["corners"]),
+        ]
+    _info.append(("Require nose facing object", chk))
+    attach_info_box(grp, _info)
     return grp
 
 
@@ -187,7 +203,7 @@ def _build_object_block(host, obj_id):
     v.setSpacing(3)
 
     header = QLabel(OBJECT_LABELS[obj_id])
-    header.setStyleSheet("color:#aaa; font-size:11px; font-weight:bold;")
+    theme.set_tone(header, "faint", "font-size:11px; font-weight:bold;")
     v.addWidget(header)
 
     state = host._nor_objects[obj_id]
@@ -404,7 +420,7 @@ def _refresh_color_swatch(host, obj_id):
     text_c = "#000" if (qc.red() * 299 + qc.green() * 587 + qc.blue() * 114) / 1000 > 140 else "#fff"
     btn.setStyleSheet(
         f"QPushButton {{ background:{c}; color:{text_c}; "
-        f"border:1px solid #555; border-radius:3px; font-weight:bold; }}"
+        f"border:1px solid #D3D8DE; border-radius:3px; font-weight:bold; }}"
     )
 
 
@@ -579,11 +595,11 @@ def _refresh_status(host):
         return
     if placed == 0:
         lbl.setText("Define arena + place both objects")
-        lbl.setStyleSheet("color:#888; font-size:11px;")
+        theme.set_tone(lbl, "faint", "font-size:11px;")
         host.set_step_status("geometry", "blocked")
     elif placed == 1:
         lbl.setText("1 / 2 objects placed")
-        lbl.setStyleSheet("color:#ffb74d; font-size:11px;")
+        theme.set_tone(lbl, "warn", "font-size:11px;")
         host.set_step_status("geometry", "warn")
     else:
         roles = {objs[oid].get("role") for oid in OBJECT_NAMES}
@@ -591,7 +607,7 @@ def _refresh_status(host):
         if ROLE_FAMILIAR in roles and ROLE_NOVEL in roles:
             msg += " — DI ready"
         lbl.setText(msg)
-        lbl.setStyleSheet("color:#4CAF50; font-size:11px;")
+        theme.set_tone(lbl, "ok", "font-size:11px;")
         host.set_step_status("geometry", "ok")
 
 

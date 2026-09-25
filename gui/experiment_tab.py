@@ -9,6 +9,7 @@ modules in the next phase. Y-Maze plugs in via the `experiment` argument.
 """
 import os
 import json
+import math
 from io import BytesIO
 import cv2
 import numpy as np
@@ -36,6 +37,11 @@ from gui.graph_style import (
 )
 
 PRESETS_PATH = os.path.join(os.path.expanduser("~"), ".mice_tracker_presets.json")
+# Reserved combo entries — never stored as real entries in self._presets.
+DEFAULT_PRESET_NAME = "Default"
+
+
+from gui import theme
 
 
 class _FitLabel(QLabel):
@@ -45,7 +51,7 @@ class _FitLabel(QLabel):
         super().__init__()
         self._src = None
         self.setMinimumSize(1, 1)
-        self.setAlignment(Qt.AlignCenter)
+        self.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
 
     def setPixmap(self, pix):
@@ -90,13 +96,22 @@ def _migrate_combo_value(value, legacy_list, default):
 
 
 DEFAULT_COLORS = {
-    "body":         "#A00000",
-    "nose":         "#00C800",
-    "tail":         "#0064C8",
-    "arena":        "#3CA0FF",
-    "center_zone":  "#3CDC64",
-    "grid":         "#96C8FF",
-    "detection":    "#8C0000",
+    "body":         "#F2F4F7",
+    "nose":         "#5DBB85",
+    "tail":         "#A9B4C6",
+    "arena":        "#A9B4C6",
+    "center_zone":  "#C9D1DE",
+    "grid":         "#7F8A9C",
+    "detection":    "#D64034",
+    "trail":        "#E4D3AE",
+}
+
+# Defaults of the previous look — a saved colour that still equals one of
+# these was never customised, so it is dropped and picks up the new default.
+_OLD_DEFAULT_COLORS = {
+    "body": "#A00000", "nose": "#00C800", "tail": "#0064C8",
+    "arena": "#3CA0FF", "center_zone": "#3CDC64", "grid": "#96C8FF",
+    "detection": "#8C0000",
 }
 
 
@@ -105,11 +120,15 @@ def _upgrade_legacy_colors(d):
     - 'center' → 'center_zone' rename
     - drop obsolete 'tail_attach' key (legacy appendage marker — current
       'tail' key is the caudal endpoint of the body axis, not the same)
+    - colours still at the previous defaults → new redesign defaults
     Mutates and returns d."""
     if isinstance(d, dict):
         if "center" in d and "center_zone" not in d:
             d["center_zone"] = d.pop("center")
         d.pop("tail_attach", None)
+        for key, old in _OLD_DEFAULT_COLORS.items():
+            if str(d.get(key, "")).upper() == old.upper():
+                d.pop(key, None)
     return d
 
 
@@ -400,9 +419,9 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             idx = self.combo_body_style.findData(v)
             self.combo_body_style.setCurrentIndex(idx if idx >= 0 else 1)
         self.chk_ellipse.setChecked(s.get("ellipse", False))
-        self.chk_trail.setChecked(s.get("trail", False))
+        self.chk_trail.setChecked(s.get("trail", True))
         self.spin_trail_len.setValue(s.get("trail_len", 0))
-        self.chk_trail_fade.setChecked(s.get("trail_fade", False))
+        self.chk_trail_fade.setChecked(s.get("trail_fade", True))
         self.spin_brush.setValue(s.get("brush_radius", 20))
         if isinstance(s.get("colors"), dict):
             self._colors = {**DEFAULT_COLORS, **_upgrade_legacy_colors(dict(s["colors"]))}
@@ -570,43 +589,10 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
     # ── _open_corrections_popup lives in gui/output/corrections_mixin.py
 
     def _open_view_popup(self):
-        """Show the overlay-options popup (body / ellipse / trail /
-        smooth + dot colors + cell highlight controls)."""
-        if self._view_popup is None:
-            dlg = QDialog(self)
-            dlg.setWindowTitle("View options")
-            dlg.setWindowFlags(dlg.windowFlags() | Qt.Tool)
-            v = QVBoxLayout(dlg)
-            v.setContentsMargins(10, 10, 10, 10)
-            v.setSpacing(6)
-            v.addWidget(self._body_style_widget)
-            v.addWidget(self.chk_ellipse)
-            v.addWidget(self._trail_row_widget)
-            v.addWidget(self._smooth_row_widget)
-            if hasattr(self, "_legend_widget"):
-                sep = QFrame()
-                sep.setFrameShape(QFrame.HLine)
-                sep.setStyleSheet("color:#444;")
-                v.addWidget(sep)
-                v.addWidget(QLabel("Dot colors:"))
-                v.addWidget(self._legend_widget)
-            # Cell highlight section — OF-only; subclass provides builder.
-            if hasattr(self, "_build_cell_highlight_controls"):
-                sep2 = QFrame()
-                sep2.setFrameShape(QFrame.HLine)
-                sep2.setStyleSheet("color:#444;")
-                v.addWidget(sep2)
-                v.addWidget(QLabel("Cell highlight:"))
-                v.addWidget(self._build_cell_highlight_controls())
-            close_btn = QPushButton("Close")
-            close_btn.clicked.connect(dlg.close)
-            v.addWidget(close_btn)
-            self._view_popup = dlg
-        # Position near the View button (top of the preview area).
-        self._view_popup.show()
-        self._view_popup.raise_()
-        self._view_popup.activateWindow()
-
+        """Open the View popover (overlay options) on the video canvas."""
+        chrome = getattr(self, "_chrome", None)
+        if chrome is not None:
+            chrome._open_view()
 
     def _on_fps_override_changed(self, val):
         if val > 0:
@@ -701,7 +687,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         btn.setFixedSize(size, size)
         btn.setCursor(Qt.PointingHandCursor)
         btn.setStyleSheet(
-            f"background-color: {self._colors[key]}; border: 1px solid #555; border-radius: 2px;"
+            f"background-color: {self._colors[key]}; border: 1px solid rgba(0,0,0,0.18); border-radius: 2px;"
         )
         btn.setToolTip(f"Click to change {key} color")
         btn.clicked.connect(lambda _=False, k=key: self._pick_color(k))
@@ -709,8 +695,8 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         return btn
 
     ZONE_COLOR_PRESETS = [
-        "#E53935", "#FB8C00", "#FDD835", "#43A047", "#00ACC1",
-        "#1E88E5", "#8E24AA", "#EC407A", "#FFFFFF", "#9E9E9E",
+        "#E0695E", "#E8A87C", "#E8C547", "#5DBB85", "#7FD1D9",
+        "#7FA6D9", "#A98BD9", "#D36BA6", "#FFFFFF", "#A9B4C6",
     ]
 
     def _open_zone_colors_dialog(self):
@@ -737,7 +723,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
 
         def restyle():
             for kk, b in sel_buttons.items():
-                border = "2px solid #FFF" if kk == current_key[0] else "1px solid #555"
+                border = f"2px solid {theme.ACCENT}" if kk == current_key[0] else "1px solid rgba(0,0,0,0.18)"
                 b.setStyleSheet(
                     f"QPushButton {{ background-color: {self._colors[kk]}; color: #000;"
                     f" border: {border}; border-radius: 3px; padding: 2px 6px; }}"
@@ -772,7 +758,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             sw.setFixedSize(22, 22)
             sw.setCursor(Qt.PointingHandCursor)
             sw.setStyleSheet(
-                f"background-color: {hex_c}; border: 1px solid #555; border-radius: 3px;"
+                f"background-color: {hex_c}; border: 1px solid rgba(0,0,0,0.18); border-radius: 3px;"
             )
             sw.setToolTip(hex_c)
             sw.clicked.connect(lambda _=False, c=hex_c: apply(c))
@@ -851,7 +837,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         btn = self._color_buttons.get(key)
         if btn:
             btn.setStyleSheet(
-                f"background-color: {hex_str}; border: 1px solid #555; border-radius: 2px;"
+                f"background-color: {hex_str}; border: 1px solid rgba(0,0,0,0.18); border-radius: 2px;"
             )
         if key in ("arena", "center_zone", "grid"):
             self.zone_drawer.set_zone_colors(self._colors)
@@ -994,7 +980,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
 
         def add_section(title, items, store):
             lbl = QLabel(f"<b>{title}</b>")
-            lbl.setStyleSheet("font-size:11px; color:#ddd;")
+            theme.set_tone(lbl, "text2", "font-size:11px;")
             v.addWidget(lbl)
             for key, val in items:
                 w, getter = self._make_param_widget(key, val)
@@ -1072,15 +1058,219 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             win._save_config()
         self._apply_simple_mode()
 
+    @staticmethod
+    def _card_open(w):
+        """False when `w` lives inside a collapsed accordion card."""
+        from gui.step_card import StepGroup
+        p = w.parentWidget()
+        while p is not None:
+            if isinstance(p, StepGroup):
+                return p.isChecked()
+            p = p.parentWidget()
+        return True
+
     def _apply_simple_mode(self):
         show = not self._simple_mode  # advanced shown only in Full
         for w in getattr(self, "_advanced_widgets", []):
             try:
-                w.setVisible(show)
+                w.setVisible(show and self._card_open(w))
             except RuntimeError:
                 # Widget already deleted by Qt; drop silently.
                 pass
 
+    # ── Redesign panels: transport / speed timeline / measurements ─────────
+
+    def _toggle_play(self):
+        if self._play_timer.isActive():
+            self._play_timer.stop()
+            self.btn_play.set_icon_name("play")
+            return
+        if not self.slider_scrub.isEnabled():
+            return
+        if self.slider_scrub.value() >= self.slider_scrub.maximum():
+            self.slider_scrub.setValue(self.slider_scrub.minimum())
+        fps = float(self.fps or 30.0)
+        self._play_timer.start(max(15, int(1000.0 / min(fps, 30.0))))
+        self.btn_play.set_icon_name("pause")
+
+    def _play_tick(self):
+        if self.slider_scrub.value() >= self.slider_scrub.maximum():
+            self._play_timer.stop()
+            self.btn_play.set_icon_name("play")
+            return
+        step = max(1, int(round(float(self.fps or 30.0) / 30.0)))
+        self.slider_scrub.setValue(min(self.slider_scrub.maximum(),
+                                       self.slider_scrub.value() + step))
+
+    def _on_timeline_seek(self, frac):
+        lo, hi = self.slider_scrub.minimum(), self.slider_scrub.maximum()
+        if self.slider_scrub.isEnabled() and hi > lo:
+            self.slider_scrub.setValue(int(round(lo + frac * (hi - lo))))
+
+    def _sync_redesign_reset(self):
+        """Video cleared / results dropped: blank the redesign panels."""
+        try:
+            if self._play_timer.isActive():
+                self._play_timer.stop()
+                self.btn_play.set_icon_name("play")
+            for b in (self.btn_step_first, self.btn_step_prev, self.btn_play,
+                      self.btn_step_next, self.btn_step_last, self.btn_miss_card):
+                b.setEnabled(False)
+            self.lbl_frame.setText("")
+            self.speed_timeline.set_data([], [], [], 0.0, "cm/s")
+            self.measure_panel.clear()
+        except Exception:
+            pass
+
+    def _speed_col(self):
+        df = getattr(self, "raw_df", None)
+        if df is None:
+            return None, ""
+        for c in df.columns:
+            if str(c).startswith("Speed ("):
+                return c, str(c)[7:-1] if str(c).endswith(")") else "cm/s"
+        return None, ""
+
+    def _refresh_redesign_data(self):
+        """Feed the speed timeline + session sidebar from the latest results."""
+        try:
+            has = bool(self.tracking_results)
+            for b in (self.btn_step_first, self.btn_step_prev, self.btn_play,
+                      self.btn_step_next, self.btn_step_last):
+                b.setEnabled(self.slider_scrub.isEnabled())
+            self.btn_miss_card.setEnabled(has)
+            self.btn_export.setEnabled(has)
+            if not has:
+                self.speed_timeline.set_data([], [], [], 0.0, "cm/s")
+                self.measure_panel.clear()
+                return
+            n = len(self.tracking_results)
+            col, unit = self._speed_col()
+            speed = []
+            if col is not None:
+                vals = np.nan_to_num(self.raw_df[col].to_numpy(dtype=float))
+                b = max(1, int(np.ceil(len(vals) / 1000.0)))
+                speed = [float(vals[i:i + b].mean()) for i in range(0, len(vals), b)]
+            xs = [r.get("x") is not None for r in self.tracking_results]
+            m = len(speed) or 1
+            bins = max(1, int(np.ceil(n / float(m))))
+            center = []
+            if self.raw_df is not None and "Zone" in self.raw_df.columns:
+                zc = self.raw_df["Zone"].astype(str).str.contains("center", case=False).to_numpy()
+                center = [bool(zc[i:i + bins].mean() >= 0.5) for i in range(0, len(zc), bins)]
+            missed = [i / float(n) for i, ok in enumerate(xs) if not ok]
+            if len(missed) > 600:
+                missed = missed[::int(np.ceil(len(missed) / 600.0))]
+            thr = float(self.spin_movement_thr.value()) if hasattr(self, "spin_movement_thr") else 0.0
+            self.speed_timeline.set_data(speed, center, missed, thr, unit or "cm/s")
+            self._refresh_heat()
+            dur = n / float(self.fps or 30.0)
+            det_rate = 100.0 * sum(1 for x in xs if x) / float(n)
+            self.measure_panel.set_session(self.metrics, dur,
+                                           extra=[("Detection rate", f"{det_rate:.1f}", "%")])
+            self._refresh_occupancy(dur)
+            self._sync_redesign(self.slider_scrub.value())
+        except Exception as e:
+            logger.warn(f"redesign panel refresh failed: {e}", source="ui")
+
+    def _sync_redesign(self, value=None):
+        """Per-scrub update: playhead, frame label and current-frame readout."""
+        try:
+            if value is None:
+                value = self.slider_scrub.value()
+            lo, hi = self.slider_scrub.minimum(), self.slider_scrub.maximum()
+            frac = (value - lo) / float(hi - lo) if hi > lo else 0.0
+            self.speed_timeline.set_cursor(frac)
+            self.lbl_frame.setText(f"{int(value)} / {int(hi)}")
+            fps0 = float(self.fps or 30.0)
+            t0 = max(0.0, (value - lo) / fps0)
+            self.zone_drawer.set_hud(
+                f"CAM 01 · {fps0:.0f} fps · F {int(value):06d}",
+                f"{int(t0) // 60:02d}:{int(t0) % 60:02d}.{int((t0 % 1) * 10)}")
+            if not self.tracking_results or self.raw_df is None:
+                self.measure_panel.set_frame(None)
+                self.zone_drawer.set_marker_info(None)
+                return
+            i = self._slider_to_results_idx(value)
+            df = self.raw_df
+            if i >= len(df):
+                return
+            fps = float(self.fps or 30.0)
+            s = int(i / fps)
+            tm = f"{s // 60:02d}:{s % 60:02d}.{int((i / fps % 1) * 10)}"
+            r = self.tracking_results[i]
+            det = r.get("x") is not None
+            pxcm = self._get_px_per_cm()
+            if det:
+                if pxcm:
+                    pos, pu = f"{r['x'] / pxcm:.1f}, {r['y'] / pxcm:.1f}", "cm"
+                else:
+                    pos, pu = f"{r['x']:.0f}, {r['y']:.0f}", "px"
+            else:
+                pos, pu = "—", ""
+            col, unit = self._speed_col()
+            sp = df[col].iloc[i] if col is not None else float("nan")
+            sp_txt = "—" if sp != sp else f"{sp:.1f}"
+            zone = str(df["Zone"].iloc[i]) if "Zone" in df.columns else "—"
+            zone = zone.replace("_", " ")
+            step_col = next((c for c in df.columns if str(c).startswith("Step Distance")), None)
+            cum_txt, cum_unit, cum_frac = "—", "", 0.0
+            if step_col is not None:
+                steps = np.nan_to_num(df[step_col].to_numpy(dtype=float))
+                cs = np.cumsum(steps)
+                tot = float(cs[-1]) if len(cs) else 0.0
+                in_cm = "cm" in str(step_col)
+                div = 100.0 if in_cm else 1.0
+                cum_txt = f"{cs[i] / div:.2f}"
+                cum_unit = "m" if in_cm else "px"
+                cum_frac = (cs[i] / tot) if tot > 0 else 0.0
+            if det and self.video_w and self.video_h:
+                aid = self.edit_meta_id.text().strip() or "—"
+                xy = pos.replace(",", " ").split() if pu else []
+                self.zone_drawer.set_marker_info({
+                    "norm": (r["x"] / float(self.video_w), r["y"] / float(self.video_h)),
+                    "lines": [f"{aid} · {sp_txt} {unit}".strip(),
+                              (f"x {xy[0]}  y {xy[1]}" if len(xy) == 2 else "")],
+                })
+            else:
+                self.zone_drawer.set_marker_info(None)
+            # heading from the recent displacement (or nose→tail when known)
+            heading = None
+            if det:
+                nx, ny = r.get("nose_x"), r.get("nose_y")
+                tx, ty = r.get("tail_x"), r.get("tail_y")
+                if nx is not None and tx is not None:
+                    heading = (-math.degrees(math.atan2(ny - ty, nx - tx))) % 360.0
+                else:
+                    for j in range(max(0, i - 3), i):
+                        pr = self.tracking_results[j]
+                        if pr.get("x") is not None:
+                            dx, dy = r["x"] - pr["x"], r["y"] - pr["y"]
+                            if (dx * dx + dy * dy) ** 0.5 > 0.5:
+                                heading = (-math.degrees(math.atan2(dy, dx))) % 360.0
+                            break
+            thr = float(self.spin_movement_thr.value()) if hasattr(self, "spin_movement_thr") else 0.0
+            moving = (sp > thr) if (sp == sp and thr > 0) else None
+            win = None
+            if col is not None:
+                vals = np.nan_to_num(df[col].to_numpy(dtype=float))
+                nw = max(2, int(30 * fps))
+                w0, w1 = max(0, i - nw), min(len(vals) - 1, i + nw)
+                if w1 > w0:
+                    stp = max(1, (w1 - w0) // 120)
+                    seg = vals[w0:w1 + 1:stp]
+                    win = {"values": [float(x) for x in seg], "max": float(seg.max()),
+                           "mid": (i - w0) / float(w1 - w0)}
+            self.measure_panel.set_frame({
+                "time": tm, "pos": pos, "pos_unit": pu, "speed": sp_txt,
+                "speed_unit": unit, "zone": zone, "detected": det,
+                "zone_center": "center" in zone.lower(),
+                "heading": heading, "moving": moving, "window": win,
+                "conf": (float(r["nose_confidence"]) if r.get("nose_confidence") is not None else None),
+                "cum": cum_txt, "cum_unit": cum_unit, "cum_frac": cum_frac,
+            })
+        except Exception as e:
+            logger.warn(f"redesign frame sync failed: {e}", source="ui")
     # ── UI construction ───────────────────────────────────────────────────
 
     def _build_ui(self):
@@ -1091,7 +1281,9 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         scroll = QScrollArea()
         scroll.setWidget(self._build_controls())
         scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # As-needed: if the pane is ever narrower than its content the user
+        # can scroll instead of losing controls off the edge.
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll.setFixedWidth(312)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -1104,79 +1296,56 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         root.addWidget(self.right_tabs, 1)
 
     def _build_view_popup_widgets(self):
-        """Construct the overlay widgets shown inside the View ▾ popup
-        (body marker, ellipse, trail, smooth). They live as orphans until
-        `_open_view_popup` reparents them into the dialog. Created here —
-        under the preview-tab section — because they belong with the
-        preview / view feature, not with tracker analysis."""
-        self._body_style_widget = QWidget()
-        body_row = QHBoxLayout(self._body_style_widget)
-        body_row.setContentsMargins(0, 0, 0, 0)
-        body_row.addWidget(QLabel("Body marker:"))
+        """Construct the overlay controls shown in the View popover (body
+        marker, ellipse, trail, smooth). They live as orphans until the
+        popover reparents them. Created here — under the preview-tab
+        section — because they belong with the preview / view feature."""
+        from gui.widgets_v2 import SwitchBox
         self.combo_body_style = QComboBox()
         self.combo_body_style.addItem("Off", "off")
         self.combo_body_style.addItem("Dot (center only)", "dot")
         self.combo_body_style.addItem("Center + Nose + Tail", "ends")
         self.combo_body_style.setCurrentIndex(1)
-        self.combo_body_style.setFixedHeight(24)
         self.combo_body_style.currentIndexChanged.connect(
             lambda: self._on_scrub(self.slider_scrub.value())
         )
-        body_row.addWidget(self.combo_body_style)
 
-        def _overlay_chk(label):
-            c = QCheckBox(label)
-            c.setStyleSheet("font-size:11px;")
-            c.toggled.connect(lambda: self._on_scrub(self.slider_scrub.value()))
-            return c
+        self.chk_ellipse = SwitchBox("Bounding ellipse")
+        self.chk_ellipse.toggled.connect(lambda: self._on_scrub(self.slider_scrub.value()))
+        # Trail on/off is the "Trail" layer chip on the canvas.
+        self.chk_trail = QCheckBox("Trail")
+        self.chk_trail.setChecked(True)
+        self.chk_trail.toggled.connect(lambda: self._on_scrub(self.slider_scrub.value()))
 
-        self.chk_ellipse = _overlay_chk("Bounding ellipse")
-        self.chk_trail   = _overlay_chk("Trail:")
-
-        self._trail_row_widget = QWidget()
-        trail_row = QHBoxLayout(self._trail_row_widget)
-        trail_row.setContentsMargins(0, 0, 0, 0)
-        trail_row.addWidget(self.chk_trail)
         self.spin_trail_len = QSpinBox()
         self.spin_trail_len.setRange(0, 100000)
         self.spin_trail_len.setValue(0)  # "All frames" by default
         self.spin_trail_len.setSuffix(" frames")
         self.spin_trail_len.setSpecialValueText("All frames")
-        self.spin_trail_len.setFixedWidth(95)
-        self.spin_trail_len.setFixedHeight(24)
         self.spin_trail_len.setToolTip("Trail length in frames. Set to 0 for full path.")
         self.spin_trail_len.valueChanged.connect(
             lambda: self._on_scrub(self.slider_scrub.value())
         )
-        trail_row.addWidget(self.spin_trail_len)
-        self.chk_trail_fade = QCheckBox("Fade")
-        self.chk_trail_fade.setChecked(False)
+        self.chk_trail_fade = SwitchBox("Fade older segments")
+        self.chk_trail_fade.setChecked(True)
         self.chk_trail_fade.setToolTip(
             "On: older trail segments dimmer/thinner.\n"
-            "Off (default): solid body-color trail throughout."
+            "Off: solid body-color trail throughout."
         )
         self.chk_trail_fade.toggled.connect(
             lambda: self._on_scrub(self.slider_scrub.value())
         )
-        trail_row.addWidget(self.chk_trail_fade)
 
-        self._smooth_row_widget = QWidget()
-        smooth_row = QHBoxLayout(self._smooth_row_widget)
-        smooth_row.setContentsMargins(0, 0, 0, 0)
-        smooth_row.addWidget(QLabel("Smooth path:"))
         self.spin_smooth = QSpinBox()
         self.spin_smooth.setRange(0, 30)
         self.spin_smooth.setValue(0)
         self.spin_smooth.setSuffix(" frames")
         self.spin_smooth.setSpecialValueText("Off")
-        self.spin_smooth.setFixedWidth(85)
-        self.spin_smooth.setFixedHeight(24)
         self.spin_smooth.setToolTip(
             "Moving-average window over the body-center track.\n"
             "Reduces frame-to-frame jitter. 0 = off."
         )
         self.spin_smooth.valueChanged.connect(self._on_smooth_changed)
-        smooth_row.addWidget(self.spin_smooth)
 
     def _build_preview_tab(self):
         # Build the View popup's overlay widgets first so they're ready
@@ -1185,8 +1354,8 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
 
         w = QWidget()
         vlay = QVBoxLayout(w)
-        vlay.setContentsMargins(0, 0, 0, 4)
-        vlay.setSpacing(4)
+        vlay.setContentsMargins(0, 0, 0, 0)
+        vlay.setSpacing(0)
 
         self.zone_drawer = ZoneDrawer()
         self.zone_drawer.zones_changed.connect(self._on_zones_changed)
@@ -1255,14 +1424,90 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         # backwards-compat with Simple-mode logic but is no longer visible.
         self._fix_widget.setVisible(False)
 
-        scrub_row = QHBoxLayout()
-        scrub_row.setContentsMargins(6, 0, 6, 0)
-        scrub_row.setSpacing(4)
-        self.btn_step_prev = self._btn("◀", width=24)
-        self.btn_step_prev.setEnabled(False)
-        self.btn_step_prev.clicked.connect(
-            lambda: self.slider_scrub.setValue(max(0, self.slider_scrub.value() - 1))
+        # ── Transport: buttons, time, frame, actions, speed timeline, scrubber
+        from gui.widgets_v2 import IconButton, KeyedButton
+        from gui.redesign_widgets import SpeedTimeline, TimeTicks
+        card = QFrame()
+        card.setObjectName("TransportCard")
+        cv = QVBoxLayout(card)
+        cv.setContentsMargins(14, 10, 14, 10)
+        cv.setSpacing(0)
+
+        row1 = QHBoxLayout()
+        row1.setSpacing(12)
+        grp = QFrame()
+        grp.setObjectName("TransportGroup")
+        gh = QHBoxLayout(grp)
+        gh.setContentsMargins(2, 2, 2, 2)
+        gh.setSpacing(2)
+        self.btn_step_first = IconButton("first", 12, "TEXT_2", "TEXT", "First frame (Home)", 28)
+        self.btn_step_first.clicked.connect(
+            lambda: self.slider_scrub.setValue(self.slider_scrub.minimum())
         )
+        self.btn_step_prev = IconButton("prev", 12, "TEXT_2", "TEXT",
+                                        "Step 1 (←) · Shift 10 · Ctrl 100", 28)
+        self.btn_step_prev.clicked.connect(
+            lambda: self.slider_scrub.setValue(max(self.slider_scrub.minimum(), self.slider_scrub.value() - 1))
+        )
+        self.btn_play = IconButton("play", 12, "ON_ACCENT", "ON_ACCENT", "Play / pause (Space)",
+                                   28, "primary")
+        self.btn_play.setFixedSize(38, 28)
+        self.btn_play.clicked.connect(self._toggle_play)
+        self.btn_step_next = IconButton("next", 12, "TEXT_2", "TEXT", "Step 1 (→)", 28)
+        self.btn_step_next.clicked.connect(
+            lambda: self.slider_scrub.setValue(min(self.slider_scrub.maximum(), self.slider_scrub.value() + 1))
+        )
+        self.btn_step_last = IconButton("last", 12, "TEXT_2", "TEXT", "Last frame (End)", 28)
+        self.btn_step_last.clicked.connect(
+            lambda: self.slider_scrub.setValue(self.slider_scrub.maximum())
+        )
+        for b in (self.btn_step_first, self.btn_step_prev, self.btn_play,
+                  self.btn_step_next, self.btn_step_last):
+            b.setEnabled(False)
+            gh.addWidget(b)
+        row1.addWidget(grp)
+
+        self.lbl_scrub = QLabel("—")
+        self.lbl_scrub.setProperty("role", "scrub")
+        self.lbl_total = QLabel("")
+        self.lbl_total.setProperty("role", "scrubtotal")
+        tbox = QHBoxLayout()
+        tbox.setSpacing(6)
+        tbox.addWidget(self.lbl_scrub, 0, Qt.AlignBottom)
+        tbox.addWidget(self.lbl_total, 0, Qt.AlignBottom)
+        row1.addLayout(tbox)
+
+        fblock = QFrame()
+        fblock.setObjectName("FrameBlock")
+        fv = QVBoxLayout(fblock)
+        fv.setContentsMargins(12, 0, 0, 0)
+        fv.setSpacing(1)
+        fcap = QLabel("FRAME")
+        fcap.setProperty("role", "cellcap")
+        self.lbl_frame = QLabel("")
+        self.lbl_frame.setProperty("role", "frame")
+        fv.addWidget(fcap)
+        fv.addWidget(self.lbl_frame)
+        row1.addWidget(fblock)
+        row1.addStretch(1)
+
+        self.btn_miss_card = KeyedButton("Next miss", "N", lead="dot")
+        self.btn_miss_card.setToolTip("Jump to next frame with no detection (N)")
+        self.btn_miss_card.setEnabled(False)
+        self.btn_miss_card.clicked.connect(self._jump_next_miss)
+        self.btn_corr_card = KeyedButton("Corrections…", "⌃K", lead="edit")
+        self.btn_corr_card.setToolTip("Manual tracking corrections (Ctrl+K)")
+        self.btn_corr_card.clicked.connect(self._open_corrections_popup)
+        row1.addWidget(self.btn_miss_card)
+        row1.addWidget(self.btn_corr_card)
+        self.btn_view_popup.hide()   # the View button now floats on the canvas
+        cv.addLayout(row1)
+        cv.addSpacing(12)
+
+        self.speed_timeline = SpeedTimeline()
+        self.speed_timeline.seek.connect(self._on_timeline_seek)
+        cv.addWidget(self.speed_timeline)
+
         self.slider_scrub = QSlider(Qt.Horizontal)
         self.slider_scrub.setMinimum(0)
         self.slider_scrub.setMaximum(0)
@@ -1278,51 +1523,48 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             "E  toggle View Effects"
         )
         self.slider_scrub.valueChanged.connect(self._on_scrub)
-        self.btn_step_next = self._btn("▶", width=24)
-        self.btn_step_next.setEnabled(False)
-        self.btn_step_next.clicked.connect(
-            lambda: self.slider_scrub.setValue(min(self.slider_scrub.maximum(), self.slider_scrub.value() + 1))
-        )
-        scrub_row.addWidget(self.btn_step_prev)
-        scrub_row.addWidget(self.slider_scrub, 1)
-        scrub_row.addWidget(self.btn_step_next)
-        vlay.addLayout(scrub_row)
+        srow = QHBoxLayout()
+        srow.setContentsMargins(SpeedTimeline.LEFT, 6, 0, 0)
+        srow.addWidget(self.slider_scrub)
+        cv.addLayout(srow)
+        self.time_ticks = TimeTicks()
+        trow = QHBoxLayout()
+        trow.setContentsMargins(SpeedTimeline.LEFT, 2, 0, 0)
+        trow.addWidget(self.time_ticks)
+        cv.addLayout(trow)
+        vlay.addWidget(card)
 
-        # Footer: centered time/duration label, with a small View ▾ button
-        # pinned to the right.
-        footer_row = QHBoxLayout()
-        footer_row.setContentsMargins(6, 0, 6, 0)
-        footer_row.setSpacing(4)
-        self.lbl_scrub = QLabel("—")
-        self.lbl_scrub.setAlignment(Qt.AlignCenter)
-        self.lbl_scrub.setStyleSheet("color:#888; font-size:11px;")
-        # Shrink the View button to a compact size on the right.
-        self.btn_view_popup.setFixedSize(70, 22)
-        self.btn_view_popup.setText("View ▾")
-        footer_row.addStretch(1)
-        footer_row.addWidget(self.lbl_scrub)
-        footer_row.addStretch(1)
-        footer_row.addWidget(self.btn_view_popup)
-        vlay.addLayout(footer_row)
-
+        self._play_timer = QTimer(self)
+        self._play_timer.timeout.connect(self._play_tick)
         # Overlay controls (body style / ellipse / trail / smooth)
         # now live in the configuration pane only.
 
         # Legend / dot-color controls live in the View popup, not under the
         # video. Built here so the widget exists; the popup re-parents it.
         self._legend_widget = self._build_legend()
-        return w
 
+        # Floating canvas chrome (tools / layers / View / legend) + sidebar.
+        from gui.redesign_widgets import MeasurementsPanel
+        from gui.canvas_chrome import attach_canvas_chrome
+        attach_canvas_chrome(self)
+        self.measure_panel = MeasurementsPanel()
+        outer = QWidget()
+        oh = QHBoxLayout(outer)
+        oh.setContentsMargins(0, 0, 0, 0)
+        oh.setSpacing(0)
+        oh.addWidget(w, 1)
+        oh.addWidget(self.measure_panel)
+        return outer
     def _build_legend(self):
         w = QWidget()
         h = QHBoxLayout(w)
         h.setContentsMargins(6, 0, 6, 2)
         h.setSpacing(4)
-        def lbl(text, css="color:#aaa; font-size:10px;"):
+        def lbl(text, tone="faint"):
             l = QLabel(text)
-            l.setStyleSheet(css)
+            theme.set_tone(l, tone, "font-size:10px;")
             return l
-        h.addWidget(lbl("<b>Dots:</b>", "color:#ccc; font-size:10px;"))
+        h.addWidget(lbl("<b>Dots:</b>", "text2"))
         self.btn_dot_colors = QPushButton("Colors")
         self.btn_dot_colors.setFixedHeight(20)
         self.btn_dot_colors.setFixedWidth(60)
@@ -1331,126 +1573,224 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self.btn_dot_colors.clicked.connect(self._open_dot_colors_dialog)
         h.addWidget(self.btn_dot_colors)
         h.addSpacing(8)
-        h.addWidget(lbl("<b>Status:</b>", "color:#ccc; font-size:10px;"))
-        h.addWidget(lbl("<span style='color:#FFFF00'>■</span> Corrected"))
+        h.addWidget(lbl("<b>Status:</b>", "text2"))
+        h.addWidget(lbl("<span style='color:#E8C547'>■</span> Corrected"))
         h.addSpacing(4)
-        h.addWidget(lbl("<span style='color:#FF64C8'>■</span> Interpolated"))
+        h.addWidget(lbl("<span style='color:#D36BA6'>■</span> Interpolated"))
         h.addStretch()
         return w
 
-    def _build_graph_tab(self):
-        w = QWidget()
-        vlay = QVBoxLayout(w)
-        vlay.setContentsMargins(8, 8, 8, 8)
-        vlay.setSpacing(6)
+    # graph name → (panel title, list description)
+    _GRAPH_INFO = {
+        "Trajectory":      ("Trajectory", "Path · start / end"),
+        "Heatmap":         ("Occupancy heatmap", "Occupancy · 2 cm bins"),
+        "Cell Time":       ("Time per grid cell", "Grid 4×4 · s per cell"),
+        "Speed":           ("Speed over time", "Speed over time"),
+        "Speed Histogram": ("Speed distribution", "Distribution · 1 cm/s bins"),
+        "Habituation":     ("Habituation", "Distance per time bin"),
+        "Zone Time":       ("Zone time", "Center vs periphery"),
+        "Triplets":        ("Triplet quality", "Arm-entry triplets"),
+    }
 
-        self._graph_selector_row = QHBoxLayout()
-        self._combo_graph = QComboBox()
-        self._combo_graph.setFixedHeight(24)
+    def _build_graph_tab(self):
+        from gui.out_widgets import OutPanel
+        w = QWidget()
+        hl = QHBoxLayout(w)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(16)
+
+        # hidden data holder: the combo keeps the list of available graphs
+        self._combo_graph = QComboBox(w)
+        self._combo_graph.hide()
         self._combo_graph.currentIndexChanged.connect(self._on_graph_select)
-        self._graph_selector_row.addWidget(QLabel("Show:"))
-        self._graph_selector_row.addWidget(self._combo_graph)
-        self._graph_selector_row.addStretch()
-        selector_widget = QWidget()
-        selector_widget.setLayout(self._graph_selector_row)
-        # Customize Graphs lives in the View menu now (View → Customize graphs…).
-        selector_widget.setVisible(True)
-        self._graph_selector_widget = selector_widget
-        vlay.addWidget(selector_widget)
+
+        # left: graph list
+        left = OutPanel()
+        left.setFixedWidth(200)
+        self._graph_list_lay = QVBoxLayout()
+        self._graph_list_lay.setContentsMargins(4, 4, 4, 4)
+        self._graph_list_lay.setSpacing(0)
+        left.body.addLayout(self._graph_list_lay)
+        left.body.addStretch(1)
+        self._graph_selector_widget = left
+        self._graph_items = []
 
         self.lbl_graph_hint = QLabel("Run tracking first to see graphical output.")
         self.lbl_graph_hint.setAlignment(Qt.AlignCenter)
-        self.lbl_graph_hint.setStyleSheet("color:#888; font-size:12px;")
-        vlay.addWidget(self.lbl_graph_hint)
+        theme.set_tone(self.lbl_graph_hint, "faint", "font-size:12px;")
 
-        self._graph_scroll = QScrollArea()
-        self._graph_scroll.setWidgetResizable(True)
-        self._graph_scroll.setFrameShape(QFrame.NoFrame)
-        self._graph_scroll.setVisible(False)
+        # right: figure panel
+        right = OutPanel("")
+        right.bar.show()
+        right.setMaximumWidth(820)
+        self._graph_title = right.title
+        b_cust = right.add_button("Customize…  Ctrl+G", lambda: self._open_graph_style_dialog())
+        b_cust.setToolTip("Edit per-graph colors, widths, labels, colormap, grid, and presets")
+        seg = QFrame()
+        seg.setObjectName("ExportSeg")
+        sh = QHBoxLayout(seg)
+        sh.setContentsMargins(0, 0, 0, 0)
+        sh.setSpacing(0)
+        for ext in ("SVG", "PDF", "PNG"):
+            b = QPushButton(ext)
+            b.setProperty("segbtn", True)
+            b.setFixedHeight(22)
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(lambda _=False, e=ext.lower(): self._export_graph_fmt(e))
+            sh.addWidget(b)
+        right._bar_layout.addWidget(seg)
+
+        self._graph_scroll = right          # toggled by _populate_graph_tab
         self._graph_lbl = _FitLabel()
-        self._graph_scroll.setWidget(self._graph_lbl)
-        # Right-click → Save as SVG / PDF / PNG.
+        self._graph_lbl.setMinimumHeight(320)
         self._graph_lbl.setContextMenuPolicy(Qt.CustomContextMenu)
         self._graph_lbl.customContextMenuRequested.connect(
             lambda _pos: self._export_current_graph_dialog()
         )
         self._graph_lbl.setToolTip("Right-click to export as SVG / PDF / PNG.")
-        vlay.addWidget(self._graph_scroll, 1)
-        # Spacer to keep selector pinned to top when scroll is hidden.
-        vlay.addStretch(0)
+        fig_box = QWidget()
+        fv = QVBoxLayout(fig_box)
+        fv.setContentsMargins(20, 16, 20, 8)
+        fv.setSpacing(0)
+        fv.addWidget(self._graph_lbl, 1)
+        self._graph_caption = QLabel("")
+        self._graph_caption.setWordWrap(True)
+        self._graph_caption.setObjectName("GraphCaption")
+        theme.set_tone(self._graph_caption, "text2", "font-size:11px;")
+        fv.addSpacing(8)
+        fv.addWidget(self._graph_caption)
+        right.body.addWidget(fig_box, 1)
+        right.hide()
+
+        col = QVBoxLayout()
+        col.addWidget(self.lbl_graph_hint)
+        col.addWidget(left)
+        hl.addLayout(col, 0)
+        hl.addWidget(right, 1)
+        left.hide()
 
         self._graph_pixmaps = {}
         return w
+
+    def _rebuild_graph_list(self):
+        """(Re)create the left-hand graph buttons from the combo entries."""
+        lay = self._graph_list_lay
+        while lay.count():
+            it = lay.takeAt(0)
+            wd = it.widget()
+            if wd is not None:
+                wd.setParent(None)
+                wd.deleteLater()
+        self._graph_items = []
+        for i in range(self._combo_graph.count()):
+            name = self._combo_graph.itemText(i)
+            title, desc = self._GRAPH_INFO.get(name, (name, ""))
+            from gui.widgets_v2 import LayoutButton
+            b = LayoutButton()
+            b.setProperty("graphitem", True)
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setFocusPolicy(Qt.NoFocus)
+            lay_b = QVBoxLayout(b)
+            lay_b.setContentsMargins(10, 7, 10, 7)
+            lay_b.setSpacing(0)
+            t1 = QLabel(name)
+            t1.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            t1.setProperty("role", "graphname")
+            lay_b.addWidget(t1)
+            if desc:
+                t2 = QLabel(desc)
+                t2.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+                t2.setProperty("role", "graphdesc")
+                lay_b.addWidget(t2)
+            b.clicked.connect(lambda _=False, k=i: self._combo_graph.setCurrentIndex(k))
+            lay.addWidget(b)
+            self._graph_items.append(b)
+        self._sync_graph_panel(self._combo_graph.currentText())
+
+    def _sync_graph_panel(self, name):
+        for i, b in enumerate(getattr(self, "_graph_items", [])):
+            b.setChecked(i == self._combo_graph.currentIndex())
+        title = self._GRAPH_INFO.get(name, (name, ""))[0]
+        if hasattr(self, "_graph_title"):
+            self._graph_title.setText(title)
+            self._graph_caption.setText(self._graph_caption_text(name))
+
+    def _graph_caption_text(self, name):
+        m = self.metrics or {}
+        fps = float(self.fps or 30.0)
+        n = len(self.tracking_results) if self.tracking_results else 0
+        dur = n / fps if n else 0.0
+        dist = m.get("Total Distance (cm)")
+        dims = getattr(self.zone_drawer, "cage_dims_cm", None)
+        pct = self.spin_center_pct.value() if hasattr(self, "spin_center_pct") else None
+        if name == "Trajectory":
+            bits = f"Body-centroid path over {dur:.0f} s"
+            if dims:
+                bits += f" in a {dims[0]:g} × {dims[1]:g} cm arena"
+            bits += "."
+            if pct:
+                bits += f" Dashed square: center zone ({pct} % of arena side)."
+            if isinstance(dist, (int, float)):
+                bits += f" Total distance {dist:.1f} cm."
+            return bits
+        if name == "Heatmap":
+            vmax = getattr(self, "_heat_vmax", 0.0)
+            return ("Cumulative time per bin, square-root colour scale (viridis)."
+                    + (f" Max {vmax:.1f} s per bin." if vmax else ""))
+        if name == "Cell Time":
+            return "Time spent in each of the 16 grid cells."
+        if name == "Speed":
+            return ("Instantaneous body-centroid speed. Dashed: movement threshold "
+                    "used for mobility / immobility time.")
+        if name == "Speed Histogram":
+            med, p90, p99 = m.get("Median Speed (cm/s)"), m.get("P90 Speed (cm/s)"), m.get("P99 Speed (cm/s)")
+            tail = (f" Median {med}, P90 {p90}, P99 {p99} cm/s." if med is not None else "")
+            return "Time spent per speed bin." + tail
+        if name == "Habituation":
+            b = self.spin_bin_size.value() if hasattr(self, "spin_bin_size") else 0
+            return (f"Distance travelled per {b:g} s bin. " if b else "Distance travelled per time bin. ") + \
+                   "A negative slope indicates within-session habituation."
+        if name == "Zone Time":
+            return "Time in the center zone, periphery, and thigmotaxis band."
+        return ""
+
+    def _export_graph_fmt(self, ext):
+        """SVG / PDF / PNG buttons of the graph panel."""
+        name = self._combo_graph.currentText()
+        if self.raw_df is None or not name:
+            return
+        out_folder = self.config.get("output_folder") or ""
+        default = os.path.join(out_folder, f"{name}.{ext}") if out_folder else f"{name}.{ext}"
+        path, _ = QFileDialog.getSaveFileName(self, f"Export {name}", default,
+                                              f"{ext.upper()} (*.{ext})")
+        if path and not self._export_graph_to_path(name, path):
+            QMessageBox.warning(self, "Export failed",
+                                "Could not write the graph file. See the log for details.")
 
     # Preset that tags the standard 4×4 layout: corners, edges (perimeter
     # non-corner), middle (inner 2×2).
 
     def _build_excel_tab(self):
+        from gui.out_widgets import OutPanel, SubTabHeader, copy_table_all, padded
+        from gui.table_copy import enable_excel_copy
         w = QWidget()
         vlay = QVBoxLayout(w)
-        vlay.setContentsMargins(4, 4, 4, 4)
-        vlay.setSpacing(4)
+        vlay.setContentsMargins(0, 0, 0, 0)
+        vlay.setSpacing(0)
 
-        # Metric toolbar: Move threshold + Time bin. Both recompute live —
-        # they don't change tracked frames, only metric output. Wrapped so
-        # the toolbar is hidden in Simple mode.
-        metric_widget = QWidget()
-        metric_row = QHBoxLayout(metric_widget)
-        metric_row.setContentsMargins(0, 0, 0, 0)
-        metric_row.setSpacing(6)
-        metric_row.addWidget(QLabel("Move threshold:"))
-        self.spin_movement_thr = QDoubleSpinBox()
-        self.spin_movement_thr.setRange(0.0, 100.0)
-        self.spin_movement_thr.setDecimals(2)
-        self.spin_movement_thr.setSingleStep(0.1)
-        self.spin_movement_thr.setValue(0.0)
-        # Suffix is set to cm/s or px/s depending on calibration state.
-        # _refresh_move_threshold_suffix() keeps it in sync.
-        self.spin_movement_thr.setSuffix(" cm/s")
-        self.spin_movement_thr.setSpecialValueText("Off")
-        self.spin_movement_thr.setFixedWidth(105)
-        self.spin_movement_thr.setFixedHeight(24)
-        self.spin_movement_thr.setToolTip(
-            "Speed below this counts as immobile.\n"
-            "Units track calibration: cm/s if scale-bar is drawn, else px/s."
-            "\n0 = off (every frame counts as moving)."
-        )
-        # Move threshold affects: metrics dict + bin_df (via _bin_metrics).
-        # Graphs affected: Habituation only (reads bin_df).
-        self.spin_movement_thr.valueChanged.connect(
-            lambda _: self._schedule_narrow_recompute({"Habituation"})
-        )
-        metric_row.addWidget(self.spin_movement_thr)
-        # Sync suffix once at build; later calls happen on each recompute.
-        try:
-            self._refresh_move_threshold_suffix()
-        except Exception:
-            pass
-
-        metric_row.addSpacing(12)
-        metric_row.addWidget(QLabel("Time bin:"))
-        self.spin_bin_size = QDoubleSpinBox()
-        self.spin_bin_size.setRange(0.0, 3600.0)
-        self.spin_bin_size.setDecimals(1)
-        self.spin_bin_size.setSingleStep(30.0)
-        self.spin_bin_size.setValue(0.0)
-        self.spin_bin_size.setSuffix(" s")
-        self.spin_bin_size.setSpecialValueText("Off")
-        self.spin_bin_size.setFixedWidth(95)
-        self.spin_bin_size.setFixedHeight(24)
-        self.spin_bin_size.setToolTip(
-            "Bin size for per-bin metrics. 0 = off (no bin breakdown).\n"
-            "Common: 60 (1 min), 300 (5 min)."
-        )
-        # Time bin affects: bin_df + Habituation slope / first-bin summary
-        # metrics. Graphs affected: Habituation only.
-        self.spin_bin_size.valueChanged.connect(
-            lambda _: self._schedule_narrow_recompute({"Habituation"})
-        )
-        metric_row.addWidget(self.spin_bin_size)
-        metric_row.addStretch()
-        vlay.addWidget(metric_widget)
-        self._advanced_widgets.append(metric_widget)
+        # Analysis read-out (edited in the Analysis card) shown on the right
+        # of the sub-tab strip.
+        self.lbl_out_thr = QLabel("")
+        self.lbl_out_bin = QLabel("")
+        for lb in (self.lbl_out_thr, self.lbl_out_bin):
+            lb.setTextFormat(Qt.RichText)
+            theme.set_tone(lb, "text2", "font-size:11px;")
+        btn_edit_metrics = QPushButton("Edit")
+        btn_edit_metrics.setFixedHeight(24)
+        btn_edit_metrics.setToolTip("Open the Analysis card")
+        btn_edit_metrics.clicked.connect(self._open_analysis_card)
+        self._out_metric_widgets = (self.lbl_out_thr, self.lbl_out_bin, btn_edit_metrics)
 
         # Annotated-video export widgets — created here as headless attrs;
         # the batch tab's Export tab reparents them.
@@ -1463,8 +1803,23 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self.lbl_excel_hint.setVisible(False)
 
         self._excel_tabs = QTabWidget()
+        self._excel_tabs.setObjectName("ExcelTabs")
 
-        # ── Summary tab: placeholder until tracking populates the table.
+        def _table(cols):
+            tb = QTableWidget()
+            tb.setProperty("out", True)
+            tb.setEditTriggers(QTableWidget.NoEditTriggers)
+            tb.setShowGrid(False)
+            tb.setFrameShape(QFrame.NoFrame)
+            tb.verticalHeader().setVisible(False)
+            tb.verticalHeader().setDefaultSectionSize(30)
+            if cols:
+                tb.setColumnCount(len(cols))
+                tb.setHorizontalHeaderLabels(cols)
+            enable_excel_copy(tb)
+            return tb
+
+        # ── Summary tab: grouped metrics (label · value · unit)
         summary_wrap = QWidget()
         sv = QVBoxLayout(summary_wrap)
         sv.setContentsMargins(0, 0, 0, 0)
@@ -1473,20 +1828,22 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             "Run tracking first to see the data output."
         )
         self.lbl_summary_placeholder.setAlignment(Qt.AlignCenter)
-        self.lbl_summary_placeholder.setStyleSheet("color:#888; font-size:12px;")
+        theme.set_tone(self.lbl_summary_placeholder, "faint", "font-size:12px;")
         sv.addWidget(self.lbl_summary_placeholder, 1)
-        from gui.table_copy import enable_excel_copy
-        self._table_summary = QTableWidget()
-        self._table_summary.setEditTriggers(QTableWidget.NoEditTriggers)
-        self._table_summary.setColumnCount(2)
-        self._table_summary.setHorizontalHeaderLabels(["Metric", "Value"])
-        self._table_summary.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self._table_summary = _table(None)
+        self._table_summary.setColumnCount(3)
+        self._table_summary.horizontalHeader().setVisible(False)
         self._table_summary.setVisible(False)
-        enable_excel_copy(self._table_summary)
-        sv.addWidget(self._table_summary, 1)
-        self._excel_tabs.addTab(summary_wrap, "Summary")
+        self._summary_panel = OutPanel("Summary")
+        self._summary_panel.add_button("Copy table", lambda: copy_table_all(self._table_summary, False))
+        self._summary_panel.body.addWidget(self._table_summary)
+        self._summary_panel.setMaximumWidth(880)
+        self._summary_panel.hide()
+        sv.addWidget(self._summary_panel, 0)
+        sv.addStretch(1)
+        self._excel_tabs.addTab(padded(summary_wrap), "Summary")
 
-        # ── Raw Data tab: placeholder until tracking populates the table.
+        # ── Raw Data tab
         raw_wrap = QWidget()
         rv = QVBoxLayout(raw_wrap)
         rv.setContentsMargins(0, 0, 0, 0)
@@ -1495,66 +1852,106 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             "Run tracking first to see the data output."
         )
         self.lbl_raw_placeholder.setAlignment(Qt.AlignCenter)
-        self.lbl_raw_placeholder.setStyleSheet("color:#888; font-size:12px;")
+        theme.set_tone(self.lbl_raw_placeholder, "faint", "font-size:12px;")
         rv.addWidget(self.lbl_raw_placeholder, 1)
-        self._table_raw = QTableWidget()
-        self._table_raw.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._table_raw = _table(None)
         self._table_raw.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self._table_raw.verticalHeader().setDefaultSectionSize(28)
         self._table_raw.setVisible(False)
-        enable_excel_copy(self._table_raw)
-        rv.addWidget(self._table_raw, 1)
-        self._excel_tabs.addTab(raw_wrap, "Raw Data")
+        self._raw_panel = OutPanel("Raw data")
+        self._raw_panel.add_button("Copy table", lambda: copy_table_all(self._table_raw))
+        self._raw_panel.body.addWidget(self._table_raw)
+        self._raw_panel.hide()
+        rv.addWidget(self._raw_panel, 1)
+        self._excel_tabs.addTab(padded(raw_wrap), "Raw data")
 
-        self._excel_tabs.addTab(self._graph_widget, "Graphs")
+        self._excel_tabs.addTab(padded(self._graph_widget), "Graphs")
         # Tracking Issues — glitch detector + table + mini map + actions.
-        self._excel_tabs.addTab(self._build_tracking_issues_tab(),
-                                "Tracking Issues")
+        self._excel_tabs.addTab(padded(self._build_tracking_issues_tab()),
+                                "Tracking issues")
         # Cell-Info tab is OF-specific (4×4 grid region labeling). YMazeTab
         # inherits the OF mixin so the method exists, but the tab is
         # irrelevant for Y-Maze — gate on experiment key.
         exp = getattr(self, "experiment", None)
         if (hasattr(self, "_build_cell_info_tab")
                 and exp is not None and exp.key == "open_field"):
-            self._excel_tabs.addTab(self._build_cell_info_tab(), "Cell Info")
+            self._excel_tabs.addTab(padded(self._build_cell_info_tab()), "Cell info")
 
         # Video Config tab — mirrors the Excel "Video Config" sheet.
+        self._table_video_config = _table(["Setting", "Value"])
+        self._table_video_config.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self._table_video_config.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self._table_video_config.verticalHeader().setDefaultSectionSize(28)
+        vc_panel = OutPanel()
+        vc_panel.body.addWidget(self._table_video_config)
+        vc_panel.setMaximumWidth(720)
         vc_wrap = QWidget()
         vcv = QVBoxLayout(vc_wrap)
         vcv.setContentsMargins(0, 0, 0, 0)
-        vcv.setSpacing(0)
-        self._table_video_config = QTableWidget()
-        self._table_video_config.setEditTriggers(QTableWidget.NoEditTriggers)
-        self._table_video_config.setColumnCount(2)
-        self._table_video_config.setHorizontalHeaderLabels(["Setting", "Value"])
-        self._table_video_config.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self._table_video_config.verticalHeader().setVisible(False)
-        enable_excel_copy(self._table_video_config)
-        vcv.addWidget(self._table_video_config, 1)
-        self._excel_tabs.addTab(vc_wrap, "Video Config")
+        vcv.addWidget(vc_panel, 1)
+        self._excel_tabs.addTab(padded(vc_wrap), "Video config")
 
+        self._out_header = SubTabHeader(self._excel_tabs, self._out_metric_widgets)
+        vlay.addWidget(self._out_header)
         vlay.addWidget(self._excel_tabs, 1)
 
         self.lbl_excel_note = QLabel("")
-        self.lbl_excel_note.setStyleSheet("color:#888; font-size:10px;")
+        theme.set_tone(self.lbl_excel_note, "faint", "font-size:10px;")
+        self.lbl_excel_note.setContentsMargins(16, 4, 16, 4)
         self.lbl_excel_note.setVisible(False)
         vlay.addWidget(self.lbl_excel_note)
 
         vlay.addWidget(self._build_export_bar())
+        theme.notifier.changed.connect(self._on_theme_output)
+        theme.notifier.changed.connect(self._on_theme_graphs)
         return w
+
+    def _on_theme_output(self, _mode):
+        """Table items bake colours at population time — repopulate."""
+        try:
+            if self.metrics:
+                self._refresh_summary_table()
+        except Exception:
+            pass
 
     def _build_controls(self):
         panel = QFrame()
         panel.setMinimumWidth(280)
-        panel.setFrameShape(QFrame.StyledPanel)
+        panel.setFrameShape(QFrame.NoFrame)
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
-        layout.addWidget(self._step_source())
-        layout.addWidget(self._step_geometry())
-        layout.addWidget(self._step_scale())
-        layout.addWidget(self._step_detection())
-        layout.addWidget(self._step_analysis())
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        # Each step builder registers its accordion card(s) via _group() in
+        # display order (some steps create two: Video+Animal, Arena+Zones,
+        # Tracking+Analysis).
+        self._cards = []
+        self._step_source()
+        self._step_geometry()
+        self._step_scale()
+        self._step_detection()
+        self._step_analysis()
+        default_open = {"geometry": True, "zones": True, "detection": True}
+        for i, g in enumerate(self._cards, start=1):
+            g._header.set_number(i)
+            lay = g.layout()
+            if lay is not None:
+                lay.setContentsMargins(48, 0, 14, 14)
+                lay.setSpacing(7)
+            layout.addWidget(g)
+            g.setChecked(default_open.get(g._status_id, False))
+            g._header.set_open(g.isChecked())
         layout.addStretch()
+        # Plain on/off checkboxes inside the cards (Y-Maze / EPM / NOR
+        # builders, Nose etc.) get the switch look; SwitchBox paints its own.
+        from gui.widgets_v2 import SwitchBox
+        for card in self._cards:
+            for cb in card.findChildren(QCheckBox):
+                if not isinstance(cb, SwitchBox) and not cb.property("chip"):
+                    cb.setProperty("switch", True)
+        self._step_summary_timer = QTimer(self)
+        self._step_summary_timer.setInterval(400)
+        self._step_summary_timer.timeout.connect(self._refresh_step_cards)
+        self._step_summary_timer.start()
         return panel
 
     def _step_source(self):
@@ -1580,17 +1977,21 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
 
     def _build_export_bar(self):
         w = QWidget()
+        w.setObjectName("OutFooter")
+        w.setAttribute(Qt.WA_StyledBackground, True)
         h = QHBoxLayout(w)
-        h.setContentsMargins(4, 4, 4, 4)
+        h.setContentsMargins(16, 8, 16, 8)
         h.setSpacing(8)
-        self.btn_export = self._btn("Export to Excel", width=130)
+        self.lbl_export = QLabel("Autosaved to backup after each run")
+        self.lbl_export.setWordWrap(True)
+        theme.set_tone(self.lbl_export, "text2", "font-size:11px;")
+        self.btn_export = QPushButton("Export to Excel")
+        self.btn_export.setFixedHeight(28)
+        self.btn_export.setProperty("primary", True)
         self.btn_export.setEnabled(False)
         self.btn_export.clicked.connect(self._export)
-        self.lbl_export = QLabel("")
-        self.lbl_export.setWordWrap(True)
-        self.lbl_export.setStyleSheet("color:#888; font-size:11px;")
-        h.addWidget(self.btn_export)
         h.addWidget(self.lbl_export, 1)
+        h.addWidget(self.btn_export)
         return w
 
     # ── Step 1 ────────────────────────────────────────────────────────────
@@ -1697,12 +2098,11 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self.slider_scrub.setEnabled(True)
         self.btn_step_prev.setEnabled(True)
         self.btn_step_next.setEnabled(True)
+        self._refresh_redesign_data()
         self._update_scrub_label(0, frame_count)
 
         name = os.path.basename(path)
-        self.lbl_video.setText(
-            f"{name}\n{self.video_w}×{self.video_h}  |  {self.fps:.1f} fps  |  {duration:.1f}s"
-        )
+        self.lbl_video.setText(name)
         # Only log on a real new-video load, not when the same path is being
         # re-loaded into the embedded preview after a run finishes.
         if path != getattr(self, "_last_logged_video_path", None):
@@ -1714,9 +2114,9 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             )
             self._last_logged_video_path = path
         if hasattr(self, "lbl_fps_detected"):
-            self.lbl_fps_detected.setText(f"{self.fps:.1f}")
+            self.lbl_fps_detected.setText(f"{self.fps:.2f} fps")
         if hasattr(self, "lbl_resolution"):
-            self.lbl_resolution.setText(f"{self.video_w} × {self.video_h}")
+            self.lbl_resolution.setText(f"{self.video_w} × {self.video_h} px")
         for name in ("btn_calib", "btn_arena", "btn_auto_arena",
                      "btn_excl", "btn_view_processed"):
             btn = getattr(self, name, None)
@@ -1746,7 +2146,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
 
         # Build preview background asynchronously
         self.lbl_adjust.setText("Building preview background…")
-        self.lbl_adjust.setStyleSheet("color:#888; font-size:11px;")
+        theme.set_tone(self.lbl_adjust, "faint", "font-size:11px;")
         # Defensively probe the cached thread — its C++ side may have been
         # deleted by deleteLater() in _cleanup_bg_builder, in which case any
         # method call on the Python wrapper raises RuntimeError.
@@ -1851,20 +2251,20 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             self.zone_drawer.calib_p2 = None
             self.btn_clear_calib.setEnabled(False)
             self.lbl_calib.setText("Not calibrated — distances will be in pixels")
-            self.lbl_calib.setStyleSheet("color:#888; font-size:11px;")
+            theme.set_tone(self.lbl_calib, "faint", "font-size:11px;")
         self.zone_drawer.set_mode(ZoneDrawer.MODE_CALIB)
 
     def _clear_calib(self):
         self.zone_drawer.clear_calibration()
         self.btn_clear_calib.setEnabled(False)
         self.lbl_calib.setText("Not calibrated — distances will be in pixels")
-        self.lbl_calib.setStyleSheet("color:#888; font-size:11px;")
+        theme.set_tone(self.lbl_calib, "faint", "font-size:11px;")
 
     def _update_calib_status(self):
         mode = self._calib_mode() if hasattr(self, "rb_calib_auto") else None
         if mode == "none":
             self.lbl_calib.setText("Calibration off — distances will be in pixels")
-            self.lbl_calib.setStyleSheet("color:#888; font-size:11px;")
+            theme.set_tone(self.lbl_calib, "faint", "font-size:11px;")
             if hasattr(self, "btn_clear_calib"):
                 self.btn_clear_calib.setEnabled(False)
             self.set_step_status("scale", "warn")
@@ -1874,7 +2274,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
                 pxcm = self.zone_drawer.get_pixels_per_cm(self.spin_cm.value())
                 if pxcm:
                     self.lbl_calib.setText(f"Calibrated (line): {pxcm:.2f} px/cm")
-                    self.lbl_calib.setStyleSheet("color:#4CAF50; font-size:11px;")
+                    theme.set_tone(self.lbl_calib, "ok", "font-size:11px;")
                     self.btn_clear_calib.setEnabled(True)
                     self.set_step_status("scale", "ok")
                     return
@@ -1882,11 +2282,11 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             auto = self._auto_px_per_cm()
             if auto:
                 self.lbl_calib.setText(f"Auto-calibrated from cage: {auto:.2f} px/cm")
-                self.lbl_calib.setStyleSheet("color:#3CA0FF; font-size:11px;")
+                theme.set_tone(self.lbl_calib, "accent", "font-size:11px;")
                 self.set_step_status("scale", "ok")
                 return
         self.lbl_calib.setText("Not calibrated — distances will be in pixels")
-        self.lbl_calib.setStyleSheet("color:#888; font-size:11px;")
+        theme.set_tone(self.lbl_calib, "faint", "font-size:11px;")
         self.set_step_status("scale", "warn")
 
     def _on_calib_cm_changed(self, _v=None):
@@ -2231,7 +2631,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         shape = self.combo_cage_shape.currentData()
         if shape == "square":
             # One value (side). Sync H to W.
-            self.lbl_cage_w.setText("Side:")
+            self.lbl_cage_w.setText("Side")
             self.lbl_cage_x.setVisible(False)
             self.lbl_cage_h.setVisible(False)
             self.spin_cage_h.setVisible(False)
@@ -2241,7 +2641,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             finally:
                 self.spin_cage_h.blockSignals(False)
         else:  # rectangle / custom
-            self.lbl_cage_w.setText("Width:")
+            self.lbl_cage_w.setText("Width")
             self.lbl_cage_x.setVisible(True)
             self.lbl_cage_h.setVisible(True)
             self.spin_cage_h.setVisible(True)
@@ -2430,10 +2830,10 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             parts.append(f"Center Zone {self.spin_center_pct.value()}%")
         if parts:
             self.lbl_zones.setText("  |  ".join(parts))
-            self.lbl_zones.setStyleSheet("color:#4CAF50; font-size:11px;")
+            theme.set_tone(self.lbl_zones, "ok", "font-size:11px;")
         else:
             self.lbl_zones.setText("No zones defined")
-            self.lbl_zones.setStyleSheet("color:#888; font-size:11px;")
+            theme.set_tone(self.lbl_zones, "faint", "font-size:11px;")
         if self.zone_drawer.arena:
             self.set_step_status("geometry", "ok")
         elif getattr(self, "_arena_auto_movement", False):
@@ -2454,7 +2854,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         if bg is not None:
             self.btn_preview.setEnabled(True)
             self.lbl_adjust.setText("Adjust sliders then click Preview Detection.")
-            self.lbl_adjust.setStyleSheet("color:#888; font-size:11px;")
+            theme.set_tone(self.lbl_adjust, "faint", "font-size:11px;")
             if not self.tracking_results and not getattr(self, "_suppress_auto_preview", False):
                 self.btn_preview.setChecked(True)
         else:
@@ -2497,13 +2897,13 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             if r.get("corrected"):
                 xv, yv = r.get("x"), r.get("y")
                 if xv is not None:
-                    cv2.circle(display, (int(xv), int(yv)), 8, (0, 255, 255), -1)
-                    cv2.circle(display, (int(xv), int(yv)), 10, (0, 200, 200), 2)
+                    cv2.circle(display, (int(xv), int(yv)), 8, (71, 197, 232), -1)
+                    cv2.circle(display, (int(xv), int(yv)), 10, (40, 150, 190), 2)
             elif r.get("interpolated"):
                 xv, yv = r.get("x"), r.get("y")
                 if xv is not None:
-                    cv2.circle(display, (int(xv), int(yv)), 7, (200, 100, 255), -1)
-                    cv2.circle(display, (int(xv), int(yv)), 9, (170, 70, 220), 2)
+                    cv2.circle(display, (int(xv), int(yv)), 7, (166, 107, 211), -1)
+                    cv2.circle(display, (int(xv), int(yv)), 9, (130, 70, 170), 2)
             else:
                 self._draw_body_on_frame(display, r, rel_idx)
         self.zone_drawer.set_frame(display)
@@ -2572,18 +2972,14 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
     def _populate_preset_combo(self):
         self.combo_preset.blockSignals(True)
         self.combo_preset.clear()
-        self.combo_preset.addItem("— select preset —")
+        self.combo_preset.addItem(DEFAULT_PRESET_NAME)
         for name in sorted(self._presets):
             self.combo_preset.addItem(name)
         self.combo_preset.blockSignals(False)
 
-    def _save_preset(self):
-        current = self.combo_preset.currentText()
-        default = "" if current == "— select preset —" else current
-        name, ok = QInputDialog.getText(self, "Save Preset", "Preset name:", text=default)
-        if not ok or not name.strip():
-            return
-        name = name.strip()
+    def _collect_current_preset(self):
+        """Snapshot every Detection-step control into a preset dict —
+        the same shape already stored in self._presets / the presets file."""
         preset = {
             "brightness":   self.slider_brightness.value(),
             "contrast":     self.slider_contrast.value(),
@@ -2617,7 +3013,35 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             preset["cage_shape"] = self.combo_cage_shape.currentData()
         if hasattr(self, "chk_perspective"):
             preset["perspective"] = self.chk_perspective.isChecked()
-        self._presets[name] = preset
+        return preset
+
+    def _save_preset(self):
+        current = self.combo_preset.currentText()
+        if current != DEFAULT_PRESET_NAME and current in self._presets:
+            # An existing custom preset is selected — Save overwrites it in
+            # place, keeping its name, without asking for a new name.
+            self._presets[current] = self._collect_current_preset()
+            self._save_presets_file()
+            self._populate_preset_combo()
+            idx = self.combo_preset.findText(current)
+            if idx >= 0:
+                self.combo_preset.setCurrentIndex(idx)
+            return
+        # Default (or nothing recognized) is selected — Save always creates
+        # a new named preset; Default itself is never overwritten.
+        default_text = "" if current == DEFAULT_PRESET_NAME else current
+        name, ok = QInputDialog.getText(self, "Save Preset", "Preset name:", text=default_text)
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        if name.lower() == DEFAULT_PRESET_NAME.lower():
+            QMessageBox.warning(
+                self, "Save Preset",
+                f'"{DEFAULT_PRESET_NAME}" is reserved and cannot be overwritten. '
+                "Please choose a different name."
+            )
+            return
+        self._presets[name] = self._collect_current_preset()
         self._save_presets_file()
         self._populate_preset_combo()
         idx = self.combo_preset.findText(name)
@@ -2626,7 +3050,10 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
 
     def _load_preset(self):
         name = self.combo_preset.currentText()
-        if name == "— select preset —" or name not in self._presets:
+        if name == DEFAULT_PRESET_NAME:
+            self._reset_sliders()
+            return
+        if name not in self._presets:
             return
         p = self._presets[name]
         self.slider_brightness.setValue(p.get("brightness", 0))
@@ -2688,7 +3115,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             self._colors = {**DEFAULT_COLORS, **_upgrade_legacy_colors(dict(p["colors"]))}
             for key, btn in self._color_buttons.items():
                 btn.setStyleSheet(
-                    f"background-color: {self._colors[key]}; border: 1px solid #555; border-radius: 2px;"
+                    f"background-color: {self._colors[key]}; border: 1px solid rgba(0,0,0,0.18); border-radius: 2px;"
                 )
             self.zone_drawer.set_zone_colors(self._colors)
             self.config["colors"] = dict(self._colors)
@@ -2699,7 +3126,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
 
     def _delete_preset(self):
         name = self.combo_preset.currentText()
-        if name == "— select preset —" or name not in self._presets:
+        if name == DEFAULT_PRESET_NAME or name not in self._presets:
             return
         reply = QMessageBox.question(self, "Delete Preset",
                                      f'Delete preset "{name}"?',
@@ -2708,6 +3135,74 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             del self._presets[name]
             self._save_presets_file()
             self._populate_preset_combo()
+
+    def _export_preset(self):
+        """Write the selected custom preset to a standalone .json file —
+        reuses the exact dict already stored in self._presets, just wrapped
+        with its name so Load/Import can restore it as-is elsewhere."""
+        name = self.combo_preset.currentText()
+        if name == DEFAULT_PRESET_NAME or name not in self._presets:
+            QMessageBox.information(
+                self, "Export Preset",
+                "Select an existing custom preset to export."
+            )
+            return
+        safe_name = "".join(c if c.isalnum() or c in " _-" else "_" for c in name).strip() or "preset"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Preset", f"{safe_name}.json", "Preset files (*.json);;All files (*)"
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w") as f:
+                json.dump({"name": name, "preset": self._presets[name]}, f, indent=2)
+        except Exception as e:
+            QMessageBox.warning(self, "Export Preset", f"Could not write preset file:\n{e}")
+
+    def _import_preset(self):
+        """Import a preset .json file (written by _export_preset) into the
+        local presets store, reusing the existing Load/apply path."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Preset", "", "Preset files (*.json);;All files (*)"
+        )
+        if not path:
+            return
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except Exception as e:
+            QMessageBox.warning(self, "Import Preset", f"Could not read preset file:\n{e}")
+            return
+        name = data.get("name") if isinstance(data, dict) else None
+        preset = data.get("preset") if isinstance(data, dict) else None
+        if not name or not isinstance(preset, dict):
+            QMessageBox.warning(
+                self, "Import Preset",
+                "This file doesn't look like a valid exported preset."
+            )
+            return
+        name = str(name).strip()
+        if name.lower() == DEFAULT_PRESET_NAME.lower():
+            QMessageBox.warning(
+                self, "Import Preset",
+                f'"{DEFAULT_PRESET_NAME}" is reserved and cannot be imported as a preset name.'
+            )
+            return
+        if name in self._presets:
+            reply = QMessageBox.question(
+                self, "Import Preset",
+                f'A preset named "{name}" already exists. Overwrite it?',
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+        self._presets[name] = preset
+        self._save_presets_file()
+        self._populate_preset_combo()
+        idx = self.combo_preset.findText(name)
+        if idx >= 0:
+            self.combo_preset.setCurrentIndex(idx)
+        self._load_preset()
 
     # ── Step 5 ────────────────────────────────────────────────────────────
 
@@ -2819,10 +3314,10 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
                               else self.snapshot_settings()),
             )
             self.lbl_export.setText(f"Saved:\n{out_path}\n(+ CSV companions)")
-            self.lbl_export.setStyleSheet("color:#4CAF50; font-size:11px;")
+            theme.set_tone(self.lbl_export, "ok", "font-size:11px;")
         except Exception as e:
             QMessageBox.warning(self, "Export Error", str(e))
-            self.lbl_export.setStyleSheet("color:#f44336; font-size:11px;")
+            theme.set_tone(self.lbl_export, "err", "font-size:11px;")
 
     # ── exclusion brush ───────────────────────────────────────────────────
 
@@ -2938,6 +3433,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
                 f"_recompute_metrics_and_views failed: {e}\n{traceback.format_exc()}",
                 source="metrics",
             )
+        self._refresh_redesign_data()
         # Notify outside listeners (batch tab refreshes its cache).
         try:
             self.metrics_changed.emit()
@@ -2949,23 +3445,46 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
 
     # ── scrub ─────────────────────────────────────────────────────────────
 
+    def _marker_tag_lines(self, i):
+        """Two-line info tag of the marker at results index `i`:
+        "<animal> · <speed> <unit>" / "x <x>  y <y>" (None when undetected)."""
+        res, df = self.tracking_results, self.raw_df
+        if df is None or not res or not (0 <= i < len(res)) or i >= len(df):
+            return None
+        r = res[i]
+        if r.get("x") is None:
+            return None
+        col, unit = self._speed_col()
+        sp = df[col].iloc[i] if col is not None else float("nan")
+        sp_txt = "—" if sp != sp else f"{sp:.1f}"
+        pxcm = self._get_px_per_cm()
+        if pxcm:
+            xy = f"x {r['x'] / pxcm:.1f}  y {r['y'] / pxcm:.1f}"
+        else:
+            xy = f"x {r['x']:.0f}  y {r['y']:.0f}"
+        aid = self.edit_meta_id.text().strip() or "—"
+        return [f"{aid} · {sp_txt} {unit}".strip(), xy]
+
     def _draw_body_on_frame(self, frame, r, frame_idx=None,
                             body_style=None,
                             draw_ellipse=None, draw_trail=None,
                             trail_len=None, trail_fade=None,
-                            results_override=None):
+                            results_override=None, tag_lines=None):
         """Thin wrapper. When override params are None, current widget state
         is used (live preview). Export thread passes explicit flags."""
         from core.tracking.draw import draw_body_overlay
         draw_body_overlay(
             frame, r, frame_idx=frame_idx,
             results=results_override if results_override is not None else self.tracking_results,
-            style=body_style if body_style is not None else self.combo_body_style.currentData(),
+            style=body_style if body_style is not None else (
+                self.combo_body_style.currentData()
+                if self.zone_drawer.layers.get("marker", True) else "none"),
             do_ellipse=draw_ellipse if draw_ellipse is not None else self.chk_ellipse.isChecked(),
             do_trail=draw_trail if draw_trail is not None else self.chk_trail.isChecked(),
             trail_len=trail_len if trail_len is not None else self.spin_trail_len.value(),
             trail_fade=trail_fade if trail_fade is not None else self.chk_trail_fade.isChecked(),
             color_fn=self._bgr,
+            tag_lines=tag_lines,
         )
 
     # ── scrub seek / cap cache / slider shortcuts: gui/output/scrub_mixin.py
@@ -2992,86 +3511,55 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
 
     def _slider_row(self, parent_layout, label, min_v, max_v, default, fmt_fn,
                     step=1):
-        row = QHBoxLayout()
-        row.setSpacing(2)
+        """`label | slider | value` row (74 px / flex / 38 px mono)."""
+        from PyQt5.QtWidgets import QGridLayout
+        row = QGridLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setHorizontalSpacing(8)
+        row.setColumnMinimumWidth(0, 74)
+        row.setColumnStretch(1, 1)
         lbl = QLabel(label)
-        lbl.setFixedWidth(68)
-        lbl.setStyleSheet("font-size:11px;")
+        theme.set_tone(lbl, "text2")
         slider = QSlider(Qt.Horizontal)
         slider.setRange(min_v, max_v)
         slider.setValue(default)
         slider.setSingleStep(step)
         slider.setPageStep(max(step, 10))
+        slider.setMinimumHeight(22)
         val_lbl = QLabel(fmt_fn(default))
         val_lbl.setFixedWidth(38)
         val_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        val_lbl.setStyleSheet("font-size:11px;")
+        val_lbl.setProperty("role", "slidervalue")
         slider.valueChanged.connect(lambda v: val_lbl.setText(fmt_fn(v)))
         slider.valueChanged.connect(self._update_preview)
-
-        # Nudge buttons: ±1 step on either side of the slider.
-        def _make_nudge(arrow, delta, tip):
-            b = QPushButton(arrow)
-            b.setFixedSize(16, 16)
-            b.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-            b.setFocusPolicy(Qt.NoFocus)
-            b.setAutoRepeat(True)
-            b.setAutoRepeatDelay(300)
-            b.setAutoRepeatInterval(60)
-            b.setStyleSheet(
-                "QPushButton { padding:0; margin:0; font-size:9px; }"
-            )
-            b.setToolTip(tip)
-            b.clicked.connect(
-                lambda _=False, s=slider, d=delta: s.setValue(
-                    max(s.minimum(), min(s.maximum(), s.value() + d))
-                )
-            )
-            return b
-
-        btn_dec = _make_nudge("◀", -step, f"Decrease by {step}")
-        btn_inc = _make_nudge("▶", +step, f"Increase by {step}")
-
-        row.addWidget(lbl)
-        row.addWidget(btn_dec)
-        row.addWidget(slider)
-        row.addWidget(btn_inc)
-        row.addWidget(val_lbl)
+        row.addWidget(lbl, 0, 0)
+        row.addWidget(slider, 0, 1)
+        row.addWidget(val_lbl, 0, 2)
         parent_layout.addLayout(row)
         return slider, val_lbl
 
-    def _group(self, title, status_id=None, optional=False):
-        g = QGroupBox()
-        g.setFont(QFont("Arial", 9, QFont.Bold))
-        g.setCheckable(True)
-        g.setChecked(True)
+    def _group(self, title, status_id=None, optional=False, icon=None, name=None):
+        """Accordion card body. Returns a StepGroup (QGroupBox-compatible);
+        the header (icon · title · summary · status dot) floats over its top."""
+        import re
+        from gui.step_card import StepGroup, StepHeader, HeaderPlacer, STEP_META
+        g = StepGroup()
         g._base_title = title
         g._status_id = status_id
         g._optional = optional
         # Optional steps default to neutral; required steps start blocked
         # until their gating condition is met.
         g._status = "warn" if optional else "blocked"
-        self._update_group_title(g)
-        g.setStyleSheet(
-            "QGroupBox {"
-            "  margin-top: 14px;"
-            "  border: 1px solid #555;"
-            "  border-radius: 4px;"
-            "  padding: 8px 6px 6px 6px;"
-            "}"
-            "QGroupBox:!checked {"
-            "  border: 1px solid transparent;"
-            "  padding: 0px;"
-            "}"
-            "QGroupBox::title {"
-            "  subcontrol-origin: margin;"
-            "  subcontrol-position: top left;"
-            "  left: 8px;"
-            "  padding: 0 6px;"
-            "}"
-            "QGroupBox::indicator { width: 0px; height: 0px; margin: 0; }"
-        )
+        g.setObjectName("StepGroup")  # styled in theme.py
+        m = re.match(r"\s*Step\s+(\d+)\s*[—–-]\s*(.+)", title)
+        meta_icon, meta_name = STEP_META.get(status_id, ("config", None))
+        g._header = StepHeader(g, icon or meta_icon, name or (m.group(2) if m else title))
+        g._header.clicked.connect(lambda gb=g: gb.setChecked(not gb.isChecked()))
+        HeaderPlacer(g, g._header)
         g.toggled.connect(lambda checked, gb=g: self._toggle_group(gb, checked))
+        if not hasattr(self, "_cards"):
+            self._cards = []
+        self._cards.append(g)
         if status_id:
             if not hasattr(self, "_step_groups"):
                 self._step_groups = {}
@@ -3083,16 +3571,10 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         return {"ok": "✓", "warn": "⚠", "blocked": "✗"}.get(status, "")
 
     def _update_group_title(self, gb):
-        arrow = "▼" if gb.isChecked() else "▶"
-        glyph = self._status_glyph(getattr(gb, "_status", ""))
-        parts = [arrow]
-        if glyph:
-            parts.append(glyph)
-        parts.append(gb._base_title)
-        title = "  ".join(parts)
-        if getattr(gb, "_optional", False):
-            title += "  (optional)"
-        gb.setTitle(title)
+        # Title lives in the card header now — just sync its state.
+        hdr = getattr(gb, "_header", None)
+        if hdr is not None:
+            hdr.set_open(gb.isChecked())
 
     def set_step_status(self, step_id, status):
         if not hasattr(self, "_step_groups"):
@@ -3104,21 +3586,238 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self._update_group_title(gb)
 
     def _toggle_group(self, gb, checked):
+        from gui.step_card import HEADER_H
         self._update_group_title(gb)
+        hdr = getattr(gb, "_header", None)
         for child in gb.children():
-            if isinstance(child, QWidget):
+            if isinstance(child, QWidget) and child is not hdr:
                 child.setVisible(checked)
         if checked:
             gb.setMaximumHeight(16777215)
+            # re-hide widgets that belong to the Full view only
+            self._apply_simple_mode()
         else:
-            # Title sits in the margin area; padding/border collapse via CSS.
-            gb.setMaximumHeight(gb.fontMetrics().height() + 6)
+            gb.setMaximumHeight(HEADER_H + 1)
+
+    # ── accordion card summaries / status dots ───────────────────────────
+
+    def _summary_source(self):
+        if not self.video_path:
+            return "No video loaded"
+        parts = []
+        if self.fps:
+            parts.append(f"{float(self.fps):.2f} fps")
+        if self.video_w:
+            parts.append(f"{self.video_w}×{self.video_h}")
+        tf = int(getattr(self, "_total_frames", 0) or 0)
+        if tf and self.fps:
+            d = tf / float(self.fps)
+            parts.append(f"{int(d // 60):02d}:{int(d % 60):02d}")
+        return " · ".join(parts) or os.path.basename(self.video_path)
+
+    def _summary_animal(self):
+        sex = self.combo_meta_sex.currentText().strip()[:1]
+        trial = self.edit_meta_trial.text().strip()
+        vals = [self.edit_meta_id.text().strip(), self.edit_meta_group.text().strip(),
+                sex, f"trial {trial}" if trial else ""]
+        return " · ".join(v for v in vals if v) or "No metadata"
+
+    def _summary_geometry(self):
+        zd = self.zone_drawer
+        if not zd.arena and not getattr(self, "_arena_auto_movement", False):
+            return "Not defined"
+        modes = {"manual": "Manual · 4 corners", "square": "Premade square",
+                 "movement": "Auto · from movement", "contrast": "Auto · contrast"}
+        text = modes.get(getattr(self, "_arena_define_mode", None), "Defined")
+        shape = getattr(self, "combo_cage_shape", None)
+        if shape is not None:
+            text += f" · {shape.currentText().lower()}"
+        return text
+
+    def _summary_zones(self):
+        mode = getattr(self, "combo_zone_mode", None)
+        pct = getattr(self, "spin_center_pct", None)
+        if mode is None or pct is None:
+            return ""
+        return f"{mode.currentText()} · {pct.value()}%"
+
+    def _summary_scale(self):
+        mode = self._calib_mode()
+        if mode == "none":
+            return "pixels (uncalibrated)"
+        ppc = self._get_px_per_cm()
+        if mode == "manual":
+            return f"line · {self.spin_cm.value():.1f} cm"
+        return f"{ppc:.2f} px/cm · from cage" if ppc else "auto · needs arena"
+
+    def _summary_detection(self):
+        preset = self.combo_preset.currentText().strip() or "Default"
+        return f"sens {self.spin_threshold.value()} · preset {preset}"
+
+    def _summary_analysis(self):
+        model = self.combo_model.currentText()
+        scale = self.combo_proc_scale.currentText().split()[0]
+        sm = self.spin_smooth_window.value()
+        return f"{model} · {scale} · smooth {sm}" if sm > 1 else f"{model} · {scale}"
+
+    def _summary_metrics(self):
+        thr = self.spin_movement_thr.value()
+        thr_t = "off" if thr <= 0 else f"{thr:.2f}{self.spin_movement_thr.suffix()}"
+        b = self.spin_bin_size.value()
+        return f"{thr_t} · bin {b:g} s" if b > 0 else f"{thr_t} · no bins"
+
+    def _card_status(self, g):
+        sid = g._status_id
+        loaded = bool(self.video_path)
+        has_results = bool(self.tracking_results)
+        if sid in ("source", "animal"):
+            return "ok" if loaded else "none"
+        if sid == "zones":
+            geo = self._step_groups.get("geometry")
+            return geo._status if geo is not None else "none"
+        if sid in ("analysis", "metrics"):
+            return "ok" if has_results else "none"
+        return g._status
+
+    def _open_analysis_card(self):
+        g = getattr(self, "_step_groups", {}).get("metrics")
+        if g is not None:
+            g.setChecked(True)
+
+    def _refresh_step_extras(self):
+        """Small derived read-outs that live inside cards / the Output bar."""
+        if hasattr(self, "lbl_trim_val"):
+            st = self._trim_start_s()
+            du = self._trim_duration_s()
+            tf = int(getattr(self, "_total_frames", 0) or 0)
+            total = (tf / float(self.fps)) if (tf and self.fps) else 0.0
+            end = (st + du) if du > 0 else total
+            self.lbl_trim_val.setText(f"{st:.1f} s → {end:.1f} s" if self.video_path else "—")
+        if hasattr(self, "lbl_center_area") and hasattr(self, "spin_cage_w"):
+            pct = self.spin_center_pct.value() / 100.0
+            if self._calib_mode() == "none" or not self.zone_drawer.arena:
+                self.lbl_center_area.setText("—")
+            else:
+                w = self.spin_cage_w.value()
+                h = w if self.combo_cage_shape.currentData() == "square" else self.spin_cage_h.value()
+                self.lbl_center_area.setText(f"{w * pct:.1f} × {h * pct:.1f} cm")
+        if hasattr(self, "lbl_out_thr"):
+            thr = self.spin_movement_thr.value()
+            unit = self.spin_movement_thr.suffix().strip()
+            thr_t = "off" if thr <= 0 else f"{thr:.2f} {unit}"
+            b = self.spin_bin_size.value()
+            mono = theme.mono_family()
+            span = lambda s: f"<span style=\"font-family:'{mono}'; color:{theme.TEXT}\">{s}</span>"
+            self.lbl_out_thr.setText(f"Move threshold {span(thr_t)}")
+            self.lbl_out_bin.setText(f"Time bin {span('off' if b <= 0 else f'{b:g} s')}")
+        if hasattr(self, "_zone_chips"):
+            self._zone_chips.update()
+        try:
+            self._refresh_canvas_extras()
+        except Exception:
+            pass
+
+    def _refresh_canvas_extras(self):
+        """Arena label / ruler dimensions / legend summary for the canvas."""
+        zd = self.zone_drawer
+        vw, vh = self.video_w or 0, self.video_h or 0
+        ppc = self._get_px_per_cm() if self.video_path else None
+        label, dims = "", None
+        if zd.arena:
+            label = "ARENA"
+            if len(zd.arena) == 4 and vw and ppc:
+                pts = [(x * vw, y * vh) for x, y in zd.arena]
+                TL, TR, BR, BL = zd._sorted_corners(pts)
+                wpx = ((TR[0] - TL[0]) ** 2 + (TR[1] - TL[1]) ** 2) ** 0.5
+                hpx = ((BL[0] - TL[0]) ** 2 + (BL[1] - TL[1]) ** 2) ** 0.5
+                dims = (round(wpx / ppc, 1), round(hpx / ppc, 1))
+                label = f"ARENA · {dims[0]:.1f} × {dims[1]:.1f} cm"
+        pct = self.spin_center_pct.value() if hasattr(self, "spin_center_pct") else None
+        zd.set_arena_dims(label, dims, pct)
+        info = (f"{ppc:.2f} px/cm" if ppc else "px") + \
+               f" · {self.combo_model.currentText()} · sens {self.spin_threshold.value()}"
+        legend = getattr(self, "_video_legend", None)
+        if legend is not None:
+            legend.set_info(info)
+        chrome = getattr(self, "_chrome", None)
+        if chrome is not None:
+            chrome.refresh()
+
+    def _refresh_occupancy(self, dur):
+        """Feed the sidebar occupancy block (mini heat-map + % bars)."""
+        zd = self.zone_drawer
+        grid = getattr(self, "_heat_grid", None)
+        if grid is None:
+            self.measure_panel.set_occupancy(None)
+            return
+        m = self.metrics or {}
+        center_rel = None
+        if zd.arena and zd.center_zone:
+            ax = [p[0] for p in zd.arena]
+            ay = [p[1] for p in zd.arena]
+            cx = [p[0] for p in zd.center_zone]
+            cy = [p[1] for p in zd.center_zone]
+            w = max(ax) - min(ax) or 1.0
+            h = max(ay) - min(ay) or 1.0
+            center_rel = ((min(cx) - min(ax)) / w, (min(cy) - min(ay)) / h,
+                          (max(cx) - min(ax)) / w, (max(cy) - min(ay)) / h)
+        pc = m.get("% Time in Center Zone")
+        mob = m.get("Mobility Time (s)")
+        wall = m.get("Thigmotaxis %")
+        dims = zd.cage_dims_cm
+        bin_text = f" / {dims[0] / 20.0:.1f} cm" if dims else ""
+        self.measure_panel.set_occupancy(
+            grid=grid, vmax=self._heat_vmax, center_rel=center_rel,
+            pct_center=float(pc) if isinstance(pc, (int, float)) else None,
+            pct_mobile=(100.0 * float(mob) / dur) if isinstance(mob, (int, float)) and dur else None,
+            pct_wall=float(wall) if isinstance(wall, (int, float)) else None,
+            bin_text=bin_text)
+
+    def _refresh_heat(self):
+        """Occupancy grid (20 × 20 over the arena bbox) for the canvas heat
+        layer and the sidebar mini-map."""
+        from gui.colormaps import heat_rgba
+        zd = self.zone_drawer
+        self._heat_grid, self._heat_vmax = None, 0.0
+        vw, vh = self.video_w or 0, self.video_h or 0
+        if not (self.tracking_results and zd.arena and vw and vh):
+            zd.set_heat(None, None)
+            return
+        pts = [(x * vw, y * vh) for x, y in zd.arena]
+        x0, x1 = min(p[0] for p in pts), max(p[0] for p in pts)
+        y0, y1 = min(p[1] for p in pts), max(p[1] for p in pts)
+        xs = [r["x"] for r in self.tracking_results if r.get("x") is not None]
+        ys = [r["y"] for r in self.tracking_results if r.get("x") is not None]
+        if not xs or x1 <= x0 or y1 <= y0:
+            zd.set_heat(None, None)
+            return
+        grid, _, _ = np.histogram2d(ys, xs, bins=[20, 20], range=[[y0, y1], [x0, x1]])
+        grid = grid / float(self.fps or 30.0)
+        self._heat_grid = grid
+        rgba, self._heat_vmax = heat_rgba(grid)
+        img = QImage(rgba.tobytes(), 20, 20, 80, QImage.Format_RGBA8888).copy()
+        zd.set_heat(img, (x0 / vw, y0 / vh, x1 / vw, y1 / vh))
+
+    def _refresh_step_cards(self):
+        cards = getattr(self, "_cards", [])
+        if cards and not cards[0].isVisible():
+            return                       # this experiment's tab isn't on screen
+        self._refresh_step_extras()
+        for g in getattr(self, "_cards", []):
+            try:
+                fn = getattr(self, f"_summary_{g._status_id}", None)
+                if fn is not None:
+                    g._header.set_summary(fn())
+                g._header.set_status(self._card_status(g))
+            except Exception:
+                pass
 
     def _sep(self):
         line = QFrame()
         line.setFrameShape(QFrame.HLine)
         line.setFrameShadow(QFrame.Plain)
-        line.setStyleSheet("color:#444; background-color:#444; max-height:1px;")
+        line.setProperty("role", "hline")
+        line.setFixedHeight(1)
         return line
 
     @staticmethod

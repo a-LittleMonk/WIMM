@@ -10,7 +10,7 @@ import math
 # Arm names — used as zone ids and metric keys.
 ARM_NAMES = ["arm_a", "arm_b", "arm_c"]
 ARM_LABELS = {"arm_a": "Arm A", "arm_b": "Arm B", "arm_c": "Arm C"}
-ARM_COLORS = {"arm_a": "#FF7043", "arm_b": "#42A5F5", "arm_c": "#9CCC65"}
+ARM_COLORS = {"arm_a": "#E8A87C", "arm_b": "#7FA6D9", "arm_c": "#8FC79A"}
 
 
 def default_y_template_geometry():
@@ -35,7 +35,7 @@ def y_template_overlay_zone(hub, endpoints):
         "type": "polygon",
         "geometry": [tuple(hub)] + [tuple(p) for p in endpoints[:3]],
         "style": {
-            "color": "#FFB74D",
+            "color": "#E4D3AE",
             "thickness": 2,
             "dashed": True,
             "shape": "y_template",
@@ -330,7 +330,7 @@ def build_neutral_zone_geom(hub, endpoints, radius_norm, arm_width_norm,
     return poly
 
 
-NEUTRAL_DEFAULT_COLOR = "#BDBDBD"
+NEUTRAL_DEFAULT_COLOR = "#A9B4C6"
 
 
 def neutral_zone(hub, endpoints, radius_norm, arm_width_norm,

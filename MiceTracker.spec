@@ -12,7 +12,7 @@ qt_excludes = [
     "PyQt5.QtOpenGL", "PyQt5.QtPositioning", "PyQt5.QtPrintSupport",
     "PyQt5.QtQml", "PyQt5.QtQuick", "PyQt5.QtQuickWidgets",
     "PyQt5.QtRemoteObjects", "PyQt5.QtSensors", "PyQt5.QtSerialPort",
-    "PyQt5.QtSql", "PyQt5.QtSvg", "PyQt5.QtTest", "PyQt5.QtWebChannel",
+    "PyQt5.QtSql", "PyQt5.QtTest", "PyQt5.QtWebChannel",
     "PyQt5.QtWebEngine", "PyQt5.QtWebEngineCore", "PyQt5.QtWebEngineWidgets",
     "PyQt5.QtWebKit", "PyQt5.QtWebKitWidgets", "PyQt5.QtWebSockets",
     "PyQt5.QtXml", "PyQt5.QtXmlPatterns", "PyQt5.Qsci",

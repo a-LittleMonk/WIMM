@@ -1,8 +1,9 @@
 import cv2
 import numpy as np
 from PyQt5.QtWidgets import QLabel
-from PyQt5.QtCore import Qt, pyqtSignal, QPoint
+from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QPointF, QRectF
 from PyQt5.QtGui import QPainter, QPen, QColor, QPixmap, QImage, QFont, QPainterPath, QBrush
+from gui import theme
 
 
 def ndarray_to_pixmap(arr: np.ndarray) -> QPixmap:
@@ -26,7 +27,7 @@ def ndarray_to_pixmap(arr: np.ndarray) -> QPixmap:
 #   editable: bool
 #   editor_hint: dict — type-specific (polygon: n_corners=4)
 DEFAULT_STYLE = {
-    "color": "#3CA0FF",
+    "color": "#A9B4C6",
     "thickness": 2,
     "fill_alpha": 0,
     "label_text": "",
@@ -44,6 +45,7 @@ class ZoneDrawer(QLabel):
     zones_changing    = pyqtSignal()
     exclusion_changed = pyqtSignal()
     point_clicked     = pyqtSignal(float, float)   # norm x, norm y — correction mode
+    mode_changed      = pyqtSignal(object)         # active tool changed (None = idle)
 
     MODE_IDLE    = None
     MODE_CALIB   = "calibration"
@@ -74,9 +76,9 @@ class ZoneDrawer(QLabel):
         from PyQt5.QtWidgets import QSizePolicy
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         self.setAlignment(Qt.AlignCenter)
-        self.setStyleSheet("background-color: #1e1e1e; border: 1px solid #555;")
+        self.setStyleSheet("background-color: #0A0C0E; border: 0; color: #8F99A3;")
         self.setText("Load a video to begin")
-        self.setFont(QFont("Arial", 13))
+        self.setFont(QFont(theme.sans_family(), 13))
         self.setMouseTracking(True)
 
         self.mode      = self.MODE_IDLE
@@ -99,7 +101,7 @@ class ZoneDrawer(QLabel):
         # not in the shared base. Non-OF experiments leave them unset.
         self._overlay_renderer = None    # (painter, ox, oy, dw, dh) → None
         self._grid_renderer = None       # (painter, ox, oy, dw, dh) → None
-        self._colors = {"arena": "#3CA0FF", "center_zone": "#3CDC64", "grid": "#96C8FF"}
+        self._colors = {"arena": "#A9B4C6", "center_zone": "#C9D1DE", "grid": "#7F8A9C"}
         self._arena_clicks = []
         self._mouse_pos    = None
         self._dragging_corner = None   # index into self.arena being dragged
@@ -116,8 +118,8 @@ class ZoneDrawer(QLabel):
 
         # ── Cell highlight (green fill where the mouse is right now) ──
         self._cell_highlight_pos = None        # normalized (x, y) or None
-        self._cell_highlight_color = "#3CDC64" # default green
-        self._cell_highlight_alpha = 100       # 0..255
+        self._cell_highlight_color = "#C9D1DE" # soft steel
+        self._cell_highlight_alpha = 60        # 0..255
         self._cell_show_numbers = True
         self._cell_show_timer = True
         self._cell_show_entries = True
@@ -140,6 +142,20 @@ class ZoneDrawer(QLabel):
         self._poly_clicks = []           # in-progress clicks for polygon edit
         self._poly_n_corners = 4         # how many corners to collect
         self._dragging_extra = None      # (zone_name, vertex_idx) when dragging
+        # ── Redesign v2 canvas state ────────────────────────────────────
+        # Layer switches driven by the canvas chips (Arena / Zones / Trail /
+        # Marker / Heatmap). Trail + marker body drawing live in the cv2
+        # frame renderer; here they only gate the info tag.
+        self.layers = {"arena": True, "zones": True, "trail": True,
+                       "marker": True, "heat": False}
+        self.arena_label = ""            # "ARENA · 40.0 × 40.0 cm"
+        self.cage_dims_cm = None         # (w_cm, h_cm) → ruler + scale bar
+        self.center_pct = None           # for the CENTER 50 % tag
+        self.hud_left = ""               # "CAM 01 · 30 fps · F 000120"
+        self.hud_time = ""               # "00:03.9"
+        self.marker_info = None          # {"norm": (x, y), "lines": [str, str]}
+        self.heat_img = None             # QImage (RGBA) covering heat_rect
+        self.heat_rect = None            # normalized (x0, y0, x1, y1)
         # Set to zone_name while the user is dragging that zone's label.
         # Updates style.label_pos_override; paint reads override first and
         # falls back to auto-positioned style.label_pos.
@@ -170,6 +186,7 @@ class ZoneDrawer(QLabel):
         else:
             self.setCursor(Qt.ArrowCursor)
         self.update()
+        self.mode_changed.emit(mode)
 
     def set_overlay_renderer(self, fn):
         """Register the function called from paintEvent to draw experiment-
@@ -253,6 +270,41 @@ class ZoneDrawer(QLabel):
 
     def get_exclusion_mask(self):
         return self.exclusion_mask
+
+    # ── Redesign v2 canvas API ───────────────────────────────────────────
+    def set_layer(self, name, on):
+        if name in self.layers and self.layers[name] != bool(on):
+            self.layers[name] = bool(on)
+            self.update()
+
+    def set_hud(self, left, time_text):
+        if (left, time_text) != (self.hud_left, self.hud_time):
+            self.hud_left, self.hud_time = left, time_text
+            self.update()
+
+    def set_marker_info(self, info):
+        self.marker_info = info
+        self.update()
+
+    def set_arena_dims(self, label, dims_cm, center_pct):
+        state = (label or "", dims_cm, center_pct)
+        if state == (self.arena_label, self.cage_dims_cm, self.center_pct):
+            return
+        self.arena_label, self.cage_dims_cm, self.center_pct = state
+        self.update()
+
+    def set_heat(self, img, rect):
+        self.heat_img, self.heat_rect = img, rect
+        self.update()
+
+    @staticmethod
+    def _mono(px, bold=False, spacing=0.0):
+        f = QFont(theme.mono_family())
+        f.setPixelSize(px)
+        f.setBold(bold)
+        if spacing:
+            f.setLetterSpacing(QFont.AbsoluteSpacing, spacing)
+        return f
 
     # ── Cell highlight API ───────────────────────────────────────────────
     def set_body_pos_norm(self, xy):
@@ -452,6 +504,7 @@ class ZoneDrawer(QLabel):
         self.mode = self.MODE_POLY
         self.setCursor(Qt.CrossCursor)
         self.update()
+        self.mode_changed.emit(self.mode)
 
     def stop_edit(self):
         self._editing_zone = None
@@ -652,8 +705,15 @@ class ZoneDrawer(QLabel):
 
         ox, oy, dw, dh = self._get_disp_rect()
         painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
         scaled = self._base_pixmap.scaled(dw, dh, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         painter.drawPixmap(ox, oy, scaled)
+        show_arena = self.layers.get("arena", True)
+        show_zones = self.layers.get("zones", True)
+
+        # Occupancy heatmap layer (2 cm bins, clipped to the arena).
+        if self.layers.get("heat") and self.heat_img is not None and self.heat_rect:
+            self._paint_heat(painter, ox, oy, dw, dh)
 
         # Exclusion mask overlay (semi-transparent red)
         if self.exclusion_mask is not None and self.exclusion_mask.any():
@@ -670,84 +730,104 @@ class ZoneDrawer(QLabel):
             painter.drawImage(ox, oy, exc_scaled)
 
         # ── Experiment-specific overlays (cell highlight, cell numbers /
-        # timers / entries, center HUD). OF registers a renderer via
+        # timers / entries). OF registers a renderer via
         # set_overlay_renderer in OpenFieldTab.__init__; non-OF experiments
         # leave it unset and get none of this drawn.
-        if self._overlay_renderer is not None:
+        if self._overlay_renderer is not None and show_zones:
             try:
                 self._overlay_renderer(painter, ox, oy, dw, dh)
             except Exception:
                 pass
 
-        # ── Extra schema-driven zones (plugins) ──
-        if self._extra_zones:
+        # ── Extra schema-driven zones (plugins)
+        if self._extra_zones and show_zones:
             for z in self._extra_zones:
                 self._paint_extra_zone(painter, z, ox, oy, dw, dh)
 
         # Calibration line
         if self.calib_p1 and self.calib_p2:
-            painter.setPen(QPen(QColor(255, 200, 0), 2))
-            painter.setBrush(QColor(255, 200, 0))
+            col = QColor("#E8C547")
+            painter.setPen(QPen(col, 1.6))
+            painter.setBrush(col)
             dp1 = self._norm_to_disp(self.calib_p1, ox, oy, dw, dh)
             dp2 = self._norm_to_disp(self.calib_p2, ox, oy, dw, dh)
             painter.drawLine(*dp1, *dp2)
-            painter.drawEllipse(dp1[0] - 4, dp1[1] - 4, 8, 8)
-            painter.drawEllipse(dp2[0] - 4, dp2[1] - 4, 8, 8)
+            painter.drawEllipse(QPointF(*dp1), 3.5, 3.5)
+            painter.drawEllipse(QPointF(*dp2), 3.5, 3.5)
 
-        # Completed arena polygon
-        if self.arena:
+        # Completed arena polygon + ruler + label
+        if self.arena and show_arena:
             arena_color = QColor(self._colors["arena"])
             pts = [self._norm_to_disp(p, ox, oy, dw, dh) for p in self.arena]
-            painter.setPen(QPen(arena_color, 2))
+            painter.setPen(QPen(arena_color, 1.5))
             painter.setBrush(Qt.NoBrush)
             self._draw_polygon(painter, pts)
-            painter.setFont(QFont("Arial", 9, QFont.Bold))
-            painter.setPen(arena_color)
-            painter.drawText(pts[0][0] + 4, pts[0][1] - 6, "Arena")
-            # Editable handles in idle mode
+            self._paint_ruler(painter, pts, arena_color)
+            if self.arena_label:
+                painter.setFont(self._mono(9, True, 0.5))
+                painter.setPen(arena_color)
+                lx = min(p[0] for p in pts)
+                ly = max(12, min(p[1] for p in pts) - 9)
+                painter.drawText(lx, ly, self.arena_label)
+            # Editable handles in idle mode: square dark corner markers
             if self.mode == self.MODE_IDLE and not self._perspective_locked:
-                painter.setPen(QPen(arena_color, 2))
-                painter.setBrush(QColor(255, 255, 255))
                 for i, (hx, hy) in enumerate(pts):
-                    if self._dragging_corner == i:
-                        painter.setBrush(arena_color)
-                    else:
-                        painter.setBrush(QColor(255, 255, 255))
-                    painter.drawEllipse(hx - 5, hy - 5, 10, 10)
+                    painter.setPen(QPen(arena_color, 1.4))
+                    painter.setBrush(arena_color if self._dragging_corner == i
+                                     else QColor("#0A0C0E"))
+                    painter.drawRect(QRectF(hx - 4, hy - 4, 8, 8))
 
         # ── Grid lines hook (drawn on top of the arena outline). OF binds
         # paint_of_grid_lines here; other experiments leave it unset.
-        if self._grid_renderer is not None:
+        if self._grid_renderer is not None and show_zones:
             try:
                 self._grid_renderer(painter, ox, oy, dw, dh)
             except Exception:
                 pass
 
-        # Center zone polygon
-        if self.center_zone:
+        # Center zone polygon: dashed outline, 12 % fill, CENTER tag
+        if self.center_zone and show_zones:
             center_color = QColor(self._colors["center_zone"])
             pts = [self._norm_to_disp(p, ox, oy, dw, dh) for p in self.center_zone]
-            painter.setPen(QPen(center_color, 2))
-            painter.setBrush(Qt.NoBrush)
+            fill = QColor(center_color)
+            fill.setAlphaF(0.12)
+            pen = QPen(center_color, 1.3)
+            pen.setDashPattern([4.6, 2.3])
+            painter.setPen(pen)
+            painter.setBrush(fill)
             self._draw_polygon(painter, pts)
-            painter.setFont(QFont("Arial", 9, QFont.Bold))
-            painter.setPen(center_color)
-            painter.drawText(pts[0][0] + 4, pts[0][1] - 6, "Center")
+            bits = ["CENTER" + (f" {int(self.center_pct)}%" if self.center_pct else "")]
+            if self._overlay_renderer is not None:      # Open Field: live counters
+                if self._cell_show_timer:
+                    bits.append(f"{self._cell_times.get('C', 0.0):.1f}s")
+                if self._cell_show_entries:
+                    bits.append(f"#{int(self._cell_entries.get('C', 0))}")
+            tag = " · ".join(bits)
+            painter.setFont(self._mono(9, True))
+            tw = painter.fontMetrics().horizontalAdvance(tag)
+            tx = min(p[0] for p in pts)
+            ty = min(p[1] for p in pts)
+            rect = QRectF(tx, ty - 15, tw + 10, 14)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(center_color)
+            painter.drawRoundedRect(rect, 2, 2)
+            painter.setPen(QColor("#121826"))
+            painter.drawText(rect, Qt.AlignCenter, tag)
 
         # Arena corner preview
         if self.mode == self.MODE_ARENA and self._arena_clicks:
             n   = len(self._arena_clicks)
             col = QColor(self._colors["arena"])
             pts = [self._norm_to_disp(p, ox, oy, dw, dh) for p in self._arena_clicks]
-            painter.setPen(QPen(col, 2))
+            painter.setPen(QPen(col, 1.5))
             painter.setBrush(col)
             for px, py in pts:
-                painter.drawEllipse(px - 4, py - 4, 8, 8)
+                painter.drawRect(QRectF(px - 4, py - 4, 8, 8))
             for i in range(n - 1):
                 painter.drawLine(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1])
             if self._mouse_pos:
                 mx, my = self._mouse_pos.x(), self._mouse_pos.y()
-                painter.setPen(QPen(col, 2, Qt.DashLine))
+                painter.setPen(QPen(col, 1.5, Qt.DashLine))
                 painter.setBrush(Qt.NoBrush)
                 # Always draw the rubber-band line from the last click to
                 # the cursor — and, once there are ≥2 clicks, also a closing
@@ -761,7 +841,7 @@ class ZoneDrawer(QLabel):
 
         # Calibration rubber band
         if self.mode == self.MODE_CALIB and self._drag_start and self._drag_end:
-            painter.setPen(QPen(QColor(255, 200, 0), 2, Qt.DashLine))
+            painter.setPen(QPen(QColor("#E8C547"), 1.6, Qt.DashLine))
             painter.setBrush(Qt.NoBrush)
             painter.drawLine(
                 self._drag_start.x(), self._drag_start.y(),
@@ -772,34 +852,65 @@ class ZoneDrawer(QLabel):
         if self.mode == self.MODE_EXCLUDE and self._mouse_pos:
             r_disp = max(2, int(self.brush_radius * dw / max(self._video_w, 1)))
             mx, my = self._mouse_pos.x(), self._mouse_pos.y()
-            painter.setPen(QPen(QColor(220, 60, 60, 200), 1, Qt.DashLine))
+            painter.setPen(QPen(QColor(224, 105, 94, 220), 1, Qt.DashLine))
             painter.setBrush(Qt.NoBrush)
             painter.drawEllipse(mx - r_disp, my - r_disp, r_disp * 2, r_disp * 2)
 
         # Correction mode crosshair
         if self.mode == self.MODE_CORRECT and self._mouse_pos:
             mx, my = self._mouse_pos.x(), self._mouse_pos.y()
-            painter.setPen(QPen(QColor(0, 255, 200, 200), 1, Qt.DashLine))
+            painter.setPen(QPen(QColor("#E8C547"), 1, Qt.DashLine))
             painter.drawLine(mx - 12, my, mx + 12, my)
             painter.drawLine(mx, my - 12, mx, my + 12)
 
         # Polygon-edit (extra zone) live preview
         if self.mode == self.MODE_POLY and self._poly_clicks:
-            col = QColor("#FFB74D")
+            col = QColor("#E8C547")
             pts = [self._norm_to_disp(p, ox, oy, dw, dh) for p in self._poly_clicks]
-            painter.setPen(QPen(col, 2))
+            painter.setPen(QPen(col, 1.5))
             painter.setBrush(col)
             for px, py in pts:
-                painter.drawEllipse(px - 4, py - 4, 8, 8)
+                painter.drawEllipse(QPointF(px, py), 3.5, 3.5)
             for i in range(len(pts) - 1):
                 painter.drawLine(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1])
             if self._mouse_pos:
                 mx, my = self._mouse_pos.x(), self._mouse_pos.y()
-                painter.setPen(QPen(col, 2, Qt.DashLine))
+                painter.setPen(QPen(col, 1.5, Qt.DashLine))
                 painter.setBrush(Qt.NoBrush)
                 painter.drawLine(pts[-1][0], pts[-1][1], mx, my)
                 if len(pts) >= 2:
                     painter.drawLine(mx, my, pts[0][0], pts[0][1])
+
+        # Marker info tag (Marker layer)
+        if self.layers.get("marker", True) and self.marker_info:
+            self._paint_marker_tag(painter, ox, oy, dw, dh)
+
+        # HUD — camera / fps / frame + clock, top-right of the frame, on a
+        # dark glass chip so it stays legible over bright footage
+        if self.hud_left or self.hud_time:
+            painter.setFont(self._mono(9))
+            fm = painter.fontMetrics()
+            parts_w = (fm.horizontalAdvance(self.hud_left) if self.hud_left else 0) + \
+                      ((fm.horizontalAdvance(self.hud_time) + 20) if self.hud_time else 0) + \
+                      (12 if (self.hud_left and self.hud_time) else 0)
+            y = max(oy + 20, 92)     # clear of the layer chips
+            chip = QRectF(ox + dw - 12 - parts_w - 16, y - 13, parts_w + 16, 19)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(14, 17, 20, 165))
+            painter.drawRoundedRect(chip, 5, 5)
+            right = ox + dw - 12 - 8
+            if self.hud_time:
+                tw = fm.horizontalAdvance(self.hud_time)
+                painter.setPen(QColor("#E6EAEE"))
+                painter.drawText(right - tw, y, self.hud_time)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor("#F2F4F7"))
+                painter.drawEllipse(QPointF(right - tw - 9, y - 3), 3, 3)
+                right -= tw + 20
+            if self.hud_left:
+                tw = fm.horizontalAdvance(self.hud_left)
+                painter.setPen(QColor("#AEB8C2"))
+                painter.drawText(right - tw - (12 if self.hud_time else 0), y, self.hud_left)
 
         # Instruction overlay
         n_clicks = len(self._arena_clicks)
@@ -817,15 +928,143 @@ class ZoneDrawer(QLabel):
         }
         msg = instructions.get(self.mode)
         if msg:
-            painter.setPen(QColor(255, 255, 255))
-            painter.setFont(QFont("Arial", 10))
-            painter.drawText(ox + 6, oy + dh - 8, msg)
+            painter.setFont(QFont(theme.sans_family(), 10))
+            tw = painter.fontMetrics().horizontalAdvance(msg)
+            box = QRectF(ox + (dw - (tw + 20)) / 2.0, oy + 12, tw + 20, 24)
+            painter.setPen(QPen(QColor(255, 255, 255, 30), 1))
+            painter.setBrush(QColor(14, 17, 20, 210))
+            painter.drawRoundedRect(box, 6, 6)
+            painter.setPen(QColor("#E6EAEE"))
+            painter.drawText(box, Qt.AlignCenter, msg)
 
         # Magnifier loupe — only drawn while the user is placing/dragging
         # zone points so corners can be hit precisely.
         self._paint_loupe(painter, ox, oy, dw, dh)
 
         painter.end()
+
+    # ── canvas helpers (redesign v2) ──────────────────────────────────────
+
+    def _arena_frame(self, pts):
+        """Bilinear arena parametrisation P(u, v) from the sorted corners,
+        plus the unit vectors along v (downwards) and u (rightwards)."""
+        TL, TR, BR, BL = self._sorted_corners(pts)
+
+        def P(u, v):
+            top = (TL[0] + (TR[0] - TL[0]) * u, TL[1] + (TR[1] - TL[1]) * u)
+            bot = (BL[0] + (BR[0] - BL[0]) * u, BL[1] + (BR[1] - BL[1]) * u)
+            return (top[0] + (bot[0] - top[0]) * v, top[1] + (bot[1] - top[1]) * v)
+
+        def unit(dx, dy):
+            n = (dx * dx + dy * dy) ** 0.5 or 1.0
+            return (dx / n, dy / n)
+        down = unit((BL[0] + BR[0]) / 2 - (TL[0] + TR[0]) / 2,
+                    (BL[1] + BR[1]) / 2 - (TL[1] + TR[1]) / 2)
+        right = unit((TR[0] + BR[0]) / 2 - (TL[0] + BL[0]) / 2,
+                     (TR[1] + BR[1]) / 2 - (TL[1] + BL[1]) / 2)
+        return P, down, right
+
+    def _paint_ruler(self, painter, pts, color):
+        """cm ruler along the bottom + left edges and a 10 cm scale bar."""
+        if not self.cage_dims_cm or len(pts) != 4:
+            return
+        w_cm, h_cm = self.cage_dims_cm
+        if w_cm <= 0 or h_cm <= 0:
+            return
+        P, down, right = self._arena_frame(pts)
+        ink = QColor("#7F8A9C")
+        ink.setAlphaF(0.85)
+        painter.setFont(self._mono(8))
+        fm = painter.fontMetrics()
+
+        def step_for(total):
+            return 2 if total <= 60 else 10
+
+        st = step_for(w_cm)
+        c = 0.0
+        while c <= w_cm + 1e-6:
+            u = c / w_cm
+            major = abs(c % 10) < 1e-6
+            x, y = P(u, 1.0)
+            ln = 7 if major else 3.5
+            painter.setPen(QPen(ink, 1))
+            painter.drawLine(QPointF(x, y), QPointF(x + down[0] * ln, y + down[1] * ln))
+            if major:
+                lab = f"{c:g}"
+                painter.setPen(ink)
+                tw = fm.horizontalAdvance(lab)
+                painter.drawText(QPointF(x + down[0] * 17 - tw / 2.0,
+                                         y + down[1] * 17 + 3), lab)
+            c += st
+        st = step_for(h_cm)
+        c = 0.0
+        while c <= h_cm + 1e-6:
+            v = c / h_cm
+            major = abs(c % 10) < 1e-6
+            x, y = P(0.0, v)
+            ln = 7 if major else 3.5
+            painter.setPen(QPen(ink, 1))
+            painter.drawLine(QPointF(x, y), QPointF(x - right[0] * ln, y - right[1] * ln))
+            if major:
+                lab = f"{c:g}"
+                painter.setPen(ink)
+                tw = fm.horizontalAdvance(lab)
+                painter.drawText(QPointF(x - right[0] * 10 - tw, y - right[1] * 10 + 3), lab)
+            c += st
+        # 10 cm scale bar on the right of the arena
+        if h_cm > 12:
+            off = 24.0
+            x0, y0 = P(1.0, 1.0)
+            x1, y1 = P(1.0, 1.0 - 10.0 / h_cm)
+            x0 += right[0] * off; y0 += right[1] * off
+            x1 += right[0] * off; y1 += right[1] * off
+            bar = QColor("#E6EAEE")
+            painter.setPen(QPen(bar, 1.2))
+            painter.drawLine(QPointF(x0, y0), QPointF(x1, y1))
+            for (x, y) in ((x0, y0), (x1, y1)):
+                painter.drawLine(QPointF(x - right[0] * 5, y - right[1] * 5),
+                                 QPointF(x + right[0] * 5, y + right[1] * 5))
+            painter.setFont(self._mono(9))
+            painter.drawText(QPointF((x0 + x1) / 2 + right[0] * 9,
+                                     (y0 + y1) / 2 + 3), "10 cm")
+
+    def _paint_heat(self, painter, ox, oy, dw, dh):
+        x0, y0, x1, y1 = self.heat_rect
+        r = QRectF(ox + x0 * dw, oy + y0 * dh, (x1 - x0) * dw, (y1 - y0) * dh)
+        painter.save()
+        if self.arena:
+            path = QPainterPath()
+            pts = [self._norm_to_disp(p, ox, oy, dw, dh) for p in self.arena]
+            path.moveTo(*pts[0])
+            for q in pts[1:]:
+                path.lineTo(*q)
+            path.closeSubpath()
+            painter.setClipPath(path)
+        painter.setOpacity(0.72)
+        painter.drawImage(r, self.heat_img)
+        painter.restore()
+
+    def _paint_marker_tag(self, painter, ox, oy, dw, dh):
+        info = self.marker_info
+        nx, ny = info["norm"]
+        cx, cy = self._norm_to_disp((nx, ny), ox, oy, dw, dh)
+        lines = info.get("lines") or []
+        if not lines:
+            return
+        painter.setFont(self._mono(9, True))
+        w = max(painter.fontMetrics().horizontalAdvance(s) for s in lines) + 14
+        h = 12 * len(lines) + 6
+        right = cx + 20 + w < ox + dw
+        bx = cx + 20 if right else cx - 20 - w
+        by = max(oy + 2, cy - 34)
+        box = QRectF(bx, by, w, h)
+        painter.setPen(QPen(QColor(242, 244, 247, 150), 0.8))
+        painter.setBrush(QColor(10, 12, 14, 210))
+        painter.drawRoundedRect(box, 3, 3)
+        for i, s in enumerate(lines):
+            painter.setFont(self._mono(9, i == 0))
+            painter.setPen(QColor("#F2F4F7" if i == 0 else "#C9D1D9"))
+            painter.drawText(QPointF(bx + 7, by + 13 + 12 * i), s)
 
     def _should_show_loupe(self) -> bool:
         """True when the user is actively placing or dragging zone points."""
@@ -904,7 +1143,7 @@ class ZoneDrawer(QLabel):
     def _paint_extra_zone(self, painter, z, ox, oy, dw, dh):
         """Render a single schema-driven extra zone."""
         style = z.get("style", DEFAULT_STYLE)
-        zcolor = QColor(style.get("color", "#3CA0FF"))
+        zcolor = QColor(style.get("color", "#A9B4C6"))
         thick = max(1, int(style.get("thickness", 2)))
         fill_a = max(0, min(255, int(style.get("fill_alpha", 0))))
         dashed = bool(style.get("dashed", False))

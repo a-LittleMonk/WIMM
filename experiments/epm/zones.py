@@ -25,12 +25,12 @@ DEFAULT_ARM_KINDS = {
 
 # Kind colors. Center polygon uses neutral grey.
 KIND_COLORS = {
-    "open":    "#42A5F5",  # blue
-    "closed":  "#FF7043",  # orange
-    "neutral": "#9CCC65",  # green
+    "open":    "#7FA6D9",  # blue
+    "closed":  "#E8A87C",  # orange
+    "neutral": "#8FC79A",  # green
     "custom":  "#BA68C8",  # purple
 }
-CENTER_DEFAULT_COLOR = "#BDBDBD"
+CENTER_DEFAULT_COLOR = "#A9B4C6"
 
 # Style per kind: open = dashed outline only; closed = solid outline + fill.
 KIND_STYLE = {
@@ -64,7 +64,7 @@ def plus_template_overlay_zone(hub, endpoints):
         "type": "polygon",
         "geometry": [tuple(hub)] + [tuple(p) for p in endpoints[:4]],
         "style": {
-            "color": "#FFB74D",
+            "color": "#E4D3AE",
             "thickness": 2,
             "dashed": True,
             "shape": "y_template",

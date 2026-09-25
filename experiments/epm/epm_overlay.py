@@ -113,7 +113,7 @@ def paint_epm_overlay(host, zd, painter, ox, oy, dw, dh):
     elif current == "center_zone":
         z = zd.get_zone("center_zone")
         if z and z.get("geometry") and len(z["geometry"]) >= 3:
-            color = QColor(z["style"].get("color", "#BDBDBD"))
+            color = QColor(z["style"].get("color", "#A9B4C6"))
             color.setAlpha(110)
             painter.setPen(Qt.NoPen)
             painter.setBrush(color)

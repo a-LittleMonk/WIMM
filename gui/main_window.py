@@ -1,14 +1,16 @@
 import os
 import json
+from html import escape
 from PyQt5.QtWidgets import (
     QMainWindow, QTabWidget, QAction, QFileDialog, QStatusBar, QMessageBox,
     QPushButton, QShortcut, QStackedWidget, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QGridLayout, QApplication, QAbstractSpinBox, QSlider, QComboBox,
-    QDialog, QGroupBox, QFormLayout, QLineEdit, QCheckBox,
+    QLabel, QFrame, QGridLayout, QApplication, QAbstractSpinBox, QSlider, QComboBox,
+    QDialog, QGroupBox, QFormLayout, QLineEdit, QCheckBox, QMenu, QMenuBar,
+    QToolButton,
 )
 from tracking.tracker import DEFAULT_MODEL_PARAMS
-from PyQt5.QtCore import Qt, QObject, QEvent
-from PyQt5.QtGui import QKeySequence
+from PyQt5.QtCore import Qt, QObject, QEvent, QPointF, QRectF, QTimer
+from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPen, QPixmap
 from gui.openfield_batch_tab import OpenFieldBatchTab
 from gui.y_maze_tab import YMazeBatchTab
 from gui.nor_tab import NORBatchTab
@@ -16,6 +18,8 @@ from gui.epm_tab import EPMBatchTab
 from gui.realtime_scoring_tab import RealtimeScoringTab
 from gui.log_dialog import LogDialog
 from core import logger
+from gui import theme
+from gui.redesign_widgets import SegmentedControl, StatusPill
 
 
 class _NoScrollFilter(QObject):
@@ -38,6 +42,106 @@ class _NoScrollFilter(QObject):
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".mice_tracker.json")
 
 
+def load_config():
+    """Read ~/.mice_tracker.json (empty dict when missing / unreadable)."""
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def _brand_pixmap(size, color):
+    """Logo glyph from the redesign: a framed square with a centre dot."""
+    dpr = QApplication.instance().devicePixelRatio() if QApplication.instance() else 1.0
+    pm = QPixmap(int(size * dpr), int(size * dpr))
+    pm.setDevicePixelRatio(dpr)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    pen = QPen(QColor(color), size / 11.0)
+    pen.setJoinStyle(Qt.RoundJoin)
+    p.setPen(pen)
+    p.setBrush(Qt.NoBrush)
+    m = size * 0.16
+    p.drawRoundedRect(QRectF(m, m, size - 2 * m, size - 2 * m), size * 0.06, size * 0.06)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(color))
+    p.drawEllipse(QPointF(size / 2, size / 2), size * 0.09, size * 0.09)
+    p.end()
+    return pm
+
+
+class FooterBar(QWidget):
+    """26 px footer: Output ‹path› · Backup ‹path› ⟶ model · detection · mode."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("FooterBar")
+        h = QHBoxLayout(self)
+        h.setContentsMargins(14, 0, 14, 0)
+        h.setSpacing(16)
+        self.ic = QLabel()
+        self.lbl_out = QLabel()
+        self.dot_bk = QLabel()
+        self.dot_bk.setFixedSize(6, 6)
+        self.lbl_bk = QLabel()
+        left1 = QHBoxLayout()
+        left1.setSpacing(6)
+        left1.addWidget(self.ic)
+        left1.addWidget(self.lbl_out)
+        left2 = QHBoxLayout()
+        left2.setSpacing(6)
+        left2.addWidget(self.dot_bk)
+        left2.addWidget(self.lbl_bk)
+        h.addLayout(left1)
+        h.addLayout(left2)
+        h.addStretch(1)
+        self.lbl_model = QLabel()
+        self.dot_det = QLabel()
+        self.dot_det.setFixedSize(6, 6)
+        self.lbl_det = QLabel()
+        self.lbl_mode = QLabel()
+        right2 = QHBoxLayout()
+        right2.setSpacing(6)
+        right2.addWidget(self.dot_det)
+        right2.addWidget(self.lbl_det)
+        for w in (self.lbl_out, self.lbl_bk, self.lbl_model, self.lbl_det, self.lbl_mode):
+            w.setTextFormat(Qt.RichText)
+        h.addWidget(self.lbl_model)
+        h.addLayout(right2)
+        h.addWidget(self.lbl_mode)
+
+    @staticmethod
+    def _mono(text, color):
+        return (f"<span style=\"font-family:'{theme.mono_family()}'; color:{color}\">"
+                f"{escape(text)}</span>")
+
+    def set_paths(self, output, backup):
+        from gui import icons
+        self.ic.setPixmap(icons.pixmap("folder", 12, theme.TEXT_2))
+        self.lbl_out.setText(f"Output&nbsp;&nbsp;{self._mono(output, theme.TEXT)}")
+        self.dot_bk.setStyleSheet(
+            f"background:{theme.WARN if not backup else theme.OK}; border-radius:3px;")
+        self.lbl_bk.setText(f"Backup&nbsp;&nbsp;{self._mono(backup or 'Not set', theme.TEXT if backup else theme.FAINT)}")
+
+    def set_run(self, model, det_pct, mode_text):
+        vis = model is not None
+        self.lbl_model.setVisible(vis)
+        self.dot_det.setVisible(vis and det_pct is not None)
+        self.lbl_det.setVisible(vis and det_pct is not None)
+        if vis:
+            self.lbl_model.setText(self._mono(model, theme.TEXT_2))
+        if det_pct is not None:
+            col = theme.OK if det_pct >= 90 else theme.WARN
+            self.dot_det.setStyleSheet(f"background:{col}; border-radius:3px;")
+            self.lbl_det.setText(self._mono(f"detection {det_pct:.1f} %", theme.TEXT_2))
+        self.lbl_mode.setText(mode_text)
+        self.lbl_mode.setVisible(bool(mode_text))
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -51,10 +155,20 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Mice Tracker")
         self.setMinimumSize(1000, 700)
 
-        # Settings menu — rebuilt per experiment
-        self.settings_menu = self.menuBar().addMenu("Settings")
+        # The View / Settings menus live inside the app header (redesign v2),
+        # so they use their own QMenuBar instead of the window's native one.
+        self._menubar = QMenuBar()
+        self._menubar.setObjectName("HeaderMenu")
+        self._menubar.setNativeMenuBar(False)
+        # Home — Ctrl+H, also reachable by clicking the brand in the header.
+        act_home = QAction("Home", self)
+        act_home.setShortcut(QKeySequence("Ctrl+H"))
+        act_home.triggered.connect(self._show_launcher)
+        self.addAction(act_home)
         # View menu — log viewer + future view-related actions.
-        self.view_menu = self.menuBar().addMenu("View")
+        self.view_menu = self._menubar.addMenu("View")
+        # Settings menu — rebuilt per experiment; last on the toolbar.
+        self.settings_menu = self._menubar.addMenu("Settings")
         act_logs = QAction("Logs…", self)
         act_logs.setShortcut(QKeySequence("Ctrl+L"))
         act_logs.triggered.connect(self._open_log_dialog)
@@ -99,72 +213,215 @@ class MainWindow(QMainWindow):
         corner_lay = QHBoxLayout(corner)
         corner_lay.setContentsMargins(0, 0, 0, 0)
         corner_lay.setSpacing(4)
-        home_btn = QPushButton("🏠 Home")
-        home_btn.setFixedHeight(22)
-        home_btn.setToolTip("Return to launcher")
+        home_btn = QPushButton("Home")
+        home_btn.setFixedHeight(26)
+        home_btn.setToolTip("Return to launcher (Ctrl+H)")
         home_btn.clicked.connect(self._show_launcher)
-        refresh_btn = QPushButton("⟳ Refresh")
-        refresh_btn.setFixedHeight(22)
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setFixedHeight(26)
         refresh_btn.setToolTip("Restart app — picks up code changes (F5)")
         refresh_btn.clicked.connect(self._refresh_app)
         corner_lay.addWidget(home_btn)
         corner_lay.addWidget(refresh_btn)
         self.tabs.setCornerWidget(corner, Qt.TopRightCorner)
-        self.tabs.setStyleSheet(
-            "QTabWidget::pane { border: 1px solid #555; border-radius: 2px; }"
-        )
+        self.tabs.setDocumentMode(True)
         QShortcut(QKeySequence("F5"), self, activated=self._refresh_app)
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self._build_launcher())  # index 0
         self.stack.addWidget(self.tabs)               # index 1
-        self.setCentralWidget(self.stack)
+        central = QWidget()
+        cv = QVBoxLayout(central)
+        cv.setContentsMargins(0, 0, 0, 0)
+        cv.setSpacing(0)
+        cv.addWidget(self._build_header())
+        cv.addWidget(self.stack, 1)
+        self.setCentralWidget(central)
+        self.stack.currentChanged.connect(self._sync_header)
+        self.tabs.currentChanged.connect(self._sync_header)
         self.stack.setCurrentIndex(0)
         self._build_launcher_menu()
 
+        # Footer: output / backup on the left; model · detection · mode on the right.
         self.status_bar = QStatusBar()
+        self.status_bar.setSizeGripEnabled(False)
+        self.footer = FooterBar()
+        self.status_bar.addWidget(self.footer, 1)
         self.setStatusBar(self.status_bar)
         self._refresh_status()
+        self._footer_timer = QTimer(self)
+        self._footer_timer.setInterval(600)
+        self._footer_timer.timeout.connect(self._refresh_footer_run)
+        self._footer_timer.start()
+        theme.notifier.changed.connect(self._refresh_status)
+        theme.notifier.changed.connect(self._refresh_brand)
+        self._sync_header()
+
+    # (menu name, launcher-card name, enabled, opener attribute)
+    _TESTS = [
+        ("Open Field",           "Open Field",                True,  "_open_open_field"),
+        ("Real-time Scoring",    "Real-time\nManual Scoring", True,  "_open_scoring"),
+        ("Y-Maze",               "Y-Maze",                    True,  "_open_y_maze"),
+        ("Novel Object",         "Novel Object",              True,  "_open_nor"),
+        ("Elevated Plus",        "Elevated Plus",             True,  "_open_epm"),
+        ("Forced Swim",          "Forced Swim",               False, None),
+        ("Three Chamber",        "Three Chamber",             False, None),
+    ]
+
+    def _build_header(self):
+        """App header from the redesign: brand · test picker · View/Settings ·
+        tracking pill · Simple/Full · light/dark · Logs."""
+        self.header = QWidget()
+        self.header.setObjectName("AppHeader")
+        self.header.setAttribute(Qt.WA_StyledBackground, True)
+        self.header.setFixedHeight(48)
+        h = QHBoxLayout(self.header)
+        h.setContentsMargins(14, 0, 14, 0)
+        h.setSpacing(10)
+
+        # Brand — click to go Home.
+        brand = QWidget()
+        brand.setCursor(Qt.PointingHandCursor)
+        brand.setToolTip("Home (Ctrl+H)")
+        brand.mousePressEvent = lambda _e: self._show_launcher()
+        bl = QHBoxLayout(brand)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(9)
+        self.brand_mark = QLabel()
+        self.brand_mark.setObjectName("BrandMark")
+        self.brand_mark.setFixedSize(26, 26)
+        self.brand_mark.setAlignment(Qt.AlignCenter)
+        bl.addWidget(self.brand_mark)
+        names = QVBoxLayout()
+        names.setContentsMargins(0, 0, 0, 0)
+        names.setSpacing(1)
+        name = QLabel("Mice Tracker")
+        name.setObjectName("BrandName")
+        tag = QLabel("BEHAVIOR LAB")
+        tag.setObjectName("BrandTag")
+        names.addWidget(name)
+        names.addWidget(tag)
+        bl.addLayout(names)
+        h.addWidget(brand)
+        self._refresh_brand()
+
+        sep = QFrame()
+        sep.setObjectName("HeaderSep")
+        sep.setFixedSize(1, 22)
+        h.addWidget(sep)
+
+        # Test picker (dropdown of behavioural tests) › output-folder crumb.
+        self.test_menu = QMenu(self)
+        for menu_name, _card, enabled, opener in self._TESTS:
+            act = self.test_menu.addAction(
+                menu_name if enabled else f"{menu_name}  (coming soon)")
+            act.setEnabled(enabled)
+            if opener:
+                act.triggered.connect(getattr(self, opener))
+        self.btn_test = QToolButton()
+        self.btn_test.setObjectName("TestPicker")
+        self.btn_test.setFixedHeight(30)
+        self.btn_test.setCursor(Qt.PointingHandCursor)
+        self.btn_test.setPopupMode(QToolButton.InstantPopup)
+        self.btn_test.setMenu(self.test_menu)
+        self.btn_test.setToolTip("Switch behavioral test")
+        h.addWidget(self.btn_test)
+        self.crumb_sep = QLabel("›")
+        self.crumb_sep.setObjectName("CrumbSep")
+        self.lbl_crumb = QLabel("")
+        self.lbl_crumb.setObjectName("Crumb")
+        h.addWidget(self.crumb_sep)
+        h.addWidget(self.lbl_crumb)
+
+        # A QMenuBar in a plain layout reports a tiny size hint and collapses
+        # into the "»" overflow button — size it from its items.
+        fm = self._menubar.fontMetrics()
+        menus_w = sum(fm.horizontalAdvance(a.text()) + 24 for a in self._menubar.actions())
+        self._menubar.setFixedSize(menus_w + 8, 34)
+        h.addWidget(self._menubar)
+        h.addStretch(1)
+
+        self.pill = StatusPill()
+        h.addWidget(self.pill)
+        self.seg_mode = SegmentedControl(
+            ["Simple", "Full"], 0 if self.act_simple_mode.isChecked() else 1)
+        self.seg_mode.changed.connect(lambda i: self.act_simple_mode.setChecked(i == 0))
+        self.act_simple_mode.toggled.connect(
+            lambda on: self.seg_mode.set_index(0 if on else 1))
+        h.addWidget(self.seg_mode)
+        self.seg_theme = SegmentedControl(
+            ["☀", "☾"], 1 if theme.mode() == "dark" else 0)
+        self.seg_theme.setToolTip("Light / dark theme")
+        self.seg_theme.setStyleSheet("QPushButton { font-size: 14px; padding: 0 8px; }")
+        self.seg_theme.changed.connect(self._on_theme_toggled)
+        h.addWidget(self.seg_theme)
+        b_logs = QPushButton("Logs")
+        b_logs.setFixedHeight(28)
+        b_logs.clicked.connect(self._open_log_dialog)
+        h.addWidget(b_logs)
+        return self.header
+
+    def _refresh_brand(self, *_):
+        self.brand_mark.setPixmap(_brand_pixmap(16, theme.ON_ACCENT))
+        self._launcher_mark.setPixmap(_brand_pixmap(24, theme.ON_ACCENT))
+
+    def _on_theme_toggled(self, index):
+        new_mode = "dark" if index == 1 else "light"
+        self.config["theme"] = new_mode
+        self._save_config()
+        theme.apply_theme(QApplication.instance(), new_mode)
+
+    def _sync_header(self, *_):
+        on_tool = self.stack.currentIndex() == 1
+        self.crumb_sep.setVisible(on_tool)
+        self.lbl_crumb.setVisible(on_tool)
+        if on_tool:
+            idx = self.tabs.currentIndex()
+            current = self.tabs.tabText(idx)
+            self.btn_test.setText(f"{current}  ▾")
+            self._refresh_crumb()
+        else:
+            self.btn_test.setText("Choose test  ▾")
+
+    def _refresh_crumb(self):
+        folder = self.config.get("output_folder") or ""
+        self.lbl_crumb.setText(os.path.basename(os.path.normpath(folder)) if folder else "no output folder")
 
     def _build_launcher(self):
         w = QWidget()
         v = QVBoxLayout(w)
-        v.setContentsMargins(40, 40, 40, 40)
-        v.setSpacing(20)
+        v.setContentsMargins(40, 56, 40, 40)
+        v.setSpacing(6)
 
+        mark = QLabel()
+        mark.setObjectName("LauncherMark")
+        mark.setAlignment(Qt.AlignCenter)
+        mark.setFixedSize(40, 40)
+        self._launcher_mark = mark
+        v.addWidget(mark, 0, Qt.AlignCenter)
+        v.addSpacing(8)
         title = QLabel("Mice Tracker")
+        title.setObjectName("LauncherTitle")
         title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet("font-size: 28px; font-weight: bold;")
         subtitle = QLabel("Choose a behavioral test")
+        subtitle.setObjectName("LauncherSub")
         subtitle.setAlignment(Qt.AlignCenter)
-        subtitle.setStyleSheet("font-size: 13px; color: #888;")
         v.addWidget(title)
         v.addWidget(subtitle)
-        v.addSpacing(20)
+        v.addSpacing(24)
 
         grid = QGridLayout()
         grid.setSpacing(12)
         grid.setAlignment(Qt.AlignCenter)
 
-        tests = [
-            ("Open Field",                  True,  self._open_open_field),
-            ("Real-time\nManual Scoring",   True,  self._open_scoring),
-            ("Y-Maze",                      True,  self._open_y_maze),
-            ("Novel Object",                True,  self._open_nor),
-            ("Elevated Plus",               True,  self._open_epm),
-            ("Forced Swim",                 False, None),
-            ("Three Chamber",               False, None),
-        ]
-        for i, (name, enabled, slot) in enumerate(tests):
-            btn = QPushButton(name if enabled else f"{name}\n(coming soon)")
-            btn.setFixedSize(180, 80)
+        for i, (_menu, card, enabled, opener) in enumerate(self._TESTS):
+            btn = QPushButton(card if enabled else f"{card}\n(coming soon)")
+            btn.setObjectName("TestCard")
+            btn.setFixedSize(190, 72)
             btn.setEnabled(enabled)
-            btn.setStyleSheet(
-                "QPushButton { font-size: 13px; font-weight: bold; }"
-                "QPushButton:disabled { color: #666; }"
-            )
-            if slot:
-                btn.clicked.connect(slot)
+            btn.setCursor(Qt.PointingHandCursor if enabled else Qt.ArrowCursor)
+            if opener:
+                btn.clicked.connect(getattr(self, opener))
             grid.addWidget(btn, i // 3, i % 3)
 
         grid_wrap = QWidget()
@@ -207,6 +464,9 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(1)
         self._build_scoring_menu()
 
+    def set_tracking_status(self, text):
+        self.pill.show_text(text)
+
     def _show_launcher(self):
         self.stack.setCurrentIndex(0)
         self._build_launcher_menu()
@@ -219,12 +479,7 @@ class MainWindow(QMainWindow):
         self.settings_menu.addAction(act_extra)
 
     def _add_nav_actions(self):
-        act_home = QAction("🏠 Home", self)
-        act_home.setShortcut(QKeySequence("Ctrl+H"))
-        act_home.triggered.connect(self._show_launcher)
-        self.settings_menu.addAction(act_home)
-
-        act_refresh = QAction("⟳ Refresh App", self)
+        act_refresh = QAction("Refresh app", self)
         act_refresh.setShortcut(QKeySequence("F5"))
         act_refresh.triggered.connect(self._refresh_app)
         self.settings_menu.addAction(act_refresh)
@@ -328,7 +583,7 @@ class MainWindow(QMainWindow):
             "'Off' shows only the bare detection point (default)."
         )
         body_note.setWordWrap(True)
-        body_note.setStyleSheet("font-size:11px; color:#aaa;")
+        body_note.setProperty("role", "muted")
         body_lay.addWidget(body_note)
 
         body_row = QHBoxLayout()
@@ -359,7 +614,7 @@ class MainWindow(QMainWindow):
             "back into the per-experiment UI."
         )
         e_note.setWordWrap(True)
-        e_note.setStyleSheet("font-size:11px; color:#aaa;")
+        e_note.setProperty("role", "muted")
         e_lay.addWidget(e_note)
         chk_auto_mv = QCheckBox("Enable 'Auto arena from movement'")
         chk_auto_mv.setToolTip(
@@ -387,7 +642,7 @@ class MainWindow(QMainWindow):
             "Disabled for now — for review only."
         )
         m_note.setWordWrap(True)
-        m_note.setStyleSheet("font-size:11px; color:#aaa;")
+        m_note.setProperty("role", "muted")
         m_lay.addWidget(m_note)
         btn_models = QPushButton("Open models preview…")
         btn_models.setFixedHeight(24)
@@ -442,7 +697,7 @@ class MainWindow(QMainWindow):
             "Pick a model to see its default parameters. Disabled — for review."
         )
         note.setWordWrap(True)
-        note.setStyleSheet("font-size:11px; color:#aaa;")
+        note.setProperty("role", "muted")
         outer.addWidget(note)
 
         pick_row = QHBoxLayout()
@@ -457,7 +712,7 @@ class MainWindow(QMainWindow):
         # Param panel — rebuilt when combo changes.
         param_host = QGroupBox()
         param_host.setEnabled(False)
-        param_host.setStyleSheet("QGroupBox { color:#ccc; font-size:11px; }")
+        param_host.setStyleSheet("QGroupBox { font-size:11px; }")
         param_layout = QFormLayout(param_host)
         param_layout.setSpacing(4)
         param_layout.setContentsMargins(8, 8, 8, 8)
@@ -548,6 +803,10 @@ class MainWindow(QMainWindow):
             self.config["backup_folder"] = folder
             self._save_config()
             self._refresh_status()
+            for attr in ("of_tab", "ym_tab", "nor_tab", "epm_tab"):
+                tab = getattr(self, attr, None)
+                if tab is not None and hasattr(tab, "_refresh_output_label"):
+                    tab._refresh_output_label()
 
     def _open_corrections_for_active_tab(self):
         """Open the corrections popup on whichever experiment tab is active."""
@@ -594,19 +853,37 @@ class MainWindow(QMainWindow):
         subprocess.Popen(args, creationflags=creationflags, close_fds=True)
         QApplication.quit()
 
-    def _refresh_status(self):
-        folder = self.config.get("output_folder", "Not set — go to Settings to configure")
-        backup = self.config.get("backup_folder") or "Not set"
-        self.status_bar.showMessage(f"Output: {folder}    |    Backup: {backup}")
+    def _refresh_status(self, *_):
+        folder = self.config.get("output_folder") or "Not set — go to Settings to configure"
+        self.footer.set_paths(folder, self.config.get("backup_folder") or "")
+        if hasattr(self, "lbl_crumb"):
+            self._refresh_crumb()
+        self._refresh_footer_run()
+
+    def _refresh_footer_run(self):
+        """Right-hand footer: tracking model · detection rate · Simple/Full."""
+        et = None
+        if hasattr(self, "stack") and self.stack.currentIndex() == 1:
+            et = getattr(self.tabs.currentWidget(), "embedded_tab", None)
+        if et is None or not hasattr(et, "combo_model"):
+            self.footer.set_run(None, None, "")
+            return
+        try:
+            skip = et.spin_frame_skip.value()
+            model = (f"{et.combo_model.currentText()} · {et.combo_proc_scale.currentText().split()[0]}"
+                     f" · skip {'off' if skip <= 1 else str(skip) + '×'}")
+            det = None
+            res = et.tracking_results
+            if res:
+                det = 100.0 * sum(1 for r in res if r.get("x") is not None) / len(res)
+            mode = "Simple mode" if self.config.get("simple_mode", True) else "Full mode"
+        except Exception:
+            self.footer.set_run(None, None, "")
+            return
+        self.footer.set_run(model, det, mode)
 
     def _load_config(self):
-        if os.path.exists(CONFIG_PATH):
-            try:
-                with open(CONFIG_PATH) as f:
-                    return json.load(f)
-            except Exception:
-                pass
-        return {}
+        return load_config()
 
     def _save_config(self):
         with open(CONFIG_PATH, "w") as f:

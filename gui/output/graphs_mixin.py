@@ -24,9 +24,11 @@ from PyQt5.QtGui import QColor, QPixmap
 from PyQt5.QtWidgets import QDialog, QFileDialog, QMessageBox
 
 from core import logger
+from gui import theme
 from gui.graph_style import (
     DEFAULT_CAPS as GRAPH_DEFAULT_CAPS,
     ACCENT_COLORS as GRAPH_ACCENTS,
+    resolve_style, resolve_token,
 )
 
 
@@ -92,12 +94,15 @@ class GraphsMixin:
         if builder is None:
             logger.warn(f"Export: unknown graph '{graph_name}'", source="graphs")
             return False
+        self._force_fig_mode = "light"      # files always use the light palette
         try:
             fig = builder()
         except Exception as e:
             logger.warn(f"Export: build failed for '{graph_name}': {e}",
                         source="graphs")
             return False
+        finally:
+            self._force_fig_mode = None
         if fig is None:
             logger.warn(f"Export: builder declined '{graph_name}' "
                         "(missing zone mode / no data)", source="graphs")
@@ -186,6 +191,18 @@ class GraphsMixin:
                     logger.warn(f"Graph '{name}' failed to rasterize: {e}",
                                    source="graphs")
                     continue
+                if theme.mode() == "dark":
+                    # On-screen figure follows the dark theme; the PNG bytes
+                    # embedded in Excel / saved beside it stay light.
+                    self._force_fig_mode = "light"
+                    try:
+                        fig_l = builders[name]()
+                        if fig_l is not None:
+                            _p, png = self._fig_to_pixmap_and_bytes(fig_l)
+                    except Exception as e:
+                        logger.warn(f"Light render of '{name}' failed: {e}", source="graphs")
+                    finally:
+                        self._force_fig_mode = None
                 self._graph_pixmaps[name] = pix
                 self._graph_png_bytes[name] = png
 
@@ -221,6 +238,15 @@ class GraphsMixin:
         self.lbl_graph_hint.setVisible(False)
         self._graph_selector_widget.setVisible(True)
         self._graph_scroll.setVisible(True)
+        if hasattr(self, "_rebuild_graph_list"):
+            self._rebuild_graph_list()
+
+    def _on_theme_graphs(self, _mode):
+        try:
+            if self.raw_df is not None and self._graph_pixmaps:
+                self._populate_graph_tab()
+        except Exception as e:
+            logger.warn(f"graph theme refresh failed: {e}", source="graphs")
 
     # ── Tracking Issues tab → gui/output/tracking_issues_mixin.py
 
@@ -244,9 +270,16 @@ class GraphsMixin:
             caps.update(extra)
         return caps
 
+    def _fig_mode(self):
+        """Palette used for figures: the UI theme, or "light" while building
+        files / Excel images."""
+        return getattr(self, "_force_fig_mode", None) or theme.mode()
+
     def _gstyle(self, name):
-        """Return active style dict for a graph (full, never None)."""
-        return self._graph_style.get_for(self._plugin_key(), name)
+        """Return active style dict for a graph (full, never None) with
+        theme tokens ("@ink", "@ac" …) resolved to colours."""
+        return resolve_style(self._graph_style.get_for(self._plugin_key(), name),
+                             self._fig_mode())
 
     def _plugin_key(self):
         return getattr(self.experiment, "key", None) or "open_field"
@@ -606,13 +639,19 @@ class GraphsMixin:
             if visible:
                 sp.set_edgecolor(st.get("spine_color", "#777777"))
                 sp.set_linewidth(float(st.get("spine_width", 1.0)))
+        self._cm_axes_on = False
         if name in self._GRIDLESS_GRAPHS:
-            ax.set_xticks([]); ax.set_yticks([])
+            if self._cm_ticks_ok(name) and self._apply_cm_ticks(ax, st):
+                self._cm_axes_on = True
+            else:
+                ax.set_xticks([]); ax.set_yticks([])
         elif "show_ticks" in allowed and not st.get("show_ticks", True):
             ax.set_xticks([]); ax.set_yticks([])
         else:
             ax.tick_params(colors=st.get("tick_color", "#333333"),
-                           labelsize=int(st.get("tick_size", 9)))
+                           labelsize=int(st.get("tick_size", 9)),
+                           direction="out", length=4, width=1)
+            self._mono_ticks(ax)
             if st.get("tick_bold"):
                 for lab in ax.get_xticklabels() + ax.get_yticklabels():
                     lab.set_fontweight("bold")
@@ -623,6 +662,57 @@ class GraphsMixin:
                     alpha=float(st.get("grid_alpha", 0.3)),
                     linestyle=st.get("grid_linestyle", "-"))
 
+    def _mono_ticks(self, ax):
+        try:
+            ax.tick_params(labelfontfamily=theme.mono_family())
+        except Exception:
+            for lab in ax.get_xticklabels() + ax.get_yticklabels():
+                lab.set_fontfamily(theme.mono_family())
+
+    def _cm_ticks_ok(self, name):
+        """Spatial graphs get cm rulers when the arena is calibrated (Open
+        Field / NOR — EPM and Y-Maze plot in canonical maze units)."""
+        return (name in self._GRIDLESS_GRAPHS
+                and self._plugin_key() in ("open_field", "nor"))
+
+    def _apply_cm_ticks(self, ax, st):
+        """X / Y ticks in cm measured from the arena's top-left corner.
+
+        Graph coordinates live in the (possibly perspective-warped) space
+        where the arena fills the frame, so the physical size comes from the
+        calibrated arena dimensions and is mapped onto the arena bbox."""
+        try:
+            _, arena, _, _ = self._graph_data()
+        except Exception:
+            return False
+        dims = getattr(getattr(self, "zone_drawer", None), "cage_dims_cm", None)
+        if not (arena and len(arena) >= 3 and dims):
+            return False
+        w_cm, h_cm = float(dims[0]), float(dims[1])
+        if w_cm <= 0 or h_cm <= 0:
+            return False
+        arr = np.array(arena, dtype=float)
+        x0, x1 = float(arr[:, 0].min()), float(arr[:, 0].max())
+        y0, y1 = float(arr[:, 1].min()), float(arr[:, 1].max())
+        step = 10 if max(w_cm, h_cm) >= 25 else (5 if max(w_cm, h_cm) >= 12 else 2)
+        xs = np.arange(0.0, w_cm + 1e-6, step)
+        ys = np.arange(0.0, h_cm + 1e-6, step)
+        ax.set_xticks(x0 + xs / w_cm * (x1 - x0))
+        ax.set_xticklabels([f"{c:g}" for c in xs])
+        ax.set_yticks(y0 + ys / h_cm * (y1 - y0))
+        ax.set_yticklabels([f"{c:g}" for c in ys])
+        ax.tick_params(colors=st.get("tick_color", "#333333"),
+                       labelsize=int(st.get("tick_size", 9)),
+                       direction="out", length=4, width=1)
+        self._mono_ticks(ax)
+        col = st.get("text_color", st.get("tick_color", "#333333"))
+        fam = st.get("font_family", "sans-serif")
+        if not st.get("xlabel"):
+            ax.set_xlabel("X (cm)", color=col, fontsize=int(st.get("label_size", 10)), fontfamily=fam)
+        if not st.get("ylabel"):
+            ax.set_ylabel("Y (cm)", color=col, fontsize=int(st.get("label_size", 10)), fontfamily=fam)
+        return True
+
     def _apply_style_text(self, ax, name, st):
         allowed = self._style_allowed(name)
         fam = st.get("font_family", "sans-serif")
@@ -631,16 +721,16 @@ class GraphsMixin:
             title_pad = 6.0 + float(st.get("title_pad", 0.0))
             ax.set_title(st["title"], fontsize=int(st.get("title_size", 12)),
                          fontweight="bold" if st.get("title_bold") else "normal",
-                         fontfamily=fam,
+                         fontfamily=fam, color=st.get("text_color", "black"),
                          pad=max(0.0, title_pad))
         if "xlabel" in allowed and st.get("xlabel"):
             ax.set_xlabel(st["xlabel"], fontsize=int(st.get("label_size", 10)),
                           fontweight="bold" if st.get("label_bold") else "normal",
-                          fontfamily=fam)
+                          fontfamily=fam, color=st.get("text_color", "black"))
         if "ylabel" in allowed and st.get("ylabel"):
             ax.set_ylabel(st["ylabel"], fontsize=int(st.get("label_size", 10)),
                           fontweight="bold" if st.get("label_bold") else "normal",
-                          fontfamily=fam)
+                          fontfamily=fam, color=st.get("text_color", "black"))
 
     def _apply_legend(self, ax, name, st, handles=None):
         from gui.graph_style_dialog import _legend_kwargs_for
@@ -787,9 +877,9 @@ class GraphsMixin:
         psm = st.get("pin_start_marker", "o")
         pem = st.get("pin_end_marker", "o")
         ax.scatter([x[0]], [y[0]], s=psz, c=pcs, marker=psm,
-                   edgecolors="white", linewidths=1.5, zorder=6)
+                   edgecolors=st["bg"], linewidths=1.0, zorder=6)
         ax.scatter([x[-1]], [y[-1]], s=psz, c=pce, marker=pem,
-                   edgecolors="white", linewidths=1.5, zorder=6)
+                   edgecolors=st["bg"], linewidths=1.0, zorder=6)
 
         # Optional 4×4 grid overlay (OF grid zone-mode only).
         caps = self._graph_style_caps("Trajectory")
@@ -816,12 +906,26 @@ class GraphsMixin:
         center_shown = False
         center_col = st.get("center_pct_color", "#FFFFFF")
         if "center_pct" in caps and st.get("show_center_pct", False):
-            center_poly = self._center_polygon_for_trajectory(
-                arena, st.get("center_size_pct", 45))
+            center_poly = None
+            size_txt = int(st.get("center_size_pct", 50))
+            if self._plugin_key() == "open_field":
+                # the real center zone the user drew / sized in the Zones card
+                try:
+                    _cz = self._graph_data()[2]
+                    if _cz and len(_cz) >= 3:
+                        center_poly = _cz
+                        size_txt = int(self.spin_center_pct.value())
+                except Exception:
+                    center_poly = None
+            if center_poly is None:
+                center_poly = self._center_polygon_for_trajectory(
+                    arena, st.get("center_size_pct", 50))
             if center_poly is not None:
+                fillc = QColor(center_col)
                 ax.add_patch(Polygon(
-                    center_poly, closed=True, fill=False,
-                    edgecolor=center_col, linewidth=1.8, linestyle="--",
+                    center_poly, closed=True, fill=True,
+                    facecolor=(fillc.redF(), fillc.greenF(), fillc.blueF(), 0.06),
+                    edgecolor=center_col, linewidth=1.0, linestyle=(0, (4, 3)),
                     zorder=5))
                 center_shown = True
 
@@ -860,15 +964,15 @@ class GraphsMixin:
         ]
         if center_shown:
             size_pct = int(st.get("center_size_pct", 45))
-            handles.append(Line2D([], [], color=center_col, linestyle="--",
-                                  linewidth=1.8,
-                                  label=f"Center {size_pct}%"))
+            handles.append(Line2D([], [], color=center_col, linestyle=(0, (4, 3)),
+                                  linewidth=1.0,
+                                  label=f"Center {size_txt}%"))
         handles.extend([
-            Line2D([], [], marker=psm, color="w",
-                   markerfacecolor=pcs, markeredgecolor="white",
+            Line2D([], [], marker=psm, color=st["bg"],
+                   markerfacecolor=pcs, markeredgecolor=st["bg"],
                    markersize=6, markeredgewidth=1.0, label="Start"),
-            Line2D([], [], marker=pem, color="w",
-                   markerfacecolor=pce, markeredgecolor="white",
+            Line2D([], [], marker=pem, color=st["bg"],
+                   markerfacecolor=pce, markeredgecolor=st["bg"],
                    markersize=6, markeredgewidth=1.0, label="End"),
         ])
         if plugin_handles:
@@ -1061,18 +1165,27 @@ class GraphsMixin:
                 cax = fig.add_axes(cb_rect)
                 cbar = fig.colorbar(im, cax=cax, orientation="horizontal")
                 cbar.set_ticks([0.0, max_sec if max_sec > 0 else 1.0])
-                cbar.set_ticklabels(["0s", f"{max_sec:.1f}s"])
-                cbar.ax.tick_params(labelsize=10, length=0)
+                cbar.set_ticklabels(["0s", (f"{max_sec:.2f}s" if max_sec < 1 else f"{max_sec:.1f}s")])
+                cbar.ax.tick_params(labelsize=int(st.get("tick_size", 9)), length=0,
+                                    colors=st.get("tick_color", "#333333"))
+                try:
+                    cbar.ax.tick_params(labelfontfamily=theme.mono_family())
+                except Exception:
+                    pass
                 cbar.outline.set_visible(False)
                 lbl = st.get("colorbar_label") or ""
                 if lbl:
                     cbar.set_label(lbl,
                                    fontsize=int(st.get("tick_size", 9)),
-                                   color=st.get("tick_color", "#333333"))
+                                   color=st.get("text_color", "#333333"))
                 # Reserve a bit more bottom margin when the bar sits low so
                 # the imshow axes don't overlap it.
                 bot_margin = max(0.14, cb_rect[1] + cb_rect[3] + 0.04)
-                fig.subplots_adjust(top=0.96, bottom=bot_margin, left=0.04, right=0.96)
+                if getattr(self, '_cm_axes_on', False):
+                    bot_margin = max(bot_margin, 0.27)   # room for the X (cm) ruler
+                fig.subplots_adjust(top=0.96, bottom=bot_margin,
+                                    left=0.11 if getattr(self, '_cm_axes_on', False) else 0.04,
+                                    right=0.96)
             except Exception:
                 pass
 
@@ -1135,7 +1248,7 @@ class GraphsMixin:
                 quad = self._grid_cell_quad_px(arena, row, col)
                 ax.add_patch(Polygon(quad, closed=True,
                                      facecolor=cmap(norm(t)),
-                                     edgecolor=edge_color, linewidth=0.7))
+                                     edgecolor=edge_color, linewidth=1.0))
                 # Cell number + time label, centered (with optional offset).
                 cx = sum(p[0] for p in quad) / 4.0
                 cy = sum(p[1] for p in quad) / 4.0
@@ -1143,10 +1256,11 @@ class GraphsMixin:
                 cy += float(st.get("cell_label_dy", 0))
                 # Pick text color based on background brightness for contrast.
                 r, g, b, _ = cmap(norm(t))
-                text_color = "white" if (0.299*r + 0.587*g + 0.114*b) < 0.5 else "black"
+                text_color = "#FFFFFF" if (0.299*r + 0.587*g + 0.114*b) < 0.5 else "#1C2127"
                 ax.text(cx, cy, f"{cid}\n{t:.1f}s",
                         ha="center", va="center", color=text_color,
-                        fontsize=9, linespacing=1.1)
+                        fontsize=9, linespacing=1.1,
+                        fontfamily=theme.mono_family())
 
         # Arena outline on top.
         ax.add_patch(Polygon(arena, closed=True, facecolor="none",
@@ -1174,8 +1288,13 @@ class GraphsMixin:
                 cax = fig.add_axes(cb_rect)
                 cbar = fig.colorbar(sm, cax=cax, orientation="horizontal")
                 cbar.set_ticks([0.0, max_sec if max_sec > 0 else 1.0])
-                cbar.set_ticklabels(["0s", f"{max_sec:.1f}s"])
-                cbar.ax.tick_params(labelsize=10, length=0)
+                cbar.set_ticklabels(["0s", (f"{max_sec:.2f}s" if max_sec < 1 else f"{max_sec:.1f}s")])
+                cbar.ax.tick_params(labelsize=int(st.get("tick_size", 9)), length=0,
+                                    colors=st.get("tick_color", "#333333"))
+                try:
+                    cbar.ax.tick_params(labelfontfamily=theme.mono_family())
+                except Exception:
+                    pass
                 cbar.outline.set_visible(False)
                 lbl = st.get("colorbar_label") or ""
                 if lbl:
@@ -1183,7 +1302,11 @@ class GraphsMixin:
                                    fontsize=int(st.get("tick_size", 9)),
                                    color=st.get("tick_color", "#333333"))
                 bot_margin = max(0.14, cb_rect[1] + cb_rect[3] + 0.04)
-                fig.subplots_adjust(top=0.96, bottom=bot_margin, left=0.04, right=0.96)
+                if getattr(self, '_cm_axes_on', False):
+                    bot_margin = max(bot_margin, 0.27)   # room for the X (cm) ruler
+                fig.subplots_adjust(top=0.96, bottom=bot_margin,
+                                    left=0.11 if getattr(self, '_cm_axes_on', False) else 0.04,
+                                    right=0.96)
             except Exception:
                 pass
 
@@ -1211,7 +1334,7 @@ class GraphsMixin:
             df = self.raw_df
             zones  = ["center_zone", "periphery", "undetected", "outside"]
             labels = ["Center Zone", "Periphery", "Undetected", "Outside"]
-            default_colors = ["#4CAF50", "#2196F3", "#9E9E9E", "#FF5722"]
+            default_colors = resolve_token(["@ac", "@ink3", "@warn", "@err"], self._fig_mode())
             values = [(df["Zone"] == z).sum() / fps for z in zones]
             value_fmt = lambda v: f"{v:.1f}s"
 
@@ -1220,9 +1343,9 @@ class GraphsMixin:
             colors.append("#888888")
 
         tc = st.get("tick_color", self._text_color_for_bg(st["bg"]))
-        fig, ax = plt.subplots(figsize=(5, 3), facecolor=st["bg"])
+        fig, ax = plt.subplots(figsize=(6, 3.4), facecolor=st["bg"])
         ax.set_facecolor(st["bg"])
-        bars = ax.bar(labels, values, color=colors[:len(labels)], width=0.5)
+        bars = ax.bar(labels, values, color=colors[:len(labels)], width=0.4)
         # Headroom for labels above the tallest bar.
         max_v = max(values) if values else 0.0
         if max_v > 0:
@@ -1232,7 +1355,8 @@ class GraphsMixin:
                 ax.text(bar.get_x() + bar.get_width() / 2,
                         bar.get_height() + (max_v * 0.02 if max_v else 0.3),
                         value_fmt(v), ha="center", color=tc,
-                        fontsize=int(st.get("tick_size", 9)))
+                        fontsize=int(st.get("tick_size", 9)),
+                        fontfamily=theme.mono_family())
         self._apply_style_axes(ax, "Zone Time", st)
         self._apply_style_text(ax, "Zone Time", st)
         if bar_title:
@@ -1308,8 +1432,8 @@ class GraphsMixin:
         mk_plt = "" if mk == "none" else mk
         alpha = float(st.get("alpha", 0.9))
         ax.plot(time, speed, color=st["path_color"],
-                linewidth=max(0.3, st["path_width"] * 0.4),
-                alpha=alpha * 0.7, linestyle=ls,
+                linewidth=max(0.3, st["path_width"] * 0.6),
+                alpha=alpha * 0.45, linestyle=ls,
                 marker=mk_plt, markersize=int(st.get("marker_size", 5)))
         win = max(1, int(fps))
         if len(speed) > win:
@@ -1319,11 +1443,21 @@ class GraphsMixin:
             ax.plot(time, smooth, color=st["path_color"],
                     linewidth=st["path_width"], alpha=alpha,
                     linestyle=ls, label=f"{win}-frame avg")
+        # Movement threshold (dashed) — same units as the curve.
+        try:
+            thr = float(self.spin_movement_thr.value())
+        except Exception:
+            thr = 0.0
+        if thr > 0 and len(time):
+            wc = resolve_token("@warn", self._fig_mode())
+            ax.axhline(thr, color=wc, linestyle=(0, (5, 3)), linewidth=1.0)
+            ax.text(float(time.max()), thr, f"move threshold {thr:g}",
+                    ha="right", va="bottom", color=wc, fontsize=9)
         # Default axis labels if user left blank.
         if not st.get("xlabel"):
-            ax.set_xlabel("Time (s)", color=st.get("tick_color", "#333"))
+            ax.set_xlabel("Time (s)", color=st.get("text_color", "#333"))
         if not st.get("ylabel"):
-            ax.set_ylabel(unit_default, color=st.get("tick_color", "#333"))
+            ax.set_ylabel(unit_default, color=st.get("text_color", "#333"))
         self._apply_style_axes(ax, "Speed", st)
         self._apply_style_text(ax, "Speed", st)
         self._apply_legend(ax, "Speed", st)
@@ -1348,19 +1482,24 @@ class GraphsMixin:
         fig, ax = plt.subplots(figsize=(8, 3.5), facecolor=st["bg"])
         ax.set_facecolor(st["bg"])
         upper = min(float(np.max(speeds)), p99 * 1.5 + 1e-6)
+        fps_h = float(self.fps or 30.0)
         ax.hist(speeds, bins=60, range=(0, upper), color=st["path_color"],
-                edgecolor=st.get("hist_edge_color", "#222222"))
+                weights=np.full(len(speeds), 1.0 / fps_h),
+                edgecolor=st.get("hist_edge_color", "#222222"), linewidth=0.5)
+        mode_h = self._fig_mode()
         for v, lbl, c in (
-            (med, "median", GRAPH_ACCENTS["stat_median"]),
-            (p90, "P90",    GRAPH_ACCENTS["stat_p90"]),
-            (p99, "P99",    GRAPH_ACCENTS["stat_p99"]),
+            (med, "median", resolve_token(GRAPH_ACCENTS["stat_median"], mode_h)),
+            (p90, "P90",    resolve_token(GRAPH_ACCENTS["stat_p90"], mode_h)),
+            (p99, "P99",    resolve_token(GRAPH_ACCENTS["stat_p99"], mode_h)),
         ):
-            ax.axvline(v, color=c, linewidth=1.5, linestyle="--",
+            ax.axvline(v, color=c, linewidth=1.0, linestyle=(0, (4, 3)),
                        label=f"{lbl}: {v:.2f}")
+            ax.text(v, ax.get_ylim()[1] * 0.97, f" {lbl} {v:.1f}", color=c,
+                    fontsize=9, ha="left", va="top")
         if not st.get("xlabel"):
-            ax.set_xlabel(f"Speed ({unit})", color=st.get("tick_color", "#333"))
+            ax.set_xlabel(f"Speed ({unit})", color=st.get("text_color", "#333"))
         if not st.get("ylabel"):
-            ax.set_ylabel("Frame count", color=st.get("tick_color", "#333"))
+            ax.set_ylabel("Time (s)", color=st.get("text_color", "#333"))
         self._apply_style_axes(ax, "Speed Histogram", st)
         self._apply_style_text(ax, "Speed Histogram", st)
         self._apply_legend(ax, "Speed Histogram", st)
@@ -1379,29 +1518,35 @@ class GraphsMixin:
         if dist_col is None:
             return None
         unit = dist_col.split("(")[-1].rstrip(")")  # e.g. "cm"
-        x_vals = df["Bin Start (s)"].values.astype(float) / 60.0  # minutes
+        x_start = df["Bin Start (s)"].values.astype(float) / 60.0  # minutes
+        if "Bin End (s)" in df.columns:
+            bin_w = (df["Bin End (s)"].values.astype(float) / 60.0 - x_start)
+        else:
+            bin_w = np.full(len(x_start), (x_start[1] - x_start[0]) if len(x_start) > 1 else 1.0)
+        x_vals = x_start + bin_w / 2.0            # bin centres
         y_vals = df[dist_col].values.astype(float)
         fig, ax = plt.subplots(figsize=(8, 3.5), facecolor=st["bg"])
         ax.set_facecolor(st["bg"])
-        ls = st.get("linestyle", "-")
-        mk = st.get("marker", "o")
-        mk_plt = "o" if mk == "none" else mk
-        ax.plot(x_vals, y_vals, color=st["path_color"],
-                linewidth=st["path_width"],
-                alpha=float(st.get("alpha", 0.9)),
-                linestyle=ls, marker=mk_plt,
-                markersize=int(st.get("marker_size", 5)),
-                label=f"Distance per bin ({unit})")
+        bar_col = st["path_color"]
+        ax.bar(x_vals, y_vals, width=bin_w * 0.7, color=bar_col,
+               alpha=float(st.get("alpha", 0.9)))
+        if len(x_vals) <= 12:
+            for xv, yv in zip(x_vals, y_vals):
+                ax.text(xv, yv + max(y_vals) * 0.015, f"{yv:.0f}", ha="center",
+                        va="bottom", fontsize=int(st.get("tick_size", 9)),
+                        color=st.get("tick_color", "#333"),
+                        fontfamily=theme.mono_family())
         if len(x_vals) >= 2:
             slope, intercept = np.polyfit(x_vals, y_vals, 1)
             fit = slope * x_vals + intercept
-            ax.plot(x_vals, fit, "--", color=GRAPH_ACCENTS["linfit"],
-                    linewidth=max(0.5, st["path_width"] * 0.8),
-                    label=f"Linear fit: {slope:+.2f} {unit}/min")
+            ax.plot(x_vals, fit, color=resolve_token(GRAPH_ACCENTS["linfit"], self._fig_mode()),
+                    linestyle=(0, (6, 3)), linewidth=1.2,
+                    label=f"slope {slope:+.2f} {unit}/min")
+        ax.set_ylim(0, max(y_vals) * 1.18 if len(y_vals) and max(y_vals) > 0 else 1)
         if not st.get("xlabel"):
-            ax.set_xlabel("Time (min)", color=st.get("tick_color", "#333"))
+            ax.set_xlabel("Bin center (min)", color=st.get("text_color", "#333"))
         if not st.get("ylabel"):
-            ax.set_ylabel(f"Distance ({unit})", color=st.get("tick_color", "#333"))
+            ax.set_ylabel(f"Distance ({unit})", color=st.get("text_color", "#333"))
         self._apply_style_axes(ax, "Habituation", st)
         self._apply_style_text(ax, "Habituation", st)
         self._apply_legend(ax, "Habituation", st)

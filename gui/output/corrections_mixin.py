@@ -23,6 +23,9 @@ from PyQt5.QtWidgets import QDialog, QVBoxLayout, QFrame, QLabel, QPushButton
 from gui.zone_drawer import ZoneDrawer
 
 
+from gui import theme
+
+
 class CorrectionsMixin:
     def _open_corrections_popup(self):
         """Show the manual-corrections popup (Fix / Clear / Next miss /
@@ -39,7 +42,7 @@ class CorrectionsMixin:
             v.addWidget(self.btn_clear_fixes)
             sep = QFrame()
             sep.setFrameShape(QFrame.HLine)
-            sep.setStyleSheet("color:#444;")
+            sep.setProperty("role", "hline")
             v.addWidget(sep)
             v.addWidget(self.btn_next_miss)
             v.addWidget(self.btn_interpolate)
@@ -156,7 +159,7 @@ class CorrectionsMixin:
         self._on_scrub(self.slider_scrub.value())
         if filled:
             self.lbl_track.setText(f"Interpolated {filled} missing frames")
-            self.lbl_track.setStyleSheet("color:#FF9800; font-size:11px;")
+            theme.set_tone(self.lbl_track, "warn", "font-size:11px;")
         else:
             self.lbl_track.setText("No gaps to interpolate")
-            self.lbl_track.setStyleSheet("color:#888; font-size:11px;")
+            theme.set_tone(self.lbl_track, "faint", "font-size:11px;")

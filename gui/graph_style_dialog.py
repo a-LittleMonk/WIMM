@@ -18,7 +18,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
 from gui.graph_style import (
     GRAPH_NAMES, GRAPH_FIELDS, BUILTIN_PRESETS, GraphStyleConfig,
-    ACCENT_COLORS, default_style_for,
+    ACCENT_COLORS, default_style_for, resolve_style, resolve_token,
 )
 
 # ── choice lists ────────────────────────────────────────────────────────
@@ -82,6 +82,11 @@ def maze_canonical_dirs(plugin_key):
         return [(math.cos(math.radians(a)), math.sin(math.radians(a)))
                 for a in (90.0, 210.0, 330.0)]
     return []
+
+
+def _fig_mode():
+    from gui import theme
+    return theme.mode()
 
 
 def resolve_cmap(st):
@@ -155,6 +160,10 @@ def _legend_kwargs_for(ax, st):
     kwargs = dict(
         fontsize=int(st.get("legend_fontsize", 8)),
         facecolor=st.get("legend_bg", "#FFFFFF"),
+        labelcolor=st.get("text_color", "black"),
+        edgecolor=st.get("grid_color", "#CCCCCC"),
+        framealpha=0.95,
+        fancybox=False,
     )
     if loc_choice == "custom":
         dx = float(st.get("legend_x_offset", 0.0))
@@ -180,8 +189,8 @@ def _legend_kwargs_for(ax, st):
 GRID_AXIS_CHOICES = ["both", "x", "y"]
 
 SWATCHES = [
-    "#FFFFFF", "#000000", "#7A2E8E", "#FF9F4A", "#23C552", "#E5484D",
-    "#1A6EA8", "#88BBFF", "#FFD740", "#9E9E9E", "#4CAF50", "#FF5722",
+    "#FFFFFF", "#16181B", "#1B2436", "#A9B4C6", "#E4D3AE", "#5DBB85",
+    "#E8C547", "#D36BA6", "#E0695E", "#7FA6D9", "#E8A87C", "#8FC79A",
 ]
 
 
@@ -217,7 +226,7 @@ class _ColorButton(QPushButton):
         self.setStyleSheet(
             "QPushButton { "
             f"background:{self._hex}; color:{txt}; "
-            "border:1px solid #555; padding:0 4px; font-size:11px;"
+            "border:1px solid rgba(128,128,128,0.45); padding:0 4px; font-size:11px;"
             " }"
         )
 
@@ -429,7 +438,7 @@ class GraphStyleDialog(QDialog):
             gb.setChecked(True)
             gb.setStyleSheet(
                 "QGroupBox { font-weight: bold; margin-top: 8px; "
-                "border: 1px solid #B0B0B0; border-radius: 4px; padding: 6px; }"
+                "border: 1px solid rgba(128,128,128,0.45); border-radius: 4px; padding: 6px; }"
                 "QGroupBox::title { subcontrol-origin: margin; left: 8px; "
                 "padding: 0 4px; }"
             )
@@ -952,7 +961,7 @@ class GraphStyleDialog(QDialog):
                 pass
 
     def _add_color(self, form, field, label, style):
-        btn = _ColorButton(style.get(field, "#000000"),
+        btn = _ColorButton(resolve_token(style.get(field, "#000000"), _fig_mode()),
                            lambda hx, f=field: self._commit(f, hx), self)
         wrap = QHBoxLayout()
         wrap.setContentsMargins(0, 0, 0, 0)
@@ -960,7 +969,7 @@ class GraphStyleDialog(QDialog):
         for hx in SWATCHES:
             sw = QPushButton()
             sw.setFixedSize(18, 18)
-            sw.setStyleSheet(f"background:{hx}; border:1px solid #555;")
+            sw.setStyleSheet(f"background:{hx}; border:1px solid rgba(128,128,128,0.45);")
             sw.clicked.connect(lambda _=False, h=hx, b=btn, f=field:
                                (b.set_hex(h), self._commit(f, h)))
             wrap.addWidget(sw)
@@ -1095,7 +1104,7 @@ class GraphStyleDialog(QDialog):
 
     def _add_bar_colors(self, form, style):
         """Editor for the 4 zone-bar colors."""
-        cols = list(style.get("bar_colors") or ["#4CAF50", "#2196F3", "#9E9E9E", "#FF5722"])
+        cols = list(resolve_token(style.get("bar_colors") or ["@ac", "@ink3", "@warn", "@err"], _fig_mode()))
         baseline = default_style_for(self._current, self._current_plugin_key).get("bar_colors") or []
         labels = ["Center", "Periphery", "Undetected", "Outside"]
         for i, lbl in enumerate(labels):
@@ -1906,7 +1915,7 @@ class GraphStyleDialog(QDialog):
                 ))
 
         name = self._current
-        st = self._cfg.get_for(self._current_plugin_key, name)
+        st = resolve_style(self._cfg.get_for(self._current_plugin_key, name), _fig_mode())
         allowed = self._allowed_fields(name)
         bg = st["bg"]
         # outer_bg paints fig + axes when present; bg fills inside the arena
@@ -2165,9 +2174,9 @@ class GraphStyleDialog(QDialog):
                     color=st["path_color"],
                     edgecolor=st.get("hist_edge_color", "#222222"))
             for v, lbl, c in (
-                (float(np.median(speeds)),       "median", ACCENT_COLORS["stat_median"]),
-                (float(np.quantile(speeds, .9)), "P90",    ACCENT_COLORS["stat_p90"]),
-                (p99,                            "P99",    ACCENT_COLORS["stat_p99"]),
+                (float(np.median(speeds)),       "median", resolve_token(ACCENT_COLORS["stat_median"], _fig_mode())),
+                (float(np.quantile(speeds, .9)), "P90",    resolve_token(ACCENT_COLORS["stat_p90"], _fig_mode())),
+                (p99,                            "P99",    resolve_token(ACCENT_COLORS["stat_p99"], _fig_mode())),
             ):
                 ax.axvline(v, color=c, linewidth=1.5, linestyle="--",
                            label=f"{lbl}: {v:.2f}")
@@ -2184,7 +2193,7 @@ class GraphStyleDialog(QDialog):
             if x_v.size >= 2:
                 slope, intercept = np.polyfit(x_v, y_v, 1)
                 ax.plot(x_v, slope * x_v + intercept, "--",
-                        color=ACCENT_COLORS["linfit"],
+                        color=resolve_token(ACCENT_COLORS["linfit"], _fig_mode()),
                         linewidth=max(0.5, st["path_width"] * 0.8),
                         label=f"Linear fit: {slope:+.2f}/min")
             self._drag_artists["legend"] = self._maybe_legend(ax, st, allowed)
@@ -2195,7 +2204,7 @@ class GraphStyleDialog(QDialog):
             # NOR objects, OF center/periphery) — fall back to dict order.
             labels = smp.get("zone_labels") or list(zt.keys())
             colors_b = list(st.get("bar_colors") or
-                            ["#4CAF50", "#2196F3", "#9E9E9E", "#FF5722"])
+                            ["#1B2436", "#8A8F95", "#86672E", "#B3382E"])
             while len(colors_b) < len(labels):
                 colors_b.append("#888888")
             times = [zt.get(k, 0.0) for k in labels]

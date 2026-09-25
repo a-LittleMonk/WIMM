@@ -13,10 +13,10 @@ GRAPH_NAMES = [
 # Accent colors used by stats overlays (median/P90/P99 markers, linear-fit
 # line). Centralized here so dialog preview and real renderer never drift.
 ACCENT_COLORS = {
-    "stat_median": "#3CDC64",
-    "stat_p90":    "#FFD740",
-    "stat_p99":    "#FF6464",
-    "linfit":      "#FF8844",
+    "stat_median": "@ok",
+    "stat_p90":    "@warn",
+    "stat_p99":    "@err",
+    "linfit":      "@err",
 }
 
 # Style sections — group related fields. The dialog organizes its tabs
@@ -148,7 +148,7 @@ GRAPH_FIELDS = {
 }
 
 
-def _style(**overrides):
+def _legacy_style(**overrides):
     base = {
         # basic
         "bg":              "white",
@@ -242,41 +242,184 @@ def _style(**overrides):
     return base
 
 
-# Built-in presets. Each is a dict { graph_name → style_dict }.
-LIGHT_PRESET = {
-    "Trajectory":      _style(title="Trajectory",
+# Previous (pre-redesign) defaults — used only to migrate saved styles.
+_LEGACY_LIGHT = {
+    "Trajectory":      _legacy_style(title="Trajectory",
                               spine_top=False, spine_right=False,
                               spine_bottom=False, spine_left=False,
                               show_ticks=False),
-    "Heatmap":         _style(cmap="viridis", title="Heatmap",
+    "Heatmap":         _legacy_style(cmap="viridis", title="Heatmap",
                               spine_top=False, spine_right=False,
                               spine_bottom=False, spine_left=False,
                               show_ticks=False, colorbar_show=True,
                               colorbar_label="seconds"),
-    "Cell Time":       _style(cmap="YlOrRd", title="Cell Time",
+    "Cell Time":       _legacy_style(cmap="YlOrRd", title="Cell Time",
                               arena_color="#888888", arena_width=1.2,
                               spine_top=False, spine_right=False,
                               spine_bottom=False, spine_left=False,
                               show_ticks=False,
                               colorbar_show=True, colorbar_label="seconds"),
-    "Speed":           _style(path_color="#1A6EA8", path_width=1.0,
+    "Speed":           _legacy_style(path_color="#1A6EA8", path_width=1.0,
                               title="Speed over Time",
                               xlabel="Time (s)", ylabel="Speed (cm/s)",
                               grid=True),
-    "Speed Histogram": _style(path_color="#1A6EA8",
+    "Speed Histogram": _legacy_style(path_color="#1A6EA8",
                               title="Speed distribution",
                               xlabel="Speed", ylabel="Frame count",
                               grid=True, hist_edge_color="#1A4F72"),
-    "Habituation":     _style(path_color="#1A6EA8", path_width=1.5,
+    "Habituation":     _legacy_style(path_color="#1A6EA8", path_width=1.5,
                               marker="o", marker_size=5,
                               title="Habituation curve",
                               xlabel="Time (min)", ylabel="Distance",
                               grid=True),
-    "Zone Time":       _style(title="Time per Zone",
+    "Zone Time":       _legacy_style(title="Time per Zone",
                               ylabel="Time (s)", grid=True),
-    "Triplets":        _style(title="Triplet quality",
+    "Triplets":        _legacy_style(title="Triplet quality",
                               ylabel="Share (%)", grid=True,
                               bar_colors=["#4CAF50", "#E5484D"]),
+}
+
+
+
+# Colour tokens: strings starting with "@" resolve against the active UI theme
+# (or forced light for exports) via resolve_token / resolve_style. Literal
+# colours a user picks in Customize Graphs are kept verbatim.
+_TOKEN_KEYS = {
+    "@surface": "SURFACE", "@surface2": "SURFACE_2", "@ink": "TEXT", "@ink2": "TEXT_2",
+    "@ink3": "FAINT", "@ln": "BORDER", "@ln2": "BORDER_2", "@ac": "ACCENT",
+    "@acs": "ACCENT_BG", "@ok": "OK", "@warn": "WARN", "@err": "ERR",
+}
+
+
+def resolve_token(value, mode="light"):
+    """Map "@ink"-style tokens to hex for `mode` ("light" | "dark")."""
+    if isinstance(value, (list, tuple)):
+        return [resolve_token(v, mode) for v in value]
+    if isinstance(value, str) and value.startswith("@"):
+        from gui import theme
+        if value == "@sans":
+            return theme.sans_family()
+        if value == "@mono":
+            return theme.mono_family()
+        key = _TOKEN_KEYS.get(value)
+        if key:
+            return (theme.DARK if mode == "dark" else theme.LIGHT)[key]
+    return value
+
+
+def resolve_style(style, mode="light"):
+    return {k: resolve_token(v, mode) for k, v in style.items()}
+
+
+def _style(**overrides):
+    base = {
+        # basic
+        "bg":              "@surface",
+        "outer_bg":        "@surface",
+        "title":           "",
+        "xlabel":          "",
+        "ylabel":          "",
+        "text_color":      "@ink",
+        # fonts
+        "font_family":     "@sans",
+        "title_size":      11,
+        "title_bold":      True,
+        "label_size":      10,
+        "label_bold":      False,
+        "tick_size":       9,
+        "tick_bold":       False,
+        # lines
+        "path_color":      "@ac",
+        "path_width":      1.2,
+        "linestyle":       "-",          # one of: -, --, :, -.
+        "alpha":           0.9,
+        "marker":          "none",       # none, o, s, ^, D, x, +
+        "marker_size":     5,
+        # axes
+        "spine_top":       True,
+        "spine_right":     True,
+        "spine_bottom":    True,
+        "spine_left":      True,
+        "spine_color":     "@ink",
+        "spine_width":     1.0,
+        "tick_color":      "@ink2",
+        "show_ticks":      True,
+        "grid":            False,
+        "grid_color":      "@ln",
+        "grid_alpha":      1.0,
+        "grid_linestyle":  "-",
+        "grid_axis":       "y",          # x, y, both
+        "arena_color":     "@ink",
+        "arena_width":     1.0,
+        # Arm thickness of the synthetic shape preview (EPM +, Y-Maze Y),
+        # as a % of the arena half-extent. Only surfaced when the experiment
+        # plugin advertises the 'plus_thickness' graph cap.
+        "shape_thickness": 30,
+        # Default cmap: perceptually uniform, colorblind-safe, publication
+        # standard. "jet" survives only as a user opt-in via Customize Graphs.
+        "cmap":            "viridis",
+        # Custom-palette stops. Only used when cmap == "custom". The
+        # `cmap_custom_n` field decides how many of c1..c5 actually count.
+        "cmap_custom_n":   5,
+        "cmap_c1":         "#000000",
+        "cmap_c2":         "#6B0000",
+        "cmap_c3":         "#FF6400",
+        "cmap_c4":         "#FFC800",
+        "cmap_c5":         "#FFFFFF",
+        # extras
+        "legend_show":      True,
+        "legend_loc":       "best",
+        "legend_bg":        "@surface",
+        "legend_fontsize":  8,
+        "legend_draggable": True,
+        # % distance the legend keeps from the axes wall when a named loc
+        # (upper right, lower left, etc.) is in use. Ignored for "best"
+        # and "custom" locs.
+        "legend_inset_pct": 2.0,
+        "pin_start_color":  "@ok",
+        "pin_end_color":    "@err",
+        "pin_start_marker": "o",
+        "pin_end_marker":   "s",
+        "pin_size":         46,
+        "bar_colors":       ["@ac", "@ink3", "@warn", "@err"],
+        "hist_edge_color":  "@surface",
+        "colorbar_show":    True,
+        "colorbar_label":   "",
+        "show_center_pct":  True,
+        "center_pct_color": "@ac",
+        "center_size_pct":  50,   # % of arena width/height. 100 = whole arena.
+        # layout — all values are OFFSETS from the renderer's defaults.
+        # 0 = no change; negative pulls closer/smaller, positive pushes
+        # farther/bigger. Bases live in the renderer (see _apply_style_text,
+        # _make_heatmap_fig, _make_cell_time_heatmap_fig, _apply_legend).
+        "title_pad":         0.0,   # pt offset from matplotlib default (~6)
+        "colorbar_x":        0.0,   # fig-fraction offset from base 0.06
+        "colorbar_y":        0.0,   # fig-fraction offset from base 0.06
+        "colorbar_w":        0.0,   # fig-fraction offset from base 0.88
+        "colorbar_h":        0.0,   # fig-fraction offset from base 0.04
+        "cell_label_dx":     0,     # px offset of cell text (Cell Time)
+        "cell_label_dy":     0,     # px offset of cell text (Cell Time)
+        "legend_x_offset":   0.0,   # axes-fraction offset for legend
+        "legend_y_offset":   0.0,   # axes-fraction offset for legend
+    }
+    base.update(overrides)
+    return base
+
+
+# Built-in presets. Each is a dict { graph_name → style_dict }.
+LIGHT_PRESET = {
+    "Trajectory":      _style(),
+    "Heatmap":         _style(colorbar_show=True, colorbar_label="seconds"),
+    "Cell Time":       _style(cmap="viridis", arena_color="@surface",
+                              colorbar_show=True, colorbar_label="seconds"),
+    "Speed":           _style(path_width=1.0, xlabel="Time (s)", ylabel="Speed (cm/s)",
+                              grid=True, legend_show=False),
+    "Speed Histogram": _style(xlabel="", ylabel="Time (s)", grid=True, legend_show=False),
+    "Habituation":     _style(path_color="@ink3", xlabel="", ylabel="",
+                              grid=True, legend_loc="upper right"),
+    "Zone Time":       _style(ylabel="Time (s)", grid=True),
+    "Triplets":        _style(ylabel="Share (%)", grid=True,
+                              bar_colors=["@ok", "@err"]),
 }
 
 PUBLICATION_PRESET = {
@@ -351,6 +494,18 @@ def default_style_for(name: str, plugin_key: str = None) -> dict:
 # plugin that hasn't been seeded yet (legacy single-bucket configs land
 # here on first read).
 _DEFAULT_PLUGIN_KEY = "open_field"
+
+
+def _migrate_legacy_style(gname, saved, plugin_key=None):
+    """Fields of a saved style that still equal the previous defaults were
+    never customised — drop them so they pick up the redesign defaults."""
+    legacy = _LEGACY_LIGHT.get(gname) or _legacy_style(title=gname)
+    out = {}
+    for k, v in saved.items():
+        if k in legacy and v == legacy[k]:
+            continue
+        out[k] = v
+    return out
 
 
 class GraphStyleConfig:
@@ -486,7 +641,8 @@ class GraphStyleConfig:
             for gname in GRAPH_NAMES:
                 s = raw.get(gname)
                 if isinstance(s, dict):
-                    out[gname] = {**default_style_for(gname, pkey), **s}
+                    out[gname] = {**default_style_for(gname, pkey),
+                                  **_migrate_legacy_style(gname, s, pkey)}
             return out
 
         plugins_blob = d.get("plugins")

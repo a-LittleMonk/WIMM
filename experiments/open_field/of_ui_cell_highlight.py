@@ -33,7 +33,7 @@ def _build_cell_highlight_controls(host):
         sw.setFixedSize(20, 20)
         sw.setCursor(Qt.PointingHandCursor)
         sw.setStyleSheet(
-            f"background-color:{hex_c}; border:1px solid #555; border-radius:3px;"
+            f"background-color:{hex_c}; border:1px solid #D3D8DE; border-radius:3px;"
         )
         sw.setToolTip(hex_c)
         sw.clicked.connect(
