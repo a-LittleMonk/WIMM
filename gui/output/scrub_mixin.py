@@ -146,6 +146,8 @@ class ScrubMixin:
             if self.btn_view_processed.isEnabled() else None))
         bind("D",                 lambda: (self.btn_preview.toggle()
             if self.btn_preview.isEnabled() else None))
+        bind("M",                 lambda: (self.btn_preview_mode.toggle()
+            if self.btn_preview_mode.isEnabled() else None))
 
     def _step_scrub(self, delta):
         if not self.slider_scrub.isEnabled():

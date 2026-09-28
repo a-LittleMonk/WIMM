@@ -45,6 +45,11 @@ class RealtimeScoringTab(QWidget):
 
         self._build_ui()
         self._populate_preset_combo()
+        # Show the preset chosen last time (its values are already restored
+        # from scoring_last_values).
+        last = self.config.get("scoring_preset")
+        if last and self.combo_preset.findText(last) >= 0:
+            self.combo_preset.setCurrentIndex(self.combo_preset.findText(last))
         self._refresh_radio_buttons()
         self._render_chart()
         self._bind_shortcuts()
@@ -256,6 +261,7 @@ class RealtimeScoringTab(QWidget):
         self.selected_value = None
         self._refresh_radio_buttons()
         self._render_chart()
+        self.config["scoring_preset"] = name
         self._persist_last_values()
         self._show(f"Loaded preset: {name}")
 
@@ -270,6 +276,7 @@ class RealtimeScoringTab(QWidget):
         presets = dict(self._get_presets())
         presets[name] = list(self.values)
         self.config["scoring_presets"] = presets
+        self.config["scoring_preset"] = name
         self._save_config()
         self._populate_preset_combo()
         idx = self.combo_preset.findText(name)
@@ -291,6 +298,8 @@ class RealtimeScoringTab(QWidget):
             return
         del presets[name]
         self.config["scoring_presets"] = presets
+        if self.config.get("scoring_preset") == name:
+            self.config.pop("scoring_preset", None)
         self._save_config()
         self._populate_preset_combo()
         self._show(f"Deleted preset: {name}")

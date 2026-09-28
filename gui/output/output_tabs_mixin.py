@@ -14,6 +14,7 @@ Reuses host attrs / methods:
     self._graph_pixmaps, self._graph_lbl, self.snapshot_settings,
     self._refresh_cell_aggregation.
 """
+import math
 import os
 
 from PyQt5.QtCore import Qt
@@ -22,6 +23,7 @@ from PyQt5.QtWidgets import QHeaderView, QTableWidgetItem
 
 from core import logger
 from gui import theme
+from core import units as out_units
 
 # (title, keywords) — first match wins. Metrics that match nothing go into an
 # untitled trailing group; if NOTHING matches (other experiments) the table is
@@ -47,6 +49,14 @@ def _split_unit(key):
     return k, ""
 
 
+def _raw_decimals(factor):
+    """Raw data shows 3 decimals in base units; add more when the display
+    unit shrinks values (cm -> m, cm/s -> km/h) so they don't round to 0."""
+    if factor >= 1.0:
+        return 3
+    return min(6, 3 + int(math.ceil(-math.log10(factor))))
+
+
 def _mono(px=12):
     f = QFont(theme.mono_family())
     f.setPixelSize(px)
@@ -54,6 +64,52 @@ def _mono(px=12):
 
 
 class OutputTabsMixin:
+    def _output_units(self):
+        """Current display units {'distance','speed','time'} (persisted in
+        config['output_units'])."""
+        cfg = getattr(self, "config", None) or {}
+        return out_units.normalize(cfg.get("output_units"))
+
+    def _build_unit_selectors(self, panel):
+        """Distance / Speed / Time unit pickers in the Summary panel bar.
+        Changing one only re-renders Summary + Raw data (no recompute)."""
+        from PyQt5.QtWidgets import QComboBox, QLabel
+        cur = self._output_units()
+        self._unit_combos = {}
+        for dim, title, table in (
+                ("distance", "Distance", out_units.DISTANCE_UNITS),
+                ("speed", "Speed", out_units.SPEED_UNITS),
+                ("time", "Time", out_units.TIME_UNITS)):
+            lb = QLabel(title)
+            theme.set_tone(lb, "faint", "font-size:11px;")
+            cb = QComboBox()
+            cb.setFixedHeight(24)
+            cb.addItems(list(table))
+            cb.setCurrentText(cur[dim])
+            cb.setToolTip(f"Display unit for {title.lower()} values in "
+                          f"Summary and Raw data. Excel export always "
+                          f"includes every scale.")
+            cb.currentTextChanged.connect(
+                lambda _t, d=dim: self._on_output_unit_changed(d))
+            panel.add_widget(lb)
+            panel.add_widget(cb)
+            self._unit_combos[dim] = cb
+
+    def _on_output_unit_changed(self, dim):
+        new = self._output_units()
+        new[dim] = self._unit_combos[dim].currentText()
+        if hasattr(self, "_persist_config"):
+            self._persist_config("output_units", new)
+        elif isinstance(getattr(self, "config", None), dict):
+            self.config["output_units"] = new
+        if self.metrics:
+            self._refresh_summary_table()
+        # Raw data lives on another sub-tab — refresh it whenever it has
+        # been populated, not just when it's on screen.
+        if (getattr(self, "raw_df", None) is not None
+                and self._table_raw.rowCount() > 0):
+            self._populate_raw_table()
+
     def _on_graph_select(self, index):
         name = self._combo_graph.itemText(index)
         pix = self._graph_pixmaps.get(name)
@@ -70,10 +126,14 @@ class OutputTabsMixin:
         if not hasattr(self, "_table_raw") or self.raw_df is None:
             return
         df = self.raw_df.head(5000)
-        # Map header → column index in the table.
-        headers = {self._table_raw.horizontalHeaderItem(c).text(): c
-                   for c in range(self._table_raw.columnCount())
-                   if self._table_raw.horizontalHeaderItem(c) is not None}
+        # Map header → column index in the table. Headers show the
+        # display unit ('Speed (km/h)'), so match on the displayed name.
+        scaling = dict(zip(df.columns, self._raw_col_scaling(list(df.columns))))
+        shown = {self._table_raw.horizontalHeaderItem(c).text(): c
+                 for c in range(self._table_raw.columnCount())
+                 if self._table_raw.horizontalHeaderItem(c) is not None}
+        headers = {name: shown[scaling[name][1]] for name in df.columns
+                   if scaling[name][1] in shown}
         targets = [(name, headers[name]) for name in col_names
                    if name in headers and name in df.columns]
         if not targets:
@@ -83,10 +143,12 @@ class OutputTabsMixin:
         try:
             for name, c in targets:
                 series = df[name].values
+                factor = scaling[name][0]
                 for r, val in enumerate(series):
                     try:
                         text = ("" if val != val
-                                else (f"{val:.3f}" if isinstance(val, float)
+                                else (f"{val * factor:.{_raw_decimals(factor)}f}"
+                                      if isinstance(val, float)
                                       else str(val)))
                     except Exception:
                         text = str(val)
@@ -117,10 +179,15 @@ class OutputTabsMixin:
         else:
             rows = list(metrics.items())
         # group rows for display
+        disp_units = self._output_units()
+        base_len = out_units.base_length_unit(metrics)
         items = []
         for k, v in rows:
-            label, unit = _split_unit(k)
-            items.append((label, "" if v is None else str(v), unit))
+            conv = out_units.display_row(k, v, disp_units, base_len)
+            if conv is None:
+                label, unit = _split_unit(k)
+                conv = (label, "" if v is None else str(v), unit)
+            items.append(conv)
         groups = {}
         order = []
         matched_any = False
@@ -225,33 +292,8 @@ class OutputTabsMixin:
         # Summary + cell aggregation + Video Config — all in the helper.
         self._refresh_summary_table()
 
+        self._populate_raw_table()
         df = self.raw_df
-        display = df.head(5000)
-        cols = list(display.columns)
-        self._table_raw.setUpdatesEnabled(False)
-        self._table_raw.setSortingEnabled(False)
-        try:
-            self._table_raw.setRowCount(len(display))
-            self._table_raw.setColumnCount(len(cols))
-            self._table_raw.setHorizontalHeaderLabels(cols)
-            if hasattr(self, "_raw_panel"):
-                self._raw_panel.set_title(
-                    "Raw data", f"· {len(display)} of {len(df)} frames")
-            # Cache iloc rows once — repeated .iloc[r] inside the loop is slow.
-            rows = display.itertuples(index=False, name=None)
-            for r, row in enumerate(rows):
-                for c, val in enumerate(row):
-                    try:
-                        text = "" if val != val else (f"{val:.3f}" if isinstance(val, float) else str(val))
-                    except Exception:
-                        text = str(val)
-                    it = QTableWidgetItem(text)
-                    it.setFont(_mono(11))
-                    if c > 0 or True:
-                        it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                    self._table_raw.setItem(r, c, it)
-        finally:
-            self._table_raw.setUpdatesEnabled(True)
         if len(df) > 5000:
             self.lbl_excel_note.setText(
                 f"Showing first 5000 of {len(df)} frames. Export Excel for full data."
@@ -262,6 +304,49 @@ class OutputTabsMixin:
 
         self._excel_tabs.setVisible(True)
         self.lbl_excel_hint.setVisible(False)
+
+    def _raw_col_scaling(self, cols):
+        """Per-column (factor, header) for the Raw data table using the
+        current display units."""
+        disp_units = self._output_units()
+        base_len = out_units.base_length_unit(self.metrics)
+        return [out_units.display_column(c, disp_units, base_len)
+                for c in cols]
+
+    def _populate_raw_table(self):
+        df = self.raw_df
+        display = df.head(5000)
+        cols = list(display.columns)
+        scaling = self._raw_col_scaling(cols)
+        self._table_raw.setUpdatesEnabled(False)
+        self._table_raw.setSortingEnabled(False)
+        try:
+            self._table_raw.setRowCount(len(display))
+            self._table_raw.setColumnCount(len(cols))
+            self._table_raw.setHorizontalHeaderLabels([h for _f, h in scaling])
+            if hasattr(self, "_raw_panel"):
+                self._raw_panel.set_title(
+                    "Raw data", f"· {len(display)} of {len(df)} frames")
+            # Cache iloc rows once — repeated .iloc[r] inside the loop is slow.
+            rows = display.itertuples(index=False, name=None)
+            for r, row in enumerate(rows):
+                for c, val in enumerate(row):
+                    factor = scaling[c][0]
+                    try:
+                        if val != val:
+                            text = ""
+                        elif isinstance(val, float):
+                            text = f"{val * factor:.{_raw_decimals(factor)}f}"
+                        else:
+                            text = str(val)
+                    except Exception:
+                        text = str(val)
+                    it = QTableWidgetItem(text)
+                    it.setFont(_mono(11))
+                    it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    self._table_raw.setItem(r, c, it)
+        finally:
+            self._table_raw.setUpdatesEnabled(True)
 
     def _populate_video_config_table(self):
         """Fill the Output → Video Config tab from current settings snapshot."""

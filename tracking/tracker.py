@@ -156,6 +156,12 @@ DEFAULT_POST_PARAMS = {
 }
 
 
+def _mc_flag(v):
+    """GSOC / LSBP camera-motion compensation: the tuning dialog stores
+    "None" / "LK", older configs store 0 / 1."""
+    return {"None": 0, "LK": 1}.get(v, v) if isinstance(v, str) else int(v)
+
+
 # Default (BGR): body=dark red, nose=green, tail=blue
 _DEFAULT_BODY = (0, 0, 160)
 _DEFAULT_NOSE = (0, 200, 0)
@@ -619,7 +625,7 @@ class TrackerThread(QThread):
                 )
             if name == "gsoc":
                 return cv2.bgsegm.createBackgroundSubtractorGSOC(
-                    mc=int(p["mc"]),
+                    mc=_mc_flag(p["mc"]),
                     nSamples=int(p["nSamples"]),
                     replaceRate=float(p["replaceRate"]),
                     propagationRate=float(p["propagationRate"]),
@@ -633,7 +639,7 @@ class TrackerThread(QThread):
                 )
             if name == "lsbp":
                 return cv2.bgsegm.createBackgroundSubtractorLSBP(
-                    mc=int(p["mc"]),
+                    mc=_mc_flag(p["mc"]),
                     nSamples=int(p["nSamples"]),
                     LSBPRadius=int(p["LSBPRadius"]),
                     Tlower=float(p["Tlower"]),

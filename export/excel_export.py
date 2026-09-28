@@ -11,6 +11,8 @@ from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 
+from core import units
+
 
 def _center_cell(cell):
     """Force horizontal=center on a value cell, regardless of content
@@ -60,7 +62,15 @@ def export_results(
     metadata: Optional[dict] = None,
     write_csv: bool = True,
     video_config: Optional[dict] = None,
+    all_units: bool = True,
 ):
+    # Every distance / speed / time value is written in all scales side
+    # by side (cm, mm, m · cm/s … km/h · s, min) so the examiner can pick.
+    if all_units:
+        base_len = units.base_length_unit(metrics)
+        metrics = units.expand_metrics(metrics, base_len)
+        raw_df = units.expand_df(raw_df, base_len)
+        bin_df = units.expand_df(bin_df, base_len)
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         summary_df = pd.DataFrame(
             list(metrics.items()), columns=["Metric", "Value"]
@@ -85,7 +95,7 @@ def export_results(
         _style_raw(wb["Time Bins"])
 
     if video_config:
-        _write_video_config_sheet(wb, video_config, video_size)
+        _write_video_config_sheet(wb, video_config, video_size, all_units)
 
     if not graph_images and video_size:
         x_vals = raw_df["X (px)"].dropna().values
@@ -131,7 +141,7 @@ def export_results(
                 ).to_csv(base + "_metadata.csv", index=False)
             if video_config:
                 pd.DataFrame(
-                    _video_config_rows(video_config, video_size),
+                    _video_config_rows(video_config, video_size, all_units),
                     columns=["Setting", "Value"],
                 ).to_csv(base + "_video_config.csv", index=False)
         except Exception:
@@ -273,8 +283,19 @@ def _vc_fmt(key, val):
     return val
 
 
-def _video_config_rows(settings: dict, video_size) -> list:
-    """Return [(label, value)] rows for the Video Config sheet/CSV."""
+def _video_config_rows(settings: dict, video_size, all_units=False) -> list:
+    """Return [(label, value)] rows for the Video Config sheet/CSV.
+    `all_units` follows each cm / cm/s / s setting with its other scales
+    ('Movement threshold (mm/s)', …)."""
+    if all_units:
+        rows = []
+        for label, value in _video_config_rows(settings, video_size):
+            rows.append((label, value))
+            if not label.startswith(" "):
+                for name, f in units.variants(label)[1:]:
+                    rows.append((name, units._round(float(value) * f)
+                                 if units._is_number(value) else value))
+        return rows
     rows = []
     if video_size:
         rows.append(("Video resolution", f"{video_size[0]} x {video_size[1]} px"))
@@ -330,7 +351,7 @@ def _video_config_rows(settings: dict, video_size) -> list:
     return rows
 
 
-def _write_video_config_sheet(wb, settings: dict, video_size):
+def _write_video_config_sheet(wb, settings: dict, video_size, all_units=False):
     ws = wb.create_sheet("Video Config")
     blue = PatternFill("solid", fgColor="1A6EA8")
     white_bold = Font(color="FFFFFF", bold=True, size=11)
@@ -342,7 +363,7 @@ def _write_video_config_sheet(wb, settings: dict, video_size):
         cell.font = white_bold
         cell.alignment = Alignment(horizontal="left")
 
-    rows = _video_config_rows(settings, video_size)
+    rows = _video_config_rows(settings, video_size, all_units)
     for label, value in rows:
         ws.append([label, value])
         # Style section headers (label set, value empty, label contains "params").
@@ -509,6 +530,34 @@ def _bin_dist_png(bin_df):
 
 # ───────────────────────── Combined batch export ──────────────────────────
 
+def _expand_result(res):
+    """All-scales copy of a {metrics, raw_df, bin_df, …} dict."""
+    if not res:
+        return res
+    res = dict(res)
+    m = res.get("metrics") or {}
+    base_len = units.base_length_unit(m)
+    if m:
+        res["metrics"] = units.expand_metrics(m, base_len)
+    for k in ("raw_df", "bin_df"):
+        if res.get(k) is not None:
+            res[k] = units.expand_df(res[k], base_len)
+    return res
+
+
+def _expand_animals(animals, schema):
+    """All-scales copies of the animal dicts (+ schema). Snake_case
+    plugin keys ('total_distance') are only expanded when calibrated, so
+    the schema follows the calibration of the animals themselves."""
+    out = [_expand_result(a) for a in animals]
+    if schema:
+        calibrated = any(
+            units.base_length_unit(a.get("metrics") or {}) == "cm"
+            for a in animals) or not animals
+        schema = units.expand_schema(schema, "cm" if calibrated else "px")
+    return out, schema
+
+
 def _safe_sheet_name(name: str, used: set) -> str:
     """Excel: 31-char limit, no [ ] : * ? / \\, must be unique."""
     bad = '[]:*?/\\'
@@ -608,6 +657,53 @@ def _write_animal_metric_sections(ws, row, metrics, schema,
     return row
 
 
+def _write_scale_row(ws, row, label, cells, bold):
+    """One row: bold label in A, then value/unit pairs (B/C, D/E, …).
+    Values stay real numbers so Excel can compute with them."""
+    ws.cell(row=row, column=1, value=str(label)).font = bold
+    col = 2
+    for val, unit in cells:
+        _center_cell(ws.cell(row=row, column=col, value=val))
+        if unit:
+            u = ws.cell(row=row, column=col + 1, value=unit)
+            u.font = Font(color="808080", size=10)
+            u.alignment = Alignment(horizontal="left", vertical="center")
+        col += 2
+
+
+def _write_animal_metric_rows(ws, row, metrics, sections, base_len,
+                              blue, white_bold, bold):
+    """All-scales variant of _write_animal_metric_sections: one metric
+    per row, every scale of it on the same row —
+        Total Distance | 1402.23 cm | 14022.3 mm | 14.0223 m
+    `metrics` is the expanded dict (already holds every scale)."""
+    for section_name, cols in sections:
+        if section_name == "Experiment Metadata":
+            continue
+        entries = []
+        for col in cols:
+            label, names = units.scales(col, base_len)
+            entries.append((label, [(metrics.get(n, ""), u) for n, u in names]))
+        if all(v in ("", None) for _l, cells in entries for v, _u in cells):
+            continue
+        ws.cell(row=row, column=1, value=section_name).font = white_bold
+        ws.cell(row=row, column=1).fill = blue
+        ws.cell(row=row, column=1).alignment = Alignment(
+            horizontal="left", vertical="center")
+        ws.merge_cells(start_row=row, start_column=1,
+                       end_row=row, end_column=_SCALE_LAST_COL)
+        row += 1
+        for label, cells in entries:
+            _write_scale_row(ws, row, label, cells, bold)
+            row += 1
+        row += 1
+    return row
+
+
+# Per-animal all-scales layout: label A + up to 5 value/unit pairs → K.
+_SCALE_LAST_COL = 11
+
+
 def _write_master_schema(master, animals, schema,
                           section_fill, section_font,
                           blue, white_bold):
@@ -686,7 +782,8 @@ def _write_master_schema(master, animals, schema,
     master.freeze_panes = "A3"
 
 
-def export_combined(output_path: str, animals: list, schema=None):
+def export_combined(output_path: str, animals: list, schema=None,
+                    all_units: bool = True):
     """Write one combined xlsx with:
       - Sheet 1 ("All Animals"): one row per animal (metadata + metrics).
       - Per-animal sheets: dashboard with metadata / metrics / time bins on
@@ -702,8 +799,17 @@ def export_combined(output_path: str, animals: list, schema=None):
     When provided, row 1 = sparse section headers, row 2 = column titles,
     row 3+ = data. When None, falls back to first-seen-across-animals
     order with a single header row (legacy behavior).
+
+    `all_units` adds every other scale of each distance / speed / time
+    column right after it (see core.units).
     """
     from openpyxl import Workbook
+    # Master sheet: every scale as adjacent columns. Per-animal sheets:
+    # one metric per row with all its scales across the row.
+    base_schema = schema
+    base_animals = animals
+    if all_units:
+        animals, schema = _expand_animals(animals, schema)
     wb = Workbook()
     wb.remove(wb.active)
 
@@ -728,9 +834,13 @@ def export_combined(output_path: str, animals: list, schema=None):
 
     # ── Per-animal sheets ─────────────────────────────────────────────────
     used_names = {"All Animals"}
-    for a in animals:
+    for a, a_base in zip(animals, base_animals):
         sheet_name = _safe_sheet_name(a.get("animal_id") or "Animal", used_names)
         ws = wb.create_sheet(sheet_name)
+        base_len = units.base_length_unit(a_base.get("metrics") or {})
+        # Graphs sit right of the data block, which is wider with all scales.
+        g_col = _SCALE_LAST_COL + 2 if all_units else 6
+        g_letter = get_column_letter(g_col)
 
         # Banner (row 1)
         ws.merge_cells("A1:I1")
@@ -741,13 +851,19 @@ def export_combined(output_path: str, animals: list, schema=None):
         ws.row_dimensions[1].height = 22
 
         # Left column widths (data side)
-        for col, w in zip("ABCD", (16, 18, 16, 18)):
-            ws.column_dimensions[col].width = w
+        if all_units:
+            ws.column_dimensions["A"].width = 34
+            for ci in range(2, _SCALE_LAST_COL + 1):
+                ws.column_dimensions[get_column_letter(ci)].width = (
+                    13 if ci % 2 == 0 else 8)
+        else:
+            for col, w in zip("ABCD", (16, 18, 16, 18)):
+                ws.column_dimensions[col].width = w
         # Spacer
-        ws.column_dimensions["E"].width = 2
+        ws.column_dimensions[get_column_letter(g_col - 1)].width = 2
         # Right side (graphs) — wide enough for ~400px image
-        for col in "FGHI":
-            ws.column_dimensions[col].width = 12
+        for ci in range(g_col, g_col + 4):
+            ws.column_dimensions[get_column_letter(ci)].width = 12
 
         row = 3
 
@@ -779,7 +895,14 @@ def export_combined(output_path: str, animals: list, schema=None):
         # passed (matches the All Animals master sheet's section groups);
         # falls back to a single flat METRICS block when not.
         m = a.get("metrics") or {}
-        if schema:
+        if all_units:
+            sections = base_schema or [
+                ("METRICS", list((a_base.get("metrics") or {}).keys()))]
+            row = _write_animal_metric_rows(
+                ws, row, m, sections, base_len,
+                blue, white_bold, bold,
+            )
+        elif schema:
             row = _write_animal_metric_sections(
                 ws, row, m, schema,
                 blue, white_bold, bold,
@@ -811,6 +934,16 @@ def export_combined(output_path: str, animals: list, schema=None):
             row += 1
             vc_rows = _video_config_rows(vc, a.get("video_size"))
             for label, value in vc_rows:
+                if (all_units and units.classify(label) is not None
+                        and units._is_number(value)):
+                    # cm / cm/s / s setting → every scale on this row
+                    lbl, names = units.scales(label)
+                    cells = [(units._round(float(value) * f), u)
+                             for (_n, u), (_n2, f)
+                             in zip(names, units.variants(label))]
+                    _write_scale_row(ws, row, lbl, cells, bold)
+                    row += 1
+                    continue
                 ws.cell(row=row, column=1, value=label).font = bold
                 # value spans cols 2-4 so long strings (model params) fit.
                 vc_val_cell = ws.cell(row=row, column=2, value=value)
@@ -847,7 +980,7 @@ def export_combined(output_path: str, animals: list, schema=None):
         for name, png in graph_pngs.items():
             if not png:
                 continue
-            ws.cell(row=graph_row, column=6, value=name).font = bold
+            ws.cell(row=graph_row, column=g_col, value=name).font = bold
             graph_row += 1
             try:
                 img = XLImage(BytesIO(png))
@@ -856,10 +989,10 @@ def export_combined(output_path: str, animals: list, schema=None):
                     s = target_w / float(img.width)
                     img.width = int(img.width * s)
                     img.height = int(img.height * s)
-                ws.add_image(img, f"F{graph_row}")
+                ws.add_image(img, f"{g_letter}{graph_row}")
                 graph_row += int(img.height / 18) + 2
             except Exception:
-                ws.cell(row=graph_row, column=6, value="(could not embed graph)")
+                ws.cell(row=graph_row, column=g_col, value="(could not embed graph)")
                 graph_row += 1
 
     _center_align_workbook(wb)
@@ -868,7 +1001,8 @@ def export_combined(output_path: str, animals: list, schema=None):
 
 def export_multi_run(output_path: str, video_name: str,
                      swept_key: str, swept_label: str,
-                     base_settings: dict, variants: list):
+                     base_settings: dict, variants: list,
+                     all_units: bool = True):
     """Combined xlsx for a Multi-Run sweep.
 
     Sheets:
@@ -881,6 +1015,9 @@ def export_multi_run(output_path: str, video_name: str,
        result: {metrics, raw_df, bin_df, video_size, fps}}
     """
     from openpyxl import Workbook
+    if all_units:
+        variants = [dict(v, result=_expand_result(v.get("result")))
+                    for v in variants]
     wb = Workbook()
     wb.remove(wb.active)
 
@@ -1093,7 +1230,7 @@ def export_multi_run(output_path: str, video_name: str,
     # Locked = base settings minus the swept key.
     locked = {k: v for k, v in (base_settings or {}).items() if k != swept_key}
     vs = (variants[0].get("result") or {}).get("video_size") if variants else None
-    for label, value in _video_config_rows(locked, vs):
+    for label, value in _video_config_rows(locked, vs, all_units):
         set_ws.append([label, value])
     for col in set_ws.columns:
         length = max((len(str(c.value or "")) for c in col), default=0)
@@ -1147,7 +1284,8 @@ def export_multi_run(output_path: str, video_name: str,
     wb.save(output_path)
 
 
-def export_combined_raw(output_path: str, animals: list):
+def export_combined_raw(output_path: str, animals: list,
+                        all_units: bool = True):
     """Write one xlsx with one sheet per animal. Each sheet has the animal's
     metadata block at the top and the full per-frame raw data below.
 
@@ -1155,6 +1293,8 @@ def export_combined_raw(output_path: str, animals: list):
     raw_df (pandas.DataFrame).
     """
     from openpyxl import Workbook
+    if all_units:
+        animals, _ = _expand_animals(animals, None)
     wb = Workbook()
     wb.remove(wb.active)
 

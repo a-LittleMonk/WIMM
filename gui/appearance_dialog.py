@@ -4,7 +4,7 @@ Per mode the user picks a background colour, how many gradient colours to
 blend (1..theme.AURORA_MAX), and each colour's shade and strength — or starts
 from a preset. Edits preview live; Cancel restores what was there before.
 """
-from PyQt5.QtCore import QRectF, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, QObject, QRect, QRectF, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QPainter, QPen
 from PyQt5.QtWidgets import (
     QApplication, QColorDialog, QComboBox, QCompleter, QTabWidget, QDialog, QFormLayout, QHBoxLayout, QLabel,
@@ -48,6 +48,52 @@ class ColorSwatch(QPushButton):
             self.colorChanged.emit(self._color)
 
 
+def keep_popup_on_screen(popup, anchor):
+    """Move / shrink a popup window so it lies fully inside the available
+    area of the monitor its anchor widget is on. Below the anchor if it
+    fits, else above, else as much as the screen allows. (Qt sometimes
+    opened the font list partly off-screen — e.g. a monitor placed left of
+    the main one.)"""
+    if popup is None or anchor is None or not popup.isVisible():
+        return
+    from PyQt5.QtGui import QGuiApplication
+    top_left = anchor.mapToGlobal(anchor.rect().topLeft())
+    a = QRect(top_left, anchor.size())                  # anchor, global
+    screen = (QGuiApplication.screenAt(a.center())
+              or anchor.window().windowHandle() and anchor.window().windowHandle().screen()
+              or QGuiApplication.primaryScreen())
+    avail = screen.availableGeometry()
+    g = popup.frameGeometry()
+    w = min(g.width(), avail.width())
+    h = min(g.height(), avail.height())
+    if a.bottom() + h <= avail.bottom():
+        y = a.bottom() + 1                               # below
+    elif a.top() - h >= avail.top():
+        y = a.top() - h                                  # above
+    else:
+        y = avail.bottom() - h + 1                       # as low as fits
+    x = min(max(a.left(), avail.left()), avail.right() - w + 1)
+    y = min(max(y, avail.top()), avail.bottom() - h + 1)
+    if (w, h) != (g.width(), g.height()):
+        popup.resize(w - (g.width() - popup.width()), h - (g.height() - popup.height()))
+    if (x, y) != (g.x(), g.y()):
+        popup.move(x, y)
+
+
+class _PopupShowWatcher(QObject):
+    """Re-places a popup on screen every time it is shown."""
+
+    def __init__(self, popup, anchor):
+        super().__init__(popup)
+        self._popup, self._anchor = popup, anchor
+        popup.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Show:
+            QTimer.singleShot(0, lambda: keep_popup_on_screen(self._popup, self._anchor))
+        return False
+
+
 class FontPicker(QComboBox):
     """Office-style font box: type to search (matches anywhere in the name),
     short scrollable list, Enter / click picks. Unknown names revert."""
@@ -72,8 +118,14 @@ class FontPicker(QComboBox):
         comp.popup().setStyleSheet(row_css)
         comp.activated[str].connect(self._pick_text)
         self.setCompleter(comp)
+        # The type-to-search list: keep it on screen too.
+        _PopupShowWatcher(comp.popup(), self)
         self.lineEdit().editingFinished.connect(lambda: self._pick_text(self.currentText()))
         self.lineEdit().setPlaceholderText("Type a font name…")
+
+    def showPopup(self):
+        super().showPopup()
+        keep_popup_on_screen(self.view().window(), self)
 
     def _pick_text(self, text):
         want = text.strip().lower()
@@ -129,6 +181,16 @@ class AppearanceDialog(QDialog):
         self._save_config = save_config
         self._original = {m: theme.copy_spec(theme.AURORA[m]) for m in _MODES}
         self._specs = {m: theme.copy_spec(theme.AURORA[m]) for m in _MODES}
+        # The colour preset each mode started from — "Reset colours" goes
+        # back to it (not to the built-in default). Remembered in config so
+        # it survives closing the window.
+        saved = config.get("aurora_preset") if isinstance(config.get("aurora_preset"), dict) else {}
+        self._base_preset = {}
+        for m in _MODES:
+            match = next((n for n, p in theme.AURORA_PRESETS[m].items()
+                          if theme.copy_spec(p) == self._specs[m]), None)
+            name = match or saved.get(m)
+            self._base_preset[m] = name if name in theme.AURORA_PRESETS[m] else None
         self._mode = theme.mode()
         self._loading = False
         self._orig_fonts = dict(theme.FONTS)
@@ -436,6 +498,7 @@ class AppearanceDialog(QDialog):
         name = self.cmb_preset.itemText(index)
         preset = theme.AURORA_PRESETS[self._mode].get(name)
         if preset:
+            self._base_preset[self._mode] = name
             self._specs[self._mode] = theme.copy_spec(preset)
             self._load_mode()
 
@@ -493,7 +556,9 @@ class AppearanceDialog(QDialog):
         self._changed()
 
     def _on_reset(self):
-        self._specs[self._mode] = theme.aurora_default(self._mode)
+        preset = theme.AURORA_PRESETS[self._mode].get(self._base_preset.get(self._mode))
+        self._specs[self._mode] = (theme.copy_spec(preset) if preset
+                                   else theme.aurora_default(self._mode))
         self._load_mode()
 
     # ── close ────────────────────────────────────────────────────────────
@@ -502,6 +567,7 @@ class AppearanceDialog(QDialog):
             theme.set_aurora(m, self._specs[m])
         self._config["aurora"] = {m: theme.copy_spec(theme.AURORA[m]) for m in _MODES}
         self._config["fonts"] = {r: f for r, f in theme.FONTS.items() if f}
+        self._config["aurora_preset"] = {m: n for m, n in self._base_preset.items() if n}
         self._save_config()
         self._restyle.stop()
         # Re-apply so panels and base colours pick up the saved palette.

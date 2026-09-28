@@ -81,8 +81,9 @@ def build_detection_step(host):
     host.combo_preset.setMinimumWidth(110)
     preset_row.addWidget(host.combo_preset, 1)
     host.btn_reset = IconTextButton("reset", "Reset", 11, height=28)
-    host.btn_reset.setToolTip("Reset all detection sliders to defaults")
-    host.btn_reset.clicked.connect(host._reset_sliders)
+    host.btn_reset.setToolTip("Put the detection settings back to the selected preset "
+                              "(the built-in defaults when Default is selected)")
+    host.btn_reset.clicked.connect(host._reset_to_preset)
     preset_row.addWidget(host.btn_reset)
     adv.addLayout(preset_row)
 
@@ -180,7 +181,11 @@ def build_detection_step(host):
     preview_box.setSpacing(2)
     preview_box.addWidget(_caps("Preview"))
 
-    host.btn_preview = SwitchBox("Preview detection")
+    # "Detected area" and "Show mask" are independent switches: the first
+    # highlights what the detector picks up, the second swaps the picture
+    # for the black-and-white mask. Both on = highlight drawn on the mask.
+    host.btn_preview = SwitchBox("Detected area")
+    host.btn_preview.setToolTip("Highlight the area the detector picks up (in the detection color).")
     host.btn_preview.setEnabled(False)
     host.btn_preview.toggled.connect(host._on_preview_toggled)
     host.btn_preview.hint = "D"
@@ -188,7 +193,9 @@ def build_detection_step(host):
 
     host.btn_preview_mode = SwitchBox("Show mask")
     host.btn_preview_mode.setEnabled(False)
-    host.btn_preview_mode.setToolTip("Off: overlay. On: binary mask.")
+    host.btn_preview_mode.setToolTip(
+        "Show the black-and-white detection mask instead of the video picture.\n"
+        "Works on its own or together with Detected area.")
     host.btn_preview_mode.toggled.connect(host._on_preview_mode_toggled)
     host.btn_preview_mode.hint = "M"
     preview_box.addWidget(host.btn_preview_mode)
@@ -233,6 +240,7 @@ def build_detection_step(host):
         ("Export", host.btn_preset_export),
         ("CLAHE", host.spin_clahe),
         ("Max blob", host.spin_max_blob),
+        ("Detected area", host.btn_preview),
         ("Show mask", host.btn_preview_mode),
         ("View effects", host.btn_view_processed),
         ("Detection color", det_lbl),

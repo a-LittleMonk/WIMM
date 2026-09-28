@@ -3,6 +3,7 @@
 Per-graph style config (one entry per graph name) plus named presets.
 ExperimentTab loads/saves through the main app config JSON.
 """
+import re
 from copy import deepcopy
 
 GRAPH_NAMES = [
@@ -33,13 +34,17 @@ SECTION_FIELDS = {
                 "arena_color", "arena_width", "cmap",
                 "cmap_custom_n",
                 "cmap_c1", "cmap_c2", "cmap_c3", "cmap_c4", "cmap_c5"],
-    "extras":  ["legend_show", "legend_loc", "legend_bg", "legend_fontsize",
+    "extras":  ["legend_show", "legend_loc", "legend_bg", "legend_fontsize", "legend_text_color",
                 "legend_draggable", "legend_inset_pct",
                 "pin_start_color", "pin_end_color",
                 "pin_start_marker", "pin_end_marker", "pin_size",
                 "bar_colors", "hist_edge_color",
                 "colorbar_show", "colorbar_label",
-                "show_center_pct", "center_pct_color", "center_size_pct"],
+                "show_center_pct", "center_pct_color", "center_size_pct",
+                "hm_bins", "hm_blur", "hm_interp", "hm_units", "hm_vmax",
+                "cell_label_size", "cell_label_font", "cell_label_bold",
+                "legend_labels", "legend_markerscale", "speed_unit",
+                "time_unit", "distance_unit"],
     "layout":  ["title_pad",
                 "colorbar_x", "colorbar_y", "colorbar_w", "colorbar_h",
                 "cell_label_dx", "cell_label_dy",
@@ -72,7 +77,7 @@ GRAPH_FIELDS = {
                         "pin_start_color", "pin_end_color",
                         "pin_start_marker", "pin_end_marker", "pin_size",
                         "legend_show", "legend_loc", "legend_bg",
-                        "legend_fontsize", "legend_draggable", "legend_inset_pct",
+                        "legend_fontsize", "legend_text_color", "legend_draggable", "legend_inset_pct",
                         "title_pad", "legend_x_offset", "legend_y_offset"},
     "Heatmap":         {"outer_bg", "title",
                         "font_family", "title_size", "title_bold",
@@ -84,7 +89,8 @@ GRAPH_FIELDS = {
                         "cmap_c1", "cmap_c2", "cmap_c3", "cmap_c4", "cmap_c5",
                         "colorbar_show", "colorbar_label",
                         "title_pad",
-                        "colorbar_x", "colorbar_y", "colorbar_w", "colorbar_h"},
+                        "colorbar_x", "colorbar_y", "colorbar_w", "colorbar_h",
+                        "hm_bins", "hm_blur", "hm_interp", "hm_units", "hm_vmax"},
     "Cell Time":       {"outer_bg", "title",
                         "font_family", "title_size", "title_bold",
                         "spine_top", "spine_right", "spine_bottom", "spine_left",
@@ -95,8 +101,9 @@ GRAPH_FIELDS = {
                         "colorbar_show", "colorbar_label",
                         "title_pad",
                         "colorbar_x", "colorbar_y", "colorbar_w", "colorbar_h",
-                        "cell_label_dx", "cell_label_dy"},
-    "Speed":           {"bg", "title", "xlabel", "ylabel",
+                        "cell_label_dx", "cell_label_dy",
+                        "cell_label_size", "cell_label_font", "cell_label_bold"},
+    "Speed":           {"bg", "time_unit", "speed_unit", "title", "xlabel", "ylabel",
                         "font_family", "title_size", "title_bold",
                         "label_size", "label_bold", "tick_size", "tick_bold",
                         "path_color", "path_width", "linestyle", "alpha",
@@ -105,9 +112,9 @@ GRAPH_FIELDS = {
                         "spine_color", "spine_width", "tick_color", "show_ticks",
                         "grid", "grid_color", "grid_alpha", "grid_linestyle", "grid_axis",
                         "legend_show", "legend_loc", "legend_bg",
-                        "legend_fontsize", "legend_draggable", "legend_inset_pct",
+                        "legend_fontsize", "legend_text_color", "legend_draggable", "legend_inset_pct",
                         "title_pad", "legend_x_offset", "legend_y_offset"},
-    "Speed Histogram": {"bg", "title", "xlabel", "ylabel",
+    "Speed Histogram": {"bg", "time_unit", "speed_unit", "title", "xlabel", "ylabel",
                         "font_family", "title_size", "title_bold",
                         "label_size", "label_bold", "tick_size", "tick_bold",
                         "path_color",
@@ -116,9 +123,9 @@ GRAPH_FIELDS = {
                         "grid", "grid_color", "grid_alpha", "grid_linestyle", "grid_axis",
                         "hist_edge_color",
                         "legend_show", "legend_loc", "legend_bg",
-                        "legend_fontsize", "legend_draggable", "legend_inset_pct",
+                        "legend_fontsize", "legend_text_color", "legend_draggable", "legend_inset_pct",
                         "title_pad", "legend_x_offset", "legend_y_offset"},
-    "Habituation":     {"bg", "title", "xlabel", "ylabel",
+    "Habituation":     {"bg", "time_unit", "distance_unit", "title", "xlabel", "ylabel",
                         "font_family", "title_size", "title_bold",
                         "label_size", "label_bold", "tick_size", "tick_bold",
                         "path_color", "path_width", "linestyle", "alpha",
@@ -127,9 +134,9 @@ GRAPH_FIELDS = {
                         "spine_color", "spine_width", "tick_color", "show_ticks",
                         "grid", "grid_color", "grid_alpha", "grid_linestyle", "grid_axis",
                         "legend_show", "legend_loc", "legend_bg",
-                        "legend_fontsize", "legend_draggable", "legend_inset_pct",
+                        "legend_fontsize", "legend_text_color", "legend_draggable", "legend_inset_pct",
                         "title_pad", "legend_x_offset", "legend_y_offset"},
-    "Zone Time":       {"bg", "title", "ylabel",
+    "Zone Time":       {"bg", "time_unit", "title", "ylabel",
                         "font_family", "title_size", "title_bold",
                         "label_size", "label_bold", "tick_size", "tick_bold",
                         "spine_top", "spine_right", "spine_bottom", "spine_left",
@@ -346,9 +353,28 @@ for _name, _fields in GRAPH_FIELDS.items():
     _fields.update({"title_dx", "text_color", "title_color"})
     _fields.update(PLOT_AREA_FIELDS)
     if "xlabel" in _fields:
-        _fields.update({"xlabel_dx", "xlabel_dy", "label_color"})
+        _fields.update({"xlabel_dx", "xlabel_dy", "label_color",
+                        "xlabel_size", "xlabel_bold", "xlabel_color"})
     if "ylabel" in _fields:
-        _fields.update({"ylabel_dx", "ylabel_dy", "label_color"})
+        _fields.update({"ylabel_dx", "ylabel_dy", "label_color",
+                        "ylabel_size", "ylabel_bold", "ylabel_color"})
+SECTION_FIELDS["fonts"] += ["xlabel_size", "xlabel_bold", "xlabel_color",
+                            "ylabel_size", "ylabel_bold", "ylabel_color"]
+
+
+def axis_title_style(st, axis):
+    """(size, bold, color) of one axis title ('xlabel' / 'ylabel'). Each
+    axis has its own settings; unset (None / "") falls back to the shared
+    label_size / label_bold / label_color, so older styles look the same."""
+    size = st.get(f"{axis}_size")
+    if size in (None, ""):
+        size = st.get("label_size", 10)
+    bold = st.get(f"{axis}_bold")
+    if bold is None:
+        bold = st.get("label_bold", False)
+    color = (st.get(f"{axis}_color") or st.get("label_color")
+             or st.get("text_color", "black"))
+    return int(size), bool(bold), color
 SECTION_FIELDS["layout"] += ["title_dx", "xlabel_dx", "xlabel_dy", "ylabel_dx", "ylabel_dy",
                        *PLOT_AREA_FIELDS]
 
@@ -379,6 +405,71 @@ def apply_layout_overrides(fig, st, ax=None):
         h = max(0.05, p.height - db + dt)
         ax.set_position([p.x0 + dl, p.y0 + db, w, h])
     return fig
+
+
+SPEED_UNIT_CHOICES = ["mm/s", "cm/s", "m/s", "m/min", "km/h"]
+TIME_UNIT_CHOICES = ["s", "min"]
+DISTANCE_UNIT_CHOICES = ["mm", "cm", "m"]
+_TIME_FACTORS = {"s": 1.0, "min": 1.0 / 60.0}      # per second
+
+
+def _unit_label(label, word, unit, unit_re):
+    """Axis title carrying `unit`: blank → "<word> (unit)", "<word>" →
+    "<word> (unit)", a title ending in a unit of this kind gets it swapped,
+    any other custom title is kept as the user typed it."""
+    label = (label or "").strip()
+    if not label:
+        return f"{word} ({unit})"
+    if re.search(unit_re, label):
+        return re.sub(unit_re, f"({unit})", label)
+    if label.lower() == word.lower():
+        return f"{label} ({unit})"
+    return label
+
+
+def time_axis(st, field, base_unit="s", word="Time"):
+    """(factor, unit, style) for the chosen time unit on axis `field`
+    ('xlabel' / 'ylabel'). Values are measured in `base_unit` (s or min)."""
+    unit = st.get("time_unit", "s")
+    if unit not in _TIME_FACTORS:
+        unit = "s"
+    factor = _TIME_FACTORS[unit] / _TIME_FACTORS.get(base_unit, 1.0)
+    out = dict(st)
+    out[field] = _unit_label(st.get(field), word, unit, r"\((?:s|sec|min)\)\s*$")
+    return factor, unit, out
+
+
+def distance_axis(st, field, base_unit="cm", word="Distance"):
+    """(factor, unit, style) for the chosen distance unit on axis `field`.
+    Values are measured in `base_unit`; only cm converts (px = uncalibrated)."""
+    from core.units import DISTANCE_UNITS
+    unit = st.get("distance_unit", "cm")
+    if base_unit != "cm" or unit not in DISTANCE_UNITS:
+        unit = base_unit
+    factor = DISTANCE_UNITS.get(unit, 1.0) if base_unit == "cm" else 1.0
+    out = dict(st)
+    out[field] = _unit_label(st.get(field), word, unit, r"\((?:mm|cm|m|px|a\.u\.)\)\s*$")
+    return factor, unit, out
+
+
+def speed_axis(st, name, base_unit="cm/s"):
+    """Speed graphs: (factor, unit, style) for the chosen speed unit.
+
+    Values are measured in `base_unit` (cm/s, or px/s when uncalibrated —
+    then nothing is converted). `style` is a copy of `st` whose speed-axis
+    title (x for Speed Histogram, y for Speed) carries the unit:
+    blank → "Speed (unit)", "Speed" → "Speed (unit)", a title that already
+    ends in a speed unit gets it swapped, any other custom title is kept."""
+    from core.units import SPEED_UNITS
+    unit = st.get("speed_unit", "cm/s")
+    if base_unit != "cm/s" or unit not in SPEED_UNITS:
+        unit = base_unit if base_unit != "cm/s" else "cm/s"
+    factor = SPEED_UNITS.get(unit, 1.0) if base_unit == "cm/s" else 1.0
+    field = "xlabel" if name == "Speed Histogram" else "ylabel"
+    out = dict(st)
+    out[field] = _unit_label(st.get(field), "Speed", unit,
+                             r"\((?:(?:mm|cm|m|px)/(?:s|min)|km/h)\)\s*$")
+    return factor, unit, out
 
 
 def resolve_style(style, mode="light"):
@@ -478,6 +569,35 @@ def _style(**overrides):
         # Per-element text colours; "" = use text_color.
         "title_color":       "",
         "label_color":       "",
+        # Per-axis title settings; None / "" = use label_size / _bold / _color.
+        "xlabel_size":       None,
+        "xlabel_bold":       None,
+        "xlabel_color":      "",
+        "ylabel_size":       None,
+        "ylabel_bold":       None,
+        "ylabel_color":      "",
+        # Heatmap grid / smoothing / scale — see gui.heatmap_grid.
+        "hm_bins":           200,        # squares across (N × N grid)
+        "hm_blur":           3.75,       # Gaussian radius in squares, 0 = off
+        "hm_interp":         "bilinear", # 'bilinear' smooth / 'nearest' blocky
+        "hm_units":          "seconds",  # 'seconds' / 'percent' / 'relative'
+        "hm_vmax":           0.0,        # fixed colour-scale top, 0 = auto
+        # Cell Time cell labels ("3\n12.4s").
+        "cell_label_size":   9,
+        "cell_label_font":   "@mono",
+        "cell_label_bold":   False,
+        # Renamed legend entries: {default text: shown text}. Edited by
+        # double-clicking a legend entry in Customize graphs.
+        "legend_labels":     {},
+        # Legend marker / line-sample scale (set by the legend's resize
+        # handles together with legend_fontsize).
+        "legend_markerscale": 1.0,
+        # Legend entry text colour; "" = the chart's text colour.
+        "legend_text_color": "",
+        # Axis units (see speed_axis / time_axis / distance_axis).
+        "speed_unit":        "cm/s",
+        "time_unit":         "s",
+        "distance_unit":     "cm",
         # Drag-to-position (chart editor) — see apply_layout_overrides().
         "title_dx":          0.0,   # pt, horizontal title nudge
         "xlabel_dx":         0.0,   # pt
@@ -498,7 +618,8 @@ LIGHT_PRESET = {
     "Trajectory":      _style(),
     "Heatmap":         _style(colorbar_show=True, colorbar_label="seconds"),
     "Cell Time":       _style(cmap="viridis", arena_color="@surface",
-                              colorbar_show=True, colorbar_label="seconds"),
+                              colorbar_show=True, colorbar_label="seconds",
+                              grid_axis="both"),   # cell grid: both directions
     "Speed":           _style(path_width=1.0, xlabel="Time (s)", ylabel="Speed (cm/s)",
                               grid=True, legend_show=False),
     "Speed Histogram": _style(xlabel="", ylabel="Time (s)", grid=True, legend_show=False),
@@ -529,7 +650,7 @@ PUBLICATION_PRESET = {
                               show_ticks=False, title_bold=True),
     "Cell Time":       _style(cmap="Greys", title="Cell Time",
                               arena_color="#000000", arena_width=1.0,
-                              title_bold=True),
+                              title_bold=True, grid_axis="both"),
     "Speed":           _style(path_color="#000000", path_width=0.8,
                               title="Speed", xlabel="Time (s)",
                               ylabel="Speed (cm/s)", grid=False,

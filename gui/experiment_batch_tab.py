@@ -2464,6 +2464,9 @@ class ExperimentBatchTab(QWidget):
             data["raw_df"]     = et.raw_df
             data["bin_df"]     = et.bin_df
             data["graph_pngs"] = dict(getattr(et, "_graph_png_bytes", {}) or {})
+            # Keep manual fixes / interpolation when swapping videos.
+            if et._raw_results:
+                data["results"] = [dict(r) for r in et._raw_results]
         except Exception:
             pass
 
@@ -2474,6 +2477,7 @@ class ExperimentBatchTab(QWidget):
         try:
             et.tracking_results = None
             et._raw_results = None
+            et._refresh_correction_buttons()
             et._current_scrub_frame_bgr = None
             et._first_frame_bgr = None
             et.video_path = None
@@ -3492,6 +3496,7 @@ class ExperimentBatchTab(QWidget):
         et.tracking_results = None
         et._raw_results = None
         et._current_scrub_frame_bgr = None
+        et._refresh_correction_buttons()
         # Push crop into the embedded tab BEFORE loading so the displayed
         # frame and all subsequent scrubs are cropped.
         crop_dict = (self.video_settings.get(path) or {}).get("crop")
@@ -3736,6 +3741,7 @@ class ExperimentBatchTab(QWidget):
             et._on_scrub(et.slider_scrub.value())
         except Exception:
             pass
+        et._refresh_correction_buttons()
         # Only use the cached fast path when graphs are actually available —
         # otherwise we'd silently leave the Output / Excel-export panels empty.
         # On the first tracking pass `cached` exists but `graph_pngs` is still

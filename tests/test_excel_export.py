@@ -52,7 +52,8 @@ def _animals():
 def test_combined_export_schema_layout():
     with tempfile.TemporaryDirectory() as d:
         out = os.path.join(d, "combined.xlsx")
-        export_combined(out, _animals(), schema=SCHEMA)
+        # Exact column positions of the base layout (no extra scales).
+        export_combined(out, _animals(), schema=SCHEMA, all_units=False)
         wb = load_workbook(out)
         assert "All Animals" in wb.sheetnames
         ws = wb["All Animals"]
@@ -107,14 +108,17 @@ def test_per_animal_cell_time_and_entries_share_row():
     }]
     with tempfile.TemporaryDirectory() as d:
         out = os.path.join(d, "combined_align.xlsx")
-        export_combined(out, animals, schema=grid_schema)
+        # Base (single-scale) layout pairs metrics 2 per row.
+        export_combined(out, animals, schema=grid_schema, all_units=False)
         ws = load_workbook(out)["A1"]
 
         # Walk the sheet, find each Cell N Time label, and confirm
         # Cell N Entries is on the SAME row in col 3.
         for r in range(1, ws.max_row + 1):
             lbl = ws.cell(row=r, column=1).value
-            if isinstance(lbl, str) and lbl.startswith("Cell ") and "Time" in lbl:
+            # Base-unit rows only; the "OTHER UNIT SCALES" block below
+            # lists the (min) copies on their own.
+            if isinstance(lbl, str) and lbl.startswith("Cell ") and lbl.endswith("Time (s)"):
                 cid = lbl.split()[1]
                 pair = ws.cell(row=r, column=3).value
                 assert pair == f"Cell {cid} Entries (#)", (
@@ -178,3 +182,76 @@ def test_combined_export_legacy_layout_when_no_schema():
         # First metric column is Total Distance (first-seen).
         # Data starts at row 2.
         assert ws.cell(row=2, column=1).value == "A1"
+
+
+def test_combined_export_writes_every_unit_scale():
+    """Each distance / speed / time column is followed by the same value
+    in every other scale, on the master sheet and in the schema order."""
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "combined_units.xlsx")
+        export_combined(out, _animals(), schema=SCHEMA)
+        ws = load_workbook(out)["All Animals"]
+        titles = [ws.cell(row=2, column=c).value
+                  for c in range(1, ws.max_column + 1)]
+        assert titles[3:6] == ["Total Distance (cm)", "Total Distance (mm)",
+                               "Total Distance (m)"]
+        assert titles[6:11] == ["Average Speed (cm/s)", "Average Speed (mm/s)",
+                                "Average Speed (m/s)", "Average Speed (m/min)",
+                                "Average Speed (km/h)"]
+        assert "Center Cells Time (min)" in titles
+        row = {t: ws.cell(row=3, column=i + 1).value for i, t in enumerate(titles)}
+        assert row["Total Distance (m)"] == pytest.approx(1.205)
+        assert row["Average Speed (km/h)"] == pytest.approx(4.02 * 0.036)
+        assert row["Center Cells Time (min)"] == pytest.approx(0.5)
+        # Missing metric stays blank in every scale.
+        assert ws.cell(row=4, column=titles.index("Average Speed (km/h)") + 1
+                       ).value in (None, "")
+
+
+def test_unit_expansion_rules():
+    from core import units
+    m = units.expand_metrics({
+        "Duration (s)": 300.0, "Max Speed (px/s)": 5.0,
+        "Tortuosity": "n/a", "Detection Rate (%)": 99.0,
+        "Habituation Slope (cm/min)": -12.5,
+    })
+    assert m["Duration (min)"] == 5.0
+    assert m["Habituation Slope (m/min)"] == pytest.approx(-0.125)
+    assert "Max Speed (mm/s)" not in m          # uncalibrated → untouched
+    assert not any("Detection Rate" in k and k != "Detection Rate (%)" for k in m)
+    # snake_case plugin keys; '_s' as the SOUTH arm must not become minutes
+    s = units.expand_metrics({"unit": "cm", "total_distance": 250.0,
+                              "mean_speed": 10.0, "time_arm_s_s": 60.0,
+                              "entries_arm_s": 4, "pct_time_arm_s": 20.0})
+    assert s["total_distance_m"] == 2.5
+    # unit-less base names get their unit so the cm column is recognisable
+    assert s["total_distance_cm"] == 250.0 and "total_distance" not in s
+    assert s["mean_speed_cm_per_s"] == 10.0
+    assert s["mean_speed_km_per_h"] == pytest.approx(0.36)
+    assert s["time_arm_s_min"] == 1.0
+    assert "entries_arm_min" not in s and "pct_time_arm_min" not in s
+    px = units.expand_metrics({"unit": "px", "total_distance": 250.0})
+    assert list(px) == ["unit", "total_distance"]
+
+
+def test_per_animal_sheet_has_every_scale_on_one_row():
+    """With all scales on, each metric is one row on the per-animal
+    sheet: label, then value/unit pairs for every scale."""
+    animals = _animals()
+    animals[0]["video_config"] = {"movement_thr": 2.0, "model": "median"}
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "combined_rows.xlsx")
+        export_combined(out, animals, schema=SCHEMA)
+        ws = load_workbook(out)["A1"]
+        rows = {ws.cell(row=r, column=1).value:
+                [ws.cell(row=r, column=c).value for c in range(2, 12)]
+                for r in range(1, ws.max_row + 1)}
+        assert rows["Total Distance"][:6] == [120.5, "cm", 1205, "mm",
+                                              1.205, "m"]
+        spd = rows["Average Speed"]
+        assert spd[1::2][:5] == ["cm/s", "mm/s", "m/s", "m/min", "km/h"]
+        assert spd[8] == pytest.approx(4.02 * 0.036)
+        assert rows["Center Cells Time"][:4] == [30, "s", 0.5, "min"]
+        # Video config settings get every scale too.
+        assert rows["Movement threshold"][:4] == [2, "cm/s", 20, "mm/s"]
+        assert "OTHER UNIT SCALES" not in rows

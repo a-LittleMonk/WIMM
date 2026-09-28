@@ -16,6 +16,40 @@ from gui.widgets_v2 import IconButton, SwitchBox, form_row
 from tracking.tracker import DEFAULT_MODEL_PARAMS, DEFAULT_POST_PARAMS
 
 
+# (key, label, tooltip) — keys match tracking.tracker's model names.
+_MODELS = [
+    ("median", "Median BG",
+     "Static background from the median of sampled frames. Best default "
+     "for a fixed camera and steady lighting."),
+    ("mog2", "MOG2 (adaptive)",
+     "Gaussian-mixture background that can adapt to slow lighting changes. "
+     "Can lose a mouse that rests in one spot for long."),
+    ("knn", "KNN",
+     "Nearest-neighbour background model; robust to small background noise."),
+    ("framediff", "Frame difference",
+     "Detects what moved between frames. Fast, but loses a mouse that moves "
+     "slowly or stays still — turn on the running average in its settings."),
+    ("hsv", "HSV threshold",
+     "Colour / brightness threshold — for a dark mouse on a light floor (or "
+     "the reverse, with Invert off)."),
+    ("cnt", "CNT (fast)", "Counts pixel stability; very fast. Needs opencv-contrib."),
+    ("gsoc", "GSOC", "Robust to lighting noise; slower. Needs opencv-contrib."),
+    ("lsbp", "LSBP", "Texture-based background model. Needs opencv-contrib."),
+]
+_CONTRIB_MODELS = {"cnt", "gsoc", "lsbp"}
+
+
+def _available_models():
+    """Models the installed OpenCV can run (CNT / GSOC / LSBP need the
+    opencv-contrib build)."""
+    try:
+        import cv2
+        contrib = hasattr(cv2, "bgsegm")
+    except Exception:
+        contrib = False
+    return [m for m in _MODELS if contrib or m[0] not in _CONTRIB_MODELS]
+
+
 def build_analysis_step(host):
     """Build the Tracking + Analysis cards. Sets attributes on host:
         _model_widget, combo_model, btn_model_tuning,
@@ -38,10 +72,15 @@ def build_analysis_step(host):
     model_row.setContentsMargins(0, 0, 0, 0)
     model_row.setSpacing(6)
     host.combo_model = QComboBox()
-    host.combo_model.addItem("Median BG", "median")
+    for key, label, tip in _available_models():
+        host.combo_model.addItem(label, key)
+        host.combo_model.setItemData(host.combo_model.count() - 1, tip, Qt.ToolTipRole)
+    host.combo_model.setToolTip(
+        "How the animal is separated from the background.\n"
+        "Median BG is the default and works for most fixed-camera videos.")
     model_row.addWidget(host.combo_model, 1)
     host.btn_model_tuning = IconButton("gear", 13, "TEXT_2", "TEXT",
-                                       "Tune History / Learn rate for the selected model.",
+                                       "Tune the settings of the selected model.",
                                        28, "border")
     host.btn_model_tuning.clicked.connect(host._open_model_tuning_dialog)
     model_row.addWidget(host.btn_model_tuning)

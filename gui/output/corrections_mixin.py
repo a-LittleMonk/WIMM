@@ -59,6 +59,18 @@ class CorrectionsMixin:
         self._corrections_popup.raise_()
         self._corrections_popup.activateWindow()
 
+    def _refresh_correction_buttons(self):
+        """Fix / Next miss / Interpolate need tracked results; Clear needs at
+        least one manual fix or interpolated frame."""
+        has = bool(self.tracking_results)
+        for b in (self.btn_fix, self.btn_next_miss, self.btn_interpolate):
+            b.setEnabled(has)
+        if not has and self.btn_fix.isChecked():
+            self.btn_fix.setChecked(False)
+        self.btn_clear_fixes.setEnabled(has and any(
+            r.get("corrected") or r.get("interpolated")
+            for r in (self._raw_results or self.tracking_results)))
+
     def _on_fix_toggled(self, checked):
         if checked:
             self.btn_excl.setChecked(False)
@@ -66,29 +78,68 @@ class CorrectionsMixin:
         else:
             self.zone_drawer.set_mode(ZoneDrawer.MODE_IDLE)
 
+    def _display_frame_size(self):
+        """Width / height of the frame shown on the video (after crop /
+        warp) — tracked x/y are in these pixels."""
+        frame = (self._current_scrub_frame_bgr
+                 if self._current_scrub_frame_bgr is not None else self._first_frame_bgr)
+        if frame is not None:
+            return frame.shape[1], frame.shape[0]
+        return (self.video_w or 1), (self.video_h or 1)
+
+    def _result_rows(self, idx):
+        """The same frame in the shown (smoothed) results and in the raw
+        results, so a fix survives a smoothing change."""
+        rows = [self.tracking_results[idx]]
+        raw = self._raw_results
+        if raw and idx < len(raw) and raw[idx] is not rows[0]:
+            rows.append(raw[idx])
+        return rows
+
     def _on_correction_click(self, nx, ny):
         if not self.tracking_results:
             return
         slider_val = self.slider_scrub.value()
         rel_idx = self._slider_to_results_idx(slider_val)
-        x_px = nx * (self.video_w or 1)
-        y_px = ny * (self.video_h or 1)
-        r = self.tracking_results[rel_idx]
-        r["x"] = x_px
-        r["y"] = y_px
-        r["corrected"] = True
+        w, h = self._display_frame_size()
+        for r in self._result_rows(rel_idx):
+            if not r.get("corrected") and not r.get("interpolated"):
+                r["orig_x"], r["orig_y"] = r.get("x"), r.get("y")   # for Clear
+            r.pop("interpolated", None)
+            r["x"] = nx * w
+            r["y"] = ny * h
+            r["corrected"] = True
+        self.btn_clear_fixes.setEnabled(True)
         self._on_scrub(slider_val)
+        self._corrections_changed()
+
+    def _corrections_changed(self):
+        """Recompute metrics / graphs once the user pauses fixing."""
+        from PyQt5.QtCore import QTimer
+        t = getattr(self, "_corrections_timer", None)
+        if t is None:
+            t = self._corrections_timer = QTimer(self)
+            t.setSingleShot(True)
+            t.setInterval(600)
+            t.timeout.connect(self._recompute_metrics_and_views)
+        t.start()
 
     def _clear_fixes(self):
         if not self.tracking_results:
             return
-        for r in self.tracking_results:
-            r.pop("corrected", None)
-            if r.pop("interpolated", None):
-                r["x"] = None
-                r["y"] = None
+        for rows in (self.tracking_results, self._raw_results or []):
+            for r in rows:
+                if r.pop("corrected", None) or r.pop("interpolated", None):
+                    r["x"] = r.pop("orig_x", None)
+                    r["y"] = r.pop("orig_y", None)
+                r.pop("interpolated", None)
+        # Re-smooth so the restored frames match the other ones.
+        if self._raw_results:
+            self.tracking_results = self._apply_smoothing(
+                self._raw_results, self.spin_smooth.value())
         self._on_scrub(self.slider_scrub.value())
         self.btn_clear_fixes.setEnabled(False)
+        self._corrections_changed()
 
     def _apply_smoothing(self, raw, window):
         if not raw:
@@ -100,6 +151,8 @@ class CorrectionsMixin:
         half = window // 2
         smoothed = [dict(r) for r in raw]
         for i in range(n):
+            if smoothed[i].get("corrected"):
+                continue                  # a manual fix is kept exactly
             for k in keys:
                 if smoothed[i].get(k) is None:
                     continue
@@ -153,16 +206,19 @@ class CorrectionsMixin:
                     span = j - prev
                     for k in range(i, j):
                         t = (k - prev) / span
-                        results[k]["x"] = x0 + t * (x1 - x0)
-                        results[k]["y"] = y0 + t * (y1 - y0)
-                        results[k]["interpolated"] = True
+                        for r in self._result_rows(k):
+                            r["orig_x"], r["orig_y"] = None, None   # for Clear
+                            r["x"] = x0 + t * (x1 - x0)
+                            r["y"] = y0 + t * (y1 - y0)
+                            r["interpolated"] = True
                         filled += 1
                 i = j
             else:
                 i += 1
-        self.btn_clear_fixes.setEnabled(True)
         self._on_scrub(self.slider_scrub.value())
         if filled:
+            self.btn_clear_fixes.setEnabled(True)
+            self._corrections_changed()
             self.lbl_track.setText(f"Interpolated {filled} missing frames")
             theme.set_tone(self.lbl_track, "warn", "font-size:11px;")
         else:

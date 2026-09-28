@@ -23,22 +23,35 @@ the app's real graphs use.
 import copy
 import time
 
-from PyQt5.QtCore import QPointF, QRectF, QSize, Qt, QTimer
+from PyQt5.QtCore import QEvent, QObject, QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QIcon, QImage, QKeySequence, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
-    QCheckBox, QComboBox, QFormLayout, QFrame, QHBoxLayout, QLabel, QListView,
+    QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QLineEdit, QFrame, QHBoxLayout, QLabel, QListView,
     QListWidget, QListWidgetItem, QPushButton, QScrollArea, QShortcut, QSizePolicy,
-    QSplitter, QStyle, QStyledItemDelegate, QTabBar, QVBoxLayout, QWidget,
+    QSpinBox, QSplitter, QStyle, QStyledItemDelegate, QTabBar, QVBoxLayout, QWidget,
 )
 from matplotlib.transforms import ScaledTranslation
 
 from gui import theme
-from gui.graph_style import apply_layout_overrides, default_style_for, resolve_style, resolve_token
+from gui.graph_style import (DISTANCE_UNIT_CHOICES, SPEED_UNIT_CHOICES, TIME_UNIT_CHOICES, apply_layout_overrides, default_style_for,
+                             resolve_style, resolve_token)
+from gui.heatmap_grid import HM_BINS_RANGE, HM_HELP, HM_INTERP_CHOICES, HM_UNIT_CHOICES
 from gui.graph_style_dialog import (
     GRID_AXIS_CHOICES, LEGEND_LOC_CHOICES, LINESTYLE_CHOICES, MARKER_CHOICES,
     PIN_MARKER_CHOICES, CMAP_CHOICES, CUSTOM_CMAP_STOPS, GraphStyleDialog,
     _ColorButton, _fig_mode,
 )
+
+LEGEND_FONT_RANGE = (4.0, 40.0)   # legend text size limits (pt) when resizing
+
+# Which unit belongs to which axis — an axis-title panel shows only its own.
+UNIT_FIELDS = {"speed_unit", "time_unit", "distance_unit"}
+AXIS_UNIT = {
+    ("Speed", "xlabel"): "time_unit",           ("Speed", "ylabel"): "speed_unit",
+    ("Speed Histogram", "xlabel"): "speed_unit", ("Speed Histogram", "ylabel"): "time_unit",
+    ("Habituation", "xlabel"): "time_unit",     ("Habituation", "ylabel"): "distance_unit",
+    ("Zone Time", "ylabel"): "time_unit",
+}
 
 # ── Chart elements ─────────────────────────────────────────────────────────
 # key → (label, [(field, row label, kind, options)]). A row only appears when
@@ -46,6 +59,9 @@ from gui.graph_style_dialog import (
 # bool, combo, pair, font, spines, cmap, bars, textcolor.
 ELEMENTS = {
     "chart": ("Chart area", [
+        ("speed_unit", "Speed unit", "combo", SPEED_UNIT_CHOICES),
+        ("time_unit", "Time unit", "combo", TIME_UNIT_CHOICES),
+        ("distance_unit", "Distance unit", "combo", DISTANCE_UNIT_CHOICES),
         ("outer_bg", "Background", "color", None),
         ("font_family", "Font (all text)", "font", None),
         ("text_color", "Text color (all text)", "color", None),
@@ -70,24 +86,41 @@ ELEMENTS = {
     ]),
     "xlabel": ("Horizontal axis title", [
         ("xlabel", "Text", "text", None),
-        ("label_size", "Size (both axis titles)", "int", (6, 32)),
-        ("label_bold", "Bold", "bool", None),
-        ("label_color", "Color", "textcolor", None),
+        ("speed_unit", "Speed unit", "combo", SPEED_UNIT_CHOICES),
+        ("time_unit", "Time unit", "combo", TIME_UNIT_CHOICES),
+        ("distance_unit", "Distance unit", "combo", DISTANCE_UNIT_CHOICES),
+        ("xlabel_size", "Size", "int", (6, 32)),
+        ("xlabel_bold", "Bold", "bool", None),
+        ("xlabel_color", "Color", "textcolor", None),
     ]),
     "ylabel": ("Vertical axis title", [
         ("ylabel", "Text", "text", None),
-        ("label_size", "Size (both axis titles)", "int", (6, 32)),
-        ("label_bold", "Bold", "bool", None),
-        ("label_color", "Color", "textcolor", None),
+        ("speed_unit", "Speed unit", "combo", SPEED_UNIT_CHOICES),
+        ("time_unit", "Time unit", "combo", TIME_UNIT_CHOICES),
+        ("distance_unit", "Distance unit", "combo", DISTANCE_UNIT_CHOICES),
+        ("ylabel_size", "Size", "int", (6, 32)),
+        ("ylabel_bold", "Bold", "bool", None),
+        ("ylabel_color", "Color", "textcolor", None),
     ]),
     "ticks": ("Axis numbers", [
         ("show_ticks", "Show", "bool", None),
+        ("speed_unit", "Speed unit", "combo", SPEED_UNIT_CHOICES),
+        ("time_unit", "Time unit", "combo", TIME_UNIT_CHOICES),
+        ("distance_unit", "Distance unit", "combo", DISTANCE_UNIT_CHOICES),
         ("tick_size", "Size", "int", (5, 24)),
         ("tick_bold", "Bold", "bool", None),
         ("tick_color", "Color", "color", None),
     ]),
     "series": ("Data", [
         ("cmap", "Color scale", "cmap", None),
+        ("speed_unit", "Speed unit", "combo", SPEED_UNIT_CHOICES),
+        ("time_unit", "Time unit", "combo", TIME_UNIT_CHOICES),
+        ("distance_unit", "Distance unit", "combo", DISTANCE_UNIT_CHOICES),
+        ("hm_bins", "Grid size (squares across)", "int", HM_BINS_RANGE),
+        ("hm_blur", "Blur (radius in squares)", "float", (0.0, 30.0, 0.25)),
+        ("hm_interp", "Drawing", "pair", HM_INTERP_CHOICES),
+        ("hm_units", "Scale unit", "pair", HM_UNIT_CHOICES),
+        ("hm_vmax", "Fixed maximum (0 = auto)", "float", (0.0, 100000.0, 0.1)),
         ("path_color", "Color", "color", None),
         ("path_width", "Line width", "float", (0.1, 12.0, 0.1)),
         ("linestyle", "Line style", "pair", LINESTYLE_CHOICES),
@@ -116,7 +149,8 @@ ELEMENTS = {
     ]),
     "legend": ("Legend", [
         ("legend_show", "Show", "bool", None),
-        ("legend_fontsize", "Text size", "int", (5, 24)),
+        ("legend_fontsize", "Text size", "float", LEGEND_FONT_RANGE + (0.5,)),
+        ("legend_text_color", "Text color", "textcolor", None),
         ("legend_bg", "Background", "color", None),
         ("legend_loc", "Position", "combo", LEGEND_LOC_CHOICES),
         ("legend_inset_pct", "Gap from edge (%)", "float", (0.0, 25.0, 0.5)),
@@ -125,8 +159,14 @@ ELEMENTS = {
         ("colorbar_show", "Show", "bool", None),
         ("colorbar_label", "Label", "text", None),
         ("cmap", "Color scale", "cmap", None),
+        ("colorbar_w", "Width (% of chart)", "cbsize", None),
+        ("colorbar_h", "Height (% of chart)", "cbsize", None),
     ]),
-    "cells": ("Cell labels", []),
+    "cells": ("Cell labels", [
+        ("cell_label_size", "Size", "int", (5, 30)),
+        ("cell_label_font", "Font", "font", None),
+        ("cell_label_bold", "Bold", "bool", None),
+    ]),
 }
 ELEMENT_ORDER = ["chart", "plot", "title", "xlabel", "ylabel", "ticks", "series",
                  "arena", "center", "pins", "legend", "colorbar", "cells"]
@@ -144,7 +184,14 @@ POSITION_FIELDS = {
     "legend": {"legend_x_offset": 0.0, "legend_y_offset": 0.0},
 }
 DRAGGABLE = {"title", "xlabel", "ylabel", "legend", "colorbar", "plot", "cells"}
-HANDLE = 7          # px, plot-area resize handles
+RESIZABLE = {"plot", "colorbar", "legend"}   # get 8 resize handles when selected
+HANDLE = 7          # px, plot-area / colour-bar resize handles
+
+# Colour bar rect = base + stored offset (see _maybe_colorbar / graphs_mixin).
+# Size limits keep it visible and inside the chart.
+CB_BASE_W, CB_BASE_H = 0.88, 0.04
+CB_W_RANGE = (0.05, 1.0)
+CB_H_RANGE = (0.005, 0.35)
 DRAG_START = 3      # px of movement before a press becomes a drag
 SNAP_PX = 8         # px: how close an edge / middle must be to a guide to snap
 
@@ -219,6 +266,53 @@ class _ThumbDelegate(QStyledItemDelegate):
         p.restore()
 
 
+class _ClickAway(QObject):
+    """App-wide filter, installed only while an inline edit is open: a
+    mouse press anywhere outside the edit box saves it. The click itself
+    still goes through (select another element, press a button, …)."""
+
+    def __init__(self, editor, on_click_away):
+        super().__init__(editor)
+        self._ed = editor
+        self._cb = on_click_away
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.MouseButtonPress:
+            if not (obj is self._ed or (isinstance(obj, QWidget)
+                                        and self._ed.isAncestorOf(obj))):
+                self._cb()
+        return False
+
+
+class _InlineEdit(QLineEdit):
+    """Text box laid over the chart for editing a title / legend entry in
+    place. Enter, focus-out or a click anywhere else → committed, Esc →
+    cancelled."""
+    committed = pyqtSignal()
+    cancelled = pyqtSignal()
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._done = False
+        self.returnPressed.connect(self._commit)
+
+    def _commit(self):
+        if not self._done:
+            self._done = True
+            self.committed.emit()
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key_Escape:
+            self._done = True
+            self.cancelled.emit()
+            return
+        super().keyPressEvent(e)
+
+    def focusOutEvent(self, e):
+        super().focusOutEvent(e)
+        self._commit()
+
+
 def _handle_points(r):
     cx, cy = r.center().x(), r.center().y()
     return [QPointF(r.left(), r.top()), QPointF(cx, r.top()), QPointF(r.right(), r.top()),
@@ -240,8 +334,14 @@ class ChartEditor(GraphStyleDialog):
         self._thumb_busy = False
         super().__init__(*args, **kwargs)
         self.setWindowTitle("Customize graphs")
+        # Maximise / minimise buttons on the title bar (a plain QDialog has
+        # none); F11 toggles full screen.
+        self.setWindowFlags(self.windowFlags() | Qt.WindowMaximizeButtonHint
+                            | Qt.WindowMinimizeButtonHint)
+        self.setSizeGripEnabled(True)
         self.resize(1320, 800)
         self.setMinimumSize(1040, 640)
+        QShortcut(QKeySequence(Qt.Key_F11), self, activated=self._toggle_full_screen)
         self._live = True          # every change reaches the app's graphs
         self._thumb_timer = QTimer(self)
         self._thumb_timer.setSingleShot(True)
@@ -251,6 +351,28 @@ class ChartEditor(GraphStyleDialog):
         QShortcut(QKeySequence.Redo, self, activated=self._do_redo)
         QShortcut(QKeySequence("Ctrl+Shift+Z"), self, activated=self._do_redo)
         QTimer.singleShot(0, self._render_all_thumbs)
+
+    def _toggle_full_screen(self):
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        # Never open larger than the monitor (small / scaled screens).
+        if not getattr(self, "_fitted_to_screen", False):
+            self._fitted_to_screen = True
+            h = self.windowHandle()
+            scr = h.screen() if h is not None else None
+            if scr is not None:
+                avail = scr.availableGeometry()
+                w = min(self.width(), avail.width() - 20)
+                hh = min(self.height(), avail.height() - 40)
+                if (w, hh) != (self.width(), self.height()):
+                    self.setMinimumSize(min(self.minimumWidth(), w),
+                                        min(self.minimumHeight(), hh))
+                    self.resize(w, hh)
 
     # ── UI shell ─────────────────────────────────────────────────────────
     def _build_ui(self):
@@ -269,7 +391,14 @@ class ChartEditor(GraphStyleDialog):
         self.tabs_plugin.setCurrentIndex(sel)
         self.tabs_plugin.currentChanged.connect(self._on_plugin_tab_changed)
         self.tabs_plugin.setVisible(len(self._plugins) > 1)
-        root.addWidget(self.tabs_plugin)
+        # Row 1: test tabs + preview / export / close on the right.
+        # Row 2: presets + editing. (One row was too wide — buttons got
+        # squeezed and overlapped.)
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        top.addWidget(self.tabs_plugin)
+        top.addStretch(1)
+        root.addLayout(top)
 
         bar = QHBoxLayout()
         bar.setSpacing(8)
@@ -280,13 +409,13 @@ class ChartEditor(GraphStyleDialog):
         self.cmb_preset.currentTextChanged.connect(self._on_preset_pick)
         bar.addWidget(self.cmb_preset)
         self.lbl_preset_state = QLabel("")
-        theme.set_tone(self.lbl_preset_state, "warn", "font-size: 11px;")
-        self.lbl_preset_state.setMinimumWidth(self.lbl_preset_state.fontMetrics().horizontalAdvance("edited") + 8)
+        theme.set_tone(self.lbl_preset_state, "warn", "font-size: 11px; padding-left: 8px;")
+        self.lbl_preset_state.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         bar.addWidget(self.lbl_preset_state)
         self.btn_update_preset = QPushButton("Update preset")
         self.btn_update_preset.clicked.connect(self._update_preset)
         bar.addWidget(self.btn_update_preset)
-        b = QPushButton("Save as new preset…")
+        b = QPushButton("Save as new")
         b.setToolTip("Save every graph of every test as a new preset")
         b.clicked.connect(self._save_preset_dialog)
         bar.addWidget(b)
@@ -315,6 +444,9 @@ class ChartEditor(GraphStyleDialog):
                                  "the plot area and other elements (hold Alt to move freely)")
         bar.addWidget(self.chk_snap)
         bar.addStretch(1)
+        root.addLayout(bar)
+        bar_rows = (top, bar)
+        bar = top          # the rest goes on the tab row, right-aligned
         self.chk_real = QCheckBox("Show my data")
         self.chk_real.setToolTip("Preview with the tracked session instead of sample data")
         self.chk_real.toggled.connect(self._on_real_toggle)
@@ -340,7 +472,16 @@ class ChartEditor(GraphStyleDialog):
         close.setProperty("primary", True)
         close.clicked.connect(self._accept)
         bar.addWidget(close)
-        root.addLayout(bar)
+        # Never squeeze a control below its text (texts were cut off /
+        # "edited" slid under the preset box).
+        for row in bar_rows:
+            for i in range(row.count()):
+                w = row.itemAt(i).widget()
+                if isinstance(w, (QPushButton, QCheckBox, QLabel)):
+                    w.ensurePolished()
+                    w.setMinimumWidth(w.sizeHint().width())
+        self.lbl_preset_state.setFixedWidth(
+            self.lbl_preset_state.fontMetrics().horizontalAdvance("edited") + 20)
 
         split = QSplitter(Qt.Horizontal)
         split.setChildrenCollapsible(False)
@@ -373,7 +514,8 @@ class ChartEditor(GraphStyleDialog):
         cv.addWidget(self._canvas, 1)
         self._overlay = _Overlay(self._canvas)
         self._hint = QLabel("Click any part of the graph to format it. "
-                            "Drag the title, axis titles, legend or color bar to move them.")
+                            "Drag the title, axis titles, legend or color bar to move them. "
+                            "Double-click a title or legend text to edit it.")
         theme.set_tone(self._hint, "faint", "font-size: 11px;")
         self._export_banner = QLabel("Export preview — this is how saved files and "
                                      "Excel images look. Turn it off to see the on-screen version.")
@@ -483,8 +625,8 @@ class ChartEditor(GraphStyleDialog):
         self.cmb_element.blockSignals(False)
 
         allowed = self._allowed_fields(self._current)
-        style = self._cfg.get_for(self._current_plugin_key, self._current)
-        baseline = default_style_for(self._current, self._current_plugin_key)
+        style = self._axis_fallbacks(self._cfg.get_for(self._current_plugin_key, self._current))
+        baseline = self._axis_fallbacks(default_style_for(self._current, self._current_plugin_key))
         self._diff_fields = {f for f in allowed if baseline.get(f) != style.get(f)}
         self._editors = {}
         self._label_widgets = {}
@@ -512,7 +654,13 @@ class ChartEditor(GraphStyleDialog):
                 continue
             if field not in allowed:
                 continue
+            if (key in ("xlabel", "ylabel") and field in UNIT_FIELDS
+                    and AXIS_UNIT.get((self._current, key)) != field):
+                continue                     # that unit belongs to the other axis
             n += 1
+            if kind == "cbsize":
+                self._add_cb_size(form, field, text, style)
+                continue
             if kind == "color":
                 self._add_color(form, field, text, style)
             elif kind == "textcolor":
@@ -533,21 +681,84 @@ class ChartEditor(GraphStyleDialog):
                 self._add_font(form, field, text, style)
             elif kind == "bars":
                 self._add_bar_colors(form, style)
+        if key == "series" and "hm_bins" in allowed:
+            hm_help = QLabel(HM_HELP)
+            hm_help.setWordWrap(True)
+            theme.set_tone(hm_help, "faint", "font-size: 11px;")
+            form.addRow(hm_help)
+        if key == "legend":
+            n += self._add_legend_label_rows(form)
         if key == "cells":
             form.addRow(QLabel("Drag the cell labels on the graph to move them."))
         elif n == 0:
             form.addRow(QLabel("Nothing to format here for this graph."))
         if key in DRAGGABLE:
             tip = {"plot": "Drag the handles to resize the plot area, or drag inside it to move it.",
+                   "legend": "Drag the handles to make the legend bigger or smaller, "
+                             "or drag inside it to move it.",
+                   "colorbar": "Drag the handles to resize the color bar, or drag inside it to move it.",
                    "cells": ""}.get(key, "Drag it on the graph to move it.")
             if tip:
                 hint = QLabel(tip)
                 hint.setWordWrap(True)
                 theme.set_tone(hint, "faint", "font-size: 11px;")
                 form.addRow(hint)
+        self._fit_pane_width(form, host)
         self.props_scroll.setWidget(host)
         self.btn_reset_pos.setVisible(key in POSITION_FIELDS)
         self.btn_apply_all.setEnabled(bool(rows))
+
+    @staticmethod
+    def _axis_fallbacks(style):
+        """Copy of `style` where unset per-axis title settings show the
+        shared value they currently fall back to (label_size / _bold)."""
+        style = dict(style)
+        for axis in ("xlabel", "ylabel"):
+            if style.get(f"{axis}_size") in (None, ""):
+                style[f"{axis}_size"] = style.get("label_size", 10)
+            if style.get(f"{axis}_bold") is None:
+                style[f"{axis}_bold"] = bool(style.get("label_bold", False))
+            if not style.get(f"{axis}_color") and style.get("label_color"):
+                style[f"{axis}_color"] = style["label_color"]
+        return style
+
+    @staticmethod
+    def _fit_pane_width(form, host):
+        """Keep every row inside the Format pane (no horizontal scrolling):
+        a label that doesn't fit next to its field goes above it, and fields
+        may shrink to the pane width instead of insisting on their natural
+        width (long font / preset names, colour rows with extra buttons)."""
+        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        for w in host.findChildren(QWidget):
+            if isinstance(w, QComboBox):
+                w.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+                w.setMinimumContentsLength(6)
+                w.setMinimumWidth(0)
+            elif isinstance(w, (QLineEdit, QDoubleSpinBox, QSpinBox)):
+                w.setMinimumWidth(min(w.minimumWidth(), 60))
+            elif isinstance(w, QLabel) and w.wordWrap() is False and len(w.text()) > 30:
+                w.setWordWrap(True)
+
+    def _add_cb_size(self, form, field, label, style):
+        """Colour-bar width / height as a plain % of the chart. Stored as
+        an offset from the default size (colorbar_w / colorbar_h)."""
+        base, (lo, hi) = ((CB_BASE_W, CB_W_RANGE) if field == "colorbar_w"
+                          else (CB_BASE_H, CB_H_RANGE))
+        sp = QDoubleSpinBox()
+        sp.setRange(lo * 100.0, hi * 100.0)
+        sp.setDecimals(1)
+        sp.setSingleStep(0.5 if field == "colorbar_h" else 2.0)
+        sp.setSuffix(" %")
+        try:
+            cur = base + float(style.get(field, 0.0))
+        except Exception:
+            cur = base
+        sp.setValue(min(hi, max(lo, cur)) * 100.0)
+        sp.valueChanged.connect(
+            lambda v, f=field, b=base: self._commit(f, round(v / 100.0 - b, 4)))
+        form.addRow(self._row_label_widget(field, label), sp)
+        self._editors[field] = sp
 
     def _add_spines(self, form, style, allowed):
         row = QWidget()
@@ -617,6 +828,9 @@ class ChartEditor(GraphStyleDialog):
         same = QPushButton("Same as text")
         same.setToolTip("Use the chart's text color")
         same.clicked.connect(lambda _=False, f=field: self._commit(f, ""))
+        # …and show that colour on the swatch straight away.
+        same.clicked.connect(lambda _=False, b=btn, s=style: b.set_hex(
+            resolve_token(s.get("text_color") or "@ink", _fig_mode())))
         h = w.layout()
         h.addSpacing(4)
         h.addWidget(same)
@@ -967,7 +1181,7 @@ class ChartEditor(GraphStyleDialog):
         ov.setGeometry(self._canvas.rect())
         ov.rects = [self._to_qt(b) for b in self._element_bboxes(self._sel)] \
             if self._sel != "chart" else []
-        ov.handles = self._sel == "plot"
+        ov.handles = self._sel in RESIZABLE
         ov.raise_()
         ov.update()
 
@@ -1035,10 +1249,15 @@ class ChartEditor(GraphStyleDialog):
         return bool(np.min(np.hypot(px - x, py - y)) <= tol)
 
     def _plot_handle_at(self, ev):
-        if self._sel != "plot":
+        """Resize handle under the mouse on the selected plot area / colour
+        bar → the edges it moves ('lt', 'r', …), else None."""
+        if self._sel not in RESIZABLE:
+            return None
+        bbs = self._element_bboxes(self._sel)
+        if not bbs:
             return None
         r = getattr(self._canvas, "device_pixel_ratio", 1.0) or 1.0
-        q = self._to_qt(self._ax.bbox)
+        q = self._to_qt(bbs[0])
         H = self._fig.bbox.height
         mx, my = ev.x / r, (H - ev.y) / r
         for i, pt in enumerate(_handle_points(q)):
@@ -1050,14 +1269,169 @@ class ChartEditor(GraphStyleDialog):
     def _on_press(self, ev):
         if ev.button != 1 or ev.x is None:
             return
+        if getattr(self, "_inline", None):       # click on the chart = save
+            self._finish_inline_edit(save=True)
+        if getattr(ev, "dblclick", False):
+            target = self._text_target(ev)
+            if target is not None:
+                self._drag = None
+                self._start_inline_edit(*target)
+                return
         edges = self._plot_handle_at(ev)
-        key = "plot" if edges else self._hit(ev)
+        key = self._sel if edges else self._hit(ev)
         if key != self._sel:
             self._set_selection(key)
         if key in DRAGGABLE:
             self._drag = self._start_drag(key, ev, edges)
         else:
             self._drag = None
+
+    # ── inline text editing (double-click a text on the chart) ───────────
+    def _text_target(self, ev):
+        """(field, legend_key, artist) for the editable text under the
+        mouse, or None. field is the style field that holds the text;
+        legend_key is the entry's default text for legend entries."""
+        allowed = self._allowed_fields(self._current)
+        ax = self._ax
+
+        def hit(art):
+            try:
+                return bool(art is not None and art.get_visible()
+                            and art.get_text() and art.contains(ev)[0])
+            except Exception:
+                return False
+
+        for field, art in (("title", ax.title), ("xlabel", ax.xaxis.label),
+                           ("ylabel", ax.yaxis.label)):
+            if field in allowed and hit(art):
+                return field, None, art
+        leg = ax.get_legend()
+        if leg is not None:
+            origs = getattr(leg, "_orig_labels", None) or \
+                [t.get_text() for t in leg.get_texts()]
+            for t, orig in zip(leg.get_texts(), origs):
+                if hit(t):
+                    return "legend_labels", orig, t
+        cax = self._drag_artists.get("cax")
+        if cax is not None and "colorbar_label" in allowed and hit(cax.xaxis.label):
+            return "colorbar_label", None, cax.xaxis.label
+        return None
+
+    def _start_inline_edit(self, field, legend_key, art):
+        """Put a text box over `art` on the chart. Enter / clicking away
+        saves (one undo step), Esc cancels."""
+        self._finish_inline_edit(save=False)
+        try:
+            bb = art.get_window_extent(self._canvas.get_renderer())
+        except Exception:
+            return
+        r = self._to_qt(bb)
+        ed = _InlineEdit(self._canvas)
+        ed.setText(art.get_text())
+        ed.setAlignment(Qt.AlignCenter)
+        # Solid box, and hide the chart text underneath while typing (the
+        # old text used to show through behind the new one).
+        ed.setStyleSheet(
+            f"QLineEdit {{ background: {theme.SURFACE}; color: {theme.TEXT};"
+            f" border: 1.5px solid {theme.ACCENT}; border-radius: 4px;"
+            f" padding: 0 6px; }}")
+        art.set_visible(False)
+        self._canvas.draw()
+        w = max(160, int(r.width()) + 40) if r.width() > r.height() else 200
+        h = max(26, min(40, int(min(r.width(), r.height())) + 10))
+        cx, cy = r.center().x(), r.center().y()
+        x = int(min(max(0, cx - w / 2), self._canvas.width() - w))
+        y = int(min(max(0, cy - h / 2), self._canvas.height() - h))
+        ed.setGeometry(x, y, w, h)
+        ed.setToolTip("Enter or click anywhere else to save, Esc to cancel")
+        self._inline = (ed, field, legend_key, art)
+        ed.committed.connect(lambda: self._finish_inline_edit(save=True))
+        ed.cancelled.connect(lambda: self._finish_inline_edit(save=False))
+        ed.show()
+        ed.setFocus()
+        ed.selectAll()
+        # Watch clicks only after the double-click that opened the box has
+        # been fully delivered.
+        flt = _ClickAway(ed, lambda: self._finish_inline_edit(save=True))
+        self._inline_filter = flt
+        QTimer.singleShot(0, lambda f=flt: self._inline_filter is f
+                          and QApplication.instance().installEventFilter(f))
+
+    def _finish_inline_edit(self, save):
+        inline, self._inline = getattr(self, "_inline", None), None
+        if not inline:
+            return
+        ed, field, legend_key, art = inline
+        flt, self._inline_filter = getattr(self, "_inline_filter", None), None
+        if flt is not None:
+            QApplication.instance().removeEventFilter(flt)
+        text = ed.text()
+        ed.hide()
+        ed.deleteLater()
+        try:
+            art.set_visible(True)
+        except Exception:
+            pass
+        if not (save and self._commit_text(field, legend_key, text)):
+            self._canvas.draw()          # nothing saved: just show the text again
+
+    def _commit_text(self, field, legend_key, text):
+        """Save an edited chart text (one undo step). Returns True if
+        something changed. The format pane is NOT rebuilt (this can run in
+        the middle of a click on one of its controls) — its text boxes are
+        updated in place instead."""
+        st = self._cfg.get_for(self._current_plugin_key, self._current)
+        if field == "legend_labels":
+            m = dict(st.get("legend_labels") or {})
+            if text == legend_key or not text.strip():
+                m.pop(legend_key, None)          # back to the default text
+            else:
+                m[legend_key] = text
+            if m == (st.get("legend_labels") or {}):
+                return False
+            values = {"legend_labels": m}
+        elif text != st.get(field, ""):
+            values = {field: text}
+        else:
+            return False
+        self._push_undo()
+        st.update(values)
+        self._cfg.set_for(self._current_plugin_key, self._current, st)
+        self._after_external_change(rebuild_pane=False)
+        self._sync_text_boxes(field, legend_key, text)
+        return True
+
+    def _sync_text_boxes(self, field, legend_key, text):
+        """Show a text saved on the chart in the matching pane text box."""
+        if field == "legend_labels":
+            w = (getattr(self, "_legend_edits", None) or {}).get(legend_key)
+            text = text if text.strip() else legend_key
+        else:
+            w = self._editors.get(field)
+        if isinstance(w, QLineEdit) and w.text() != text:
+            w.blockSignals(True)
+            w.setText(text)
+            w.blockSignals(False)
+
+    def _add_legend_label_rows(self, form):
+        """One text box per legend entry (same thing as double-clicking
+        the entry on the chart). Returns the number of rows added."""
+        leg = self._ax.get_legend() if getattr(self, "_ax", None) is not None else None
+        if leg is None:
+            return 0
+        origs = getattr(leg, "_orig_labels", None) or [t.get_text() for t in leg.get_texts()]
+        mapping = self._cfg.get_for(self._current_plugin_key,
+                                    self._current).get("legend_labels") or {}
+        self._legend_edits = {}
+        for i, orig in enumerate(origs):
+            le = QLineEdit(mapping.get(orig, orig))
+            self._legend_edits[orig] = le
+            le.setPlaceholderText(orig)
+            le.setToolTip(f"Legend text for “{orig}” (empty = default)")
+            le.editingFinished.connect(
+                lambda w=le, o=orig: self._commit_text("legend_labels", o, w.text()))
+            form.addRow(QLabel(f"Entry {i + 1} text"), le)
+        return len(origs)
 
     def _snap_guides(self, key):
         """Guide positions (display px) the dragged element can snap to:
@@ -1096,7 +1470,7 @@ class ChartEditor(GraphStyleDialog):
             return dx, dy
         b = d["bb0"]
         e = d.get("edges")
-        if d["key"] == "plot" and e:      # resizing: only the edges that move
+        if d["key"] in RESIZABLE and e:   # resizing: only the edges that move
             xs = ([b.x0 + dx] if "l" in e else []) + ([b.x1 + dx] if "r" in e else [])
             ys = ([b.y0 + dy] if "b" in e else []) + ([b.y1 + dy] if "t" in e else [])
         else:
@@ -1133,6 +1507,12 @@ class ChartEditor(GraphStyleDialog):
             pad_px = leg.borderaxespad * leg._fontsize * fig.dpi / 72.0
             d["art"] = leg
             d["anchor"] = (ll[0] - pad_px / ax.bbox.width, ll[1] - pad_px / ax.bbox.height)
+            st0 = self._cfg.get_for(self._current_plugin_key, self._current)
+            d["font0"] = float(st0.get("legend_fontsize", 8))
+            d["mscale0"] = float(st0.get("legend_markerscale", 1.0) or 1.0)
+            d["pos0"] = {k: st0.get(k) for k in
+                         ("legend_loc", "legend_x_offset", "legend_y_offset")}
+            d["bbw0"], d["bbh0"] = bb.width, bb.height
         elif key == "colorbar":
             d["art"] = self._artists["colorbar"][0]
             d["pos"] = d["art"].get_position()
@@ -1156,7 +1536,7 @@ class ChartEditor(GraphStyleDialog):
         dx, dy = self._apply_snap(d, dx, dy)
         # Anywhere on the chart — outside the plot area too — but never off it.
         b = d.get("bb0")
-        if b is not None and not (d["key"] == "plot" and d.get("edges")):
+        if b is not None and not (d["key"] in RESIZABLE and d.get("edges")):
             W0, H0 = self._fig.bbox.width, self._fig.bbox.height
             dx = min(max(dx, -b.x0), W0 - b.x1)
             dy = min(max(dy, -b.y0), H0 - b.y1)
@@ -1166,6 +1546,9 @@ class ChartEditor(GraphStyleDialog):
         if key in ("title", "xlabel", "ylabel"):
             d["art"].set_transform(d["tf"] + ScaledTranslation(dx / fig.dpi, dy / fig.dpi,
                                                                fig.dpi_scale_trans))
+        elif key == "legend" and d.get("edges"):
+            if self._resize_legend_live(d, dx, dy):
+                return                       # preview was rebuilt
         elif key == "legend":
             ax_w, ax_h = ax.bbox.width, ax.bbox.height
             d["new"] = (d["anchor"][0] + dx / ax_w, d["anchor"][1] + dy / ax_h)
@@ -1177,7 +1560,23 @@ class ChartEditor(GraphStyleDialog):
                 leg._loc = 3
         elif key == "colorbar":
             p = d["pos"]
-            d["art"].set_position([p.x0 + dx / W, p.y0 + dy / H, p.width, p.height])
+            e = d["edges"]
+            if not e:
+                d["art"].set_position([p.x0 + dx / W, p.y0 + dy / H, p.width, p.height])
+            else:
+                x0, y0, x1, y1 = p.x0, p.y0, p.x1, p.y1
+                if "l" in e:
+                    x0 += dx / W
+                if "r" in e:
+                    x1 += dx / W
+                if "b" in e:
+                    y0 += dy / H
+                if "t" in e:
+                    y1 += dy / H
+                w, h = x1 - x0, y1 - y0
+                if CB_W_RANGE[0] <= w <= CB_W_RANGE[1] and CB_H_RANGE[0] <= h <= CB_H_RANGE[1]:
+                    d["art"].set_position([x0, y0, w, h])
+                    d["rect"] = (x0, y0, w, h)
         elif key == "plot":
             p = d["pos"]
             fx, fy = dx / W, dy / H
@@ -1204,6 +1603,74 @@ class ChartEditor(GraphStyleDialog):
         self._canvas.draw()
         self._update_overlay()
 
+    def _resize_legend_live(self, d, dx, dy):
+        """Legend handle drag: scale text + markers by how much the
+        dragged edge(s) grew. Redraws the preview live (style values set
+        without an undo step — _on_release commits them). Returns True if
+        the preview was rebuilt."""
+        e = d["edges"]
+        w0, h0 = max(1.0, d["bbw0"]), max(1.0, d["bbh0"])
+        w = w0 + (dx if "r" in e else 0.0) - (dx if "l" in e else 0.0)
+        h = h0 + (dy if "t" in e else 0.0) - (dy if "b" in e else 0.0)
+        sx, sy = max(0.05, w / w0), max(0.05, h / h0)
+        horiz, vert = ("l" in e or "r" in e), ("t" in e or "b" in e)
+        scale = (sx * sy) ** 0.5 if (horiz and vert) else (sx if horiz else sy)
+        lo, hi = LEGEND_FONT_RANGE
+        font = min(hi, max(lo, round(d["font0"] * scale * 2.0) / 2.0))   # 0.5 pt steps
+        mscale = round(d["mscale0"] * font / d["font0"], 3)
+        if d.get("size") == (font, mscale):
+            return False
+        d["size"] = (font, mscale)
+        st = self._cfg.get_for(self._current_plugin_key, self._current)
+        st.update({"legend_fontsize": font, "legend_markerscale": mscale})
+        self._cfg.set_for(self._current_plugin_key, self._current, st)
+        self._refresh_preview()
+        self._pin_resized_legend(d)
+        return True
+
+    def _pin_resized_legend(self, d):
+        """Keep the side opposite the dragged handle where it was (like
+        resizing a box in PowerPoint): left handle grows left, bottom handle
+        grows down, a corner grows away from the opposite corner; the axis
+        that isn't dragged stays centred. Done by pinning the legend at a
+        custom position (its lower-left anchor, like a move-drag writes)."""
+        leg = self._ax.get_legend()
+        b0 = d.get("bb0")
+        if leg is None or b0 is None:
+            return
+        ax, fig = self._ax, self._fig
+        bb = leg.get_window_extent(self._canvas.get_renderer())
+        w1, h1 = bb.width, bb.height
+        e = d["edges"]
+        if "l" in e:
+            x0 = b0.x1 - w1                      # right edge fixed
+        elif "r" in e:
+            x0 = b0.x0                           # left edge fixed
+        else:
+            x0 = (b0.x0 + b0.x1 - w1) / 2.0      # centred
+        if "b" in e:
+            y0 = b0.y1 - h1                      # top edge fixed
+        elif "t" in e:
+            y0 = b0.y0                           # bottom edge fixed
+        else:
+            y0 = (b0.y0 + b0.y1 - h1) / 2.0
+        ll = ax.transAxes.inverted().transform((x0, y0))
+        pad_px = leg.borderaxespad * leg._fontsize * fig.dpi / 72.0
+        anchor = (max(-1.0, min(2.0, ll[0] - pad_px / ax.bbox.width)),
+                  max(-1.0, min(2.0, ll[1] - pad_px / ax.bbox.height)))
+        d["anchor_new"] = anchor
+        st = self._cfg.get_for(self._current_plugin_key, self._current)
+        st.update({"legend_loc": "custom", "legend_x_offset": anchor[0],
+                   "legend_y_offset": anchor[1]})
+        self._cfg.set_for(self._current_plugin_key, self._current, st)
+        leg.set_bbox_to_anchor(anchor, transform=ax.transAxes)
+        try:
+            leg.set_loc("lower left")
+        except Exception:
+            leg._loc = 3
+        self._canvas.draw()
+        self._update_overlay()
+
     def _on_release(self, ev):
         d, self._drag = self._drag, None
         if self._overlay.guides:
@@ -1224,10 +1691,32 @@ class ChartEditor(GraphStyleDialog):
         elif key in ("xlabel", "ylabel"):
             vals = {f"{key}_dx": float(st.get(f"{key}_dx", 0.0)) + dx * pt,
                     f"{key}_dy": float(st.get(f"{key}_dy", 0.0)) + dy * pt}
+        elif key == "legend" and d.get("edges"):
+            if "size" in d:
+                # Put the pre-drag values back so the commit is one clean
+                # undo step from the original size.
+                st.update({"legend_fontsize": d["font0"],
+                           "legend_markerscale": d["mscale0"]})
+                st.update({k: v for k, v in d["pos0"].items() if v is not None})
+                self._cfg.set_for(self._current_plugin_key, self._current, st)
+                vals = {"legend_fontsize": d["size"][0],
+                        "legend_markerscale": d["size"][1]}
+                if "anchor_new" in d:
+                    vals.update({"legend_loc": "custom",
+                                 "legend_x_offset": d["anchor_new"][0],
+                                 "legend_y_offset": d["anchor_new"][1]})
         elif key == "legend" and "new" in d:
             vals = {"legend_loc": "custom",
                     "legend_x_offset": max(-1.0, min(2.0, d["new"][0])),
                     "legend_y_offset": max(-1.0, min(2.0, d["new"][1]))}
+        elif key == "colorbar" and d.get("edges"):
+            if "rect" in d:
+                # stored as offsets from the default rect (0.06, 0.06, w, h)
+                x0, y0, w, h = d["rect"]
+                vals = {"colorbar_x": round(float(x0) - 0.06, 4),
+                        "colorbar_y": round(float(y0) - 0.06, 4),
+                        "colorbar_w": round(float(w) - CB_BASE_W, 4),
+                        "colorbar_h": round(float(h) - CB_BASE_H, 4)}
         elif key == "colorbar":
             vals = {"colorbar_x": float(st.get("colorbar_x", 0.0)) + dx / W,
                     "colorbar_y": float(st.get("colorbar_y", 0.0)) + dy / H}

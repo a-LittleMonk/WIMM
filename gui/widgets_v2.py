@@ -4,7 +4,7 @@ Everything here is theme-aware: colours come from `gui.theme` at paint /
 render time and the icon-bearing widgets re-render on `theme.notifier`.
 """
 from PyQt5.QtCore import QRectF, QSize, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen
+from PyQt5.QtGui import QColor, QFont, QFontMetricsF, QIcon, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
     QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
     QSizePolicy, QToolButton, QVBoxLayout, QWidget,
@@ -385,42 +385,49 @@ class ToggleTile(QPushButton):
         self.setIcon(QIcon(icons.pixmap(self._name, self._size, col)))
 
 
-class ColorChips(QWidget):
-    """Arena / Center / Grid colour chips; click opens the colour dialog."""
-    clicked = pyqtSignal()
+class ColorButtons(QWidget):
+    """Arena / Center / Grid as real buttons, each with a swatch of the
+    colour that zone is drawn in. Clicking one emits `picked(key)`."""
+    picked = pyqtSignal(str)
 
     def __init__(self, get_colors, items, parent=None):
         super().__init__(parent)
-        self._get, self._items = get_colors, items   # items: [(key, label)]
-        self.setCursor(Qt.PointingHandCursor)
-        self.setFixedHeight(22)
-        self.setToolTip("Click to change the overlay colors")
-        theme.notifier.changed.connect(lambda _m: self.update())
+        self._get, self._buttons = get_colors, {}
+        h = QHBoxLayout(self)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(6)
+        for key, lbl in items:
+            b = QPushButton(lbl)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setFixedHeight(26)
+            b.setIconSize(QSize(12, 12))
+            b.setToolTip(f"Change the color the {lbl.lower()} is drawn in")
+            b.clicked.connect(lambda _=False, k=key: self.picked.emit(k))
+            h.addWidget(b)
+            self._buttons[key] = b
+        h.addStretch(1)
+        theme.notifier.changed.connect(lambda _m: self.refresh())
+        self.refresh()
 
-    def sizeHint(self):
-        fm = self.fontMetrics()
-        w = sum(12 + 5 + fm.horizontalAdvance(lbl) + 8 for _k, lbl in self._items)
-        return QSize(w, 22)
-
-    def mouseReleaseEvent(self, e):
-        if e.button() == Qt.LeftButton:
-            self.clicked.emit()
-
-    def paintEvent(self, _e):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
+    def refresh(self):
+        """Repaint the swatches from the current colours."""
         colors = self._get() or {}
-        x = 0
-        fm = self.fontMetrics()
-        for key, lbl in self._items:
-            c = QColor(colors.get(key, "#888888"))
+        dpr = self.devicePixelRatioF() or 1.0
+        for key, b in self._buttons.items():
+            pm = QPixmap(int(12 * dpr), int(12 * dpr))
+            pm.setDevicePixelRatio(dpr)
+            pm.fill(Qt.transparent)
+            p = QPainter(pm)
+            p.setRenderHint(QPainter.Antialiasing)
             p.setPen(QPen(QColor(theme.BORDER), 1))
-            p.setBrush(c)
-            p.drawRoundedRect(QRectF(x + 0.5, 5.5, 11, 11), 3, 3)
-            p.setPen(QColor(theme.TEXT_2))
-            p.drawText(QRectF(x + 17, 0, fm.horizontalAdvance(lbl) + 4, 22),
-                       Qt.AlignVCenter | Qt.AlignLeft, lbl)
-            x += 12 + 5 + fm.horizontalAdvance(lbl) + 8
+            p.setBrush(QColor(colors.get(key, "#888888")))
+            p.drawRoundedRect(QRectF(0.5, 0.5, 11, 11), 3, 3)
+            p.end()
+            b.setIcon(QIcon(pm))
+
+    def update(self):
+        self.refresh()
+        super().update()
 
 
 class ArenaModeButton(QPushButton):

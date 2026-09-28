@@ -22,7 +22,7 @@ def _step_geometry_of(host):
     Zones card (style tiles, center %, colors)."""
     from PyQt5.QtWidgets import QSlider
     from gui.widgets_v2 import (
-        ArenaModeButton, ColorChips, IconButton, SwitchBox, ToggleTile, form_row,
+        ArenaModeButton, ColorButtons, IconButton, SwitchBox, ToggleTile, form_row,
         mono_font,
     )
     grp = host._group("Step 2 — Geometry", status_id="geometry", name="Arena")
@@ -191,6 +191,8 @@ def _step_geometry_of(host):
         host.combo_zone_mode.setCurrentIndex(idx)
     host.combo_zone_mode.currentIndexChanged.connect(host._on_zone_mode_changed)
     host.combo_zone_mode.hide()
+    host.combo_zone_mode._keep_hidden = True   # the two tiles are the control;
+                                               # opening the card must not show it
     zone_style_widget = QWidget()
     tiles = QHBoxLayout(zone_style_widget)
     tiles.setContentsMargins(0, 0, 0, 0)
@@ -234,6 +236,7 @@ def _step_geometry_of(host):
         lambda: _log_center_pct(host.spin_center_pct.value())
     )
     host.spin_center_pct.hide()
+    host.spin_center_pct._keep_hidden = True   # the slider is the control
     zl.addWidget(host.spin_center_pct)
     host.slider_center_pct = QSlider(Qt.Horizontal)
     host.slider_center_pct.setRange(10, 90)
@@ -267,20 +270,14 @@ def _step_geometry_of(host):
     host.lbl_center_area.setFont(mono_font(11))
     zl.addWidget(form_row("Center area", host.lbl_center_area, min_h=22))
 
-    # Zone colors — advanced. The old "Colors" button stays as a hidden
-    # trigger; the chips are what the user clicks.
-    host.btn_zone_colors = host._btn("Colors", width=70)
-    host.btn_zone_colors.setToolTip("Open color picker for Arena, Center Zone, Grid")
-    host.btn_zone_colors.clicked.connect(host._open_zone_colors_dialog)
-    host.btn_zone_colors.hide()
-    zl.addWidget(host.btn_zone_colors)
-    host._zone_chips = ColorChips(
+    # Zone colors — advanced. One button per zone (with a swatch of its
+    # colour); each opens the colour picker on that zone.
+    host._zone_chips = ColorButtons(
         lambda: host._colors,
         [("arena", "Arena"), ("center_zone", "Center"), ("grid", "Grid")])
-    host._zone_chips.clicked.connect(host._open_zone_colors_dialog)
-    colors_row = form_row("Colors", host._zone_chips, label_w=64)
-    zl.addWidget(colors_row)
-    host._advanced_widgets.append(colors_row)
+    host._zone_chips.picked.connect(host._open_zone_colors_dialog)
+    zl.addWidget(host._zone_chips)
+    host._advanced_widgets.append(host._zone_chips)
 
     host.lbl_zones = QLabel("No zones defined")
     host.lbl_zones.setWordWrap(True)
@@ -290,7 +287,8 @@ def _step_geometry_of(host):
     attach_info_box(zg, [
         ("Zone style", host.combo_zone_mode),
         ("Center zone", host.spin_center_pct),
-        ("Colors", host.btn_zone_colors),
+        ("Colors", "Click Arena, Center or Grid to change the color that "
+                   "zone is drawn in on the video."),
     ])
     return grp
 

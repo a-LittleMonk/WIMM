@@ -14,6 +14,7 @@ Reuses host attrs / methods:
     self._batch_owner (optional).
 """
 import os
+import re
 from io import BytesIO
 
 import numpy as np
@@ -24,11 +25,12 @@ from PyQt5.QtGui import QColor, QPixmap
 from PyQt5.QtWidgets import QDialog, QFileDialog, QMessageBox
 
 from core import logger
-from gui import theme
+from gui import heatmap_grid, theme
 from gui.graph_style import (
     DEFAULT_CAPS as GRAPH_DEFAULT_CAPS,
     ACCENT_COLORS as GRAPH_ACCENTS,
-    resolve_style, resolve_token,
+    resolve_style, resolve_token, speed_axis, time_axis, distance_axis,
+    axis_title_style,
 )
 
 
@@ -447,22 +449,12 @@ class GraphsMixin:
             ax.set_ylim(y1 + py, y0 - py)   # inverted (image coords)
         ax.set_aspect("equal", adjustable="box")
 
-    def _draw_spatial_heatmap(self, ax, x, y, polys, st, vw, vh, fps, vmax=None):
-        """Draw a masked, clipped heatmap onto `ax`, cropped to the region
-        bbox. Returns (image, max_seconds). Mirrors _make_heatmap_fig."""
-        from matplotlib.patches import Polygon
+    def _masked_heatmap(self, x, y, polys, st, vw, vh, fps):
+        """(seconds grid masked to `polys`, xedges, yedges, total_s)."""
         from matplotlib.path import Path
-        from matplotlib import colors as mcolors
-        from gui.graph_style_dialog import resolve_cmap
         mask = [np.asarray(p, dtype=float) for p in polys if len(p) >= 3]
-        bins = 200
-        hm, xe, ye = np.histogram2d(x, y, bins=bins, range=[[0, vw], [0, vh]])
-        hm_sec = (hm * (1.0 / fps)).T.astype(np.float32)
-        try:
-            hm_sec = cv2.GaussianBlur(hm_sec, ksize=(0, 0),
-                                      sigmaX=3.75, sigmaY=3.75)
-        except Exception:
-            pass
+        hm_sec, xe, ye, total_s = heatmap_grid.seconds_grid(
+            x, y, [0, vw], [0, vh], fps, st)
         if mask:
             xc = 0.5 * (xe[:-1] + xe[1:]); yc = 0.5 * (ye[:-1] + ye[1:])
             xx, yy = np.meshgrid(xc, yc, indexing="xy")
@@ -474,9 +466,20 @@ class GraphsMixin:
                 except Exception:
                     continue
             hm_sec = np.where(inside.reshape(xx.shape), hm_sec, np.nan)
-        max_sec = (vmax if vmax is not None
-                   else (float(np.nanmax(hm_sec))
-                         if np.isfinite(hm_sec).any() else 0.0))
+        return hm_sec, xe, ye, total_s
+
+    def _draw_spatial_heatmap(self, ax, x, y, polys, st, vw, vh, fps, vmax=None):
+        """Draw a masked, clipped heatmap onto `ax`, cropped to the region
+        bbox. Returns (image, vmax). `vmax` = shared peak (heatmap_grid.peak
+        units) so several panels use one colour scale. Mirrors
+        _make_heatmap_fig."""
+        from matplotlib.patches import Polygon
+        from matplotlib.path import Path
+        from matplotlib import colors as mcolors
+        from gui.graph_style_dialog import resolve_cmap
+        mask = [np.asarray(p, dtype=float) for p in polys if len(p) >= 3]
+        hm_sec, xe, ye, total_s = self._masked_heatmap(x, y, polys, st, vw, vh, fps)
+        hm_sec, max_sec = heatmap_grid.scale(hm_sec, total_s, st, ref_peak=vmax)
         base = resolve_cmap(st)
         cmap = mcolors.LinearSegmentedColormap.from_list(
             "cmap_mask", base(np.linspace(0, 1, 256)))
@@ -486,7 +489,8 @@ class GraphsMixin:
             ax.add_patch(Polygon(poly, closed=True, facecolor=base_color,
                                  edgecolor="none", zorder=0, antialiased=True))
         im = ax.imshow(hm_sec, origin="upper", extent=[0, vw, vh, 0],
-                       cmap=cmap, interpolation="bilinear", aspect="auto",
+                       cmap=cmap, interpolation=heatmap_grid.interpolation(st),
+                       aspect="auto",
                        vmin=0.0, vmax=max_sec if max_sec > 0 else 1.0, zorder=1)
         if mask:
             verts = []; codes = []
@@ -561,46 +565,29 @@ class GraphsMixin:
         outer_bg = st.get("outer_bg", "white")
         # First pass: find a shared vmax so both panels share the color scale.
         def _peak(x, y, polys):
-            from matplotlib.path import Path
-            mask = [np.asarray(p, float) for p in polys if len(p) >= 3]
-            hm, xe, ye = np.histogram2d(x, y, bins=200, range=[[0, vw], [0, vh]])
-            hm = (hm * (1.0 / fps)).T.astype(np.float32)
-            try:
-                hm = cv2.GaussianBlur(hm, ksize=(0, 0), sigmaX=3.75, sigmaY=3.75)
-            except Exception:
-                pass
-            if mask:
-                xc = 0.5 * (xe[:-1] + xe[1:]); yc = 0.5 * (ye[:-1] + ye[1:])
-                xx, yy = np.meshgrid(xc, yc, indexing="xy")
-                pts = np.column_stack([xx.ravel(), yy.ravel()])
-                ins = np.zeros(pts.shape[0], dtype=bool)
-                for poly in mask:
-                    try:
-                        ins |= Path(poly).contains_points(pts)
-                    except Exception:
-                        continue
-                hm = np.where(ins.reshape(xx.shape), hm, np.nan)
-            return float(np.nanmax(hm)) if np.isfinite(hm).any() else 0.0
+            hm, _xe, _ye, total_s = self._masked_heatmap(x, y, polys, st, vw, vh, fps)
+            return heatmap_grid.peak(hm, total_s, st)
         vmax = max(_peak(raw_x, raw_y, raw_polys), _peak(cx, cy, canon_polys))
         fig, (axL, axR) = plt.subplots(1, 2, figsize=(12, 6), facecolor=outer_bg)
         im = None
+        top = 0.0
         for ax, X, Y, pl, title in (
                 (axL, raw_x, raw_y, raw_polys, "Raw"),
                 (axR, cx, cy, canon_polys, f"Aligned ({thick}%)")):
             ax.set_facecolor(outer_bg)
-            im, _ = self._draw_spatial_heatmap(ax, X, Y, pl, st, vw, vh, fps,
-                                               vmax=vmax)
+            im, top = self._draw_spatial_heatmap(ax, X, Y, pl, st, vw, vh, fps,
+                                                 vmax=vmax)
             self._apply_style_axes(ax, "Heatmap", st)
             self._panel_title(ax, st, title)
         self._match_panel_limits((axL, axR), raw_polys + canon_polys)
-        if st.get("colorbar_show", True) and im is not None and vmax > 0:
+        if st.get("colorbar_show", True) and im is not None and top > 0:
             cbar = fig.colorbar(im, ax=[axL, axR], orientation="horizontal",
                                 fraction=0.05, pad=0.06)
-            cbar.set_ticks([0.0, vmax])
-            cbar.set_ticklabels(["0s", f"{vmax:.1f}s"])
+            cbar.set_ticks([0.0, top])
+            cbar.set_ticklabels(heatmap_grid.tick_labels(top, st))
             cbar.ax.tick_params(labelsize=10, length=0)
             cbar.outline.set_visible(False)
-            lbl = st.get("colorbar_label") or ""
+            lbl = heatmap_grid.colorbar_label(st)
             if lbl:
                 cbar.set_label(lbl, fontsize=int(st.get("tick_size", 9)),
                                color=st.get("tick_color", "#333333"))
@@ -760,19 +747,14 @@ class GraphsMixin:
                          fontfamily=fam,
                          color=st.get("title_color") or st.get("text_color", "black"),
                          pad=title_pad)   # may go negative: title dragged down into the plot
-        if "xlabel" in allowed and st.get("xlabel"):
-            ax.set_xlabel(st["xlabel"], fontsize=int(st.get("label_size", 10)),
-                          fontweight="bold" if st.get("label_bold") else "normal",
-                          fontfamily=fam,
-                          color=st.get("label_color") or st.get("text_color", "black"))
-        if "ylabel" in allowed and st.get("ylabel"):
-            ax.set_ylabel(st["ylabel"], fontsize=int(st.get("label_size", 10)),
-                          fontweight="bold" if st.get("label_bold") else "normal",
-                          fontfamily=fam,
-                          color=st.get("label_color") or st.get("text_color", "black"))
+        for axis, setter in (("xlabel", ax.set_xlabel), ("ylabel", ax.set_ylabel)):
+            if axis in allowed and st.get(axis):
+                size, bold, color = axis_title_style(st, axis)
+                setter(st[axis], fontsize=size, fontfamily=fam, color=color,
+                       fontweight="bold" if bold else "normal")
 
     def _apply_legend(self, ax, name, st, handles=None):
-        from gui.graph_style_dialog import _legend_kwargs_for
+        from gui.graph_style_dialog import _legend_kwargs_for, apply_legend_labels
         allowed = self._style_allowed(name)
         if "legend_show" not in allowed or not st.get("legend_show", True):
             return None
@@ -781,6 +763,7 @@ class GraphsMixin:
             leg = ax.legend(handles=handles, **kwargs)
         else:
             leg = ax.legend(**kwargs)
+        apply_legend_labels(leg, st)
         if leg is not None and st.get("legend_draggable"):
             try:
                 leg.set_draggable(True)
@@ -1063,22 +1046,13 @@ class GraphsMixin:
                 )
                 mask_polys_px.append(poly)
 
-        # 2D histogram of body positions → seconds per bin. High bin count so
-        # the square-bin grid is sub-pixel — combined with the polygon clip on
-        # the image below, angled arm walls (Y-maze) render smooth instead of
-        # stair-stepped. Blur sigma scales with the bin count.
-        bins = 200
-        hm, xedges, yedges = np.histogram2d(
-            x, y, bins=bins, range=[[0, vw], [0, vh]]
-        )
-        hm_sec = (hm * (1.0 / fps)).T  # (Ny, Nx)
-
-        # Pre-smooth with cv2 (no NaN propagation — apply BEFORE masking).
-        try:
-            hm_sec = cv2.GaussianBlur(hm_sec.astype(np.float32),
-                                      ksize=(0, 0), sigmaX=3.75, sigmaY=3.75)
-        except Exception:
-            pass
+        # 2D histogram of body positions → seconds per square, blurred.
+        # Grid size / blur / unit / fixed max come from the graph style
+        # (Customize graphs → Data); see gui.heatmap_grid. Blur is applied
+        # BEFORE masking (no NaN propagation).
+        st = self._gstyle("Heatmap")
+        hm_sec, xedges, yedges, total_s = heatmap_grid.seconds_grid(
+            x, y, [0, vw], [0, vh], fps, st)
 
         # Mask bins outside the tracked region → NaN so they render as the
         # axes facecolor (white). Done AFTER smoothing so the blur stays
@@ -1099,10 +1073,8 @@ class GraphsMixin:
         else:
             hm_disp = hm_sec
 
-        finite = np.isfinite(hm_disp)
-        max_sec = float(np.nanmax(hm_disp)) if finite.any() else 0.0
+        hm_disp, max_sec = heatmap_grid.scale(hm_disp, total_s, st)
 
-        st = self._gstyle("Heatmap")
         outer_bg = st.get("outer_bg", "white")
         fig, ax = plt.subplots(figsize=(6, 6 * vh / vw), facecolor=outer_bg)
         ax.set_facecolor(outer_bg)
@@ -1128,7 +1100,7 @@ class GraphsMixin:
 
         im = ax.imshow(
             hm_disp, origin="upper", extent=[0, vw, vh, 0],
-            cmap=cmap, interpolation="bilinear", aspect="auto",
+            cmap=cmap, interpolation=heatmap_grid.interpolation(st), aspect="auto",
             vmin=0.0, vmax=max_sec if max_sec > 0 else 1.0,
             zorder=1,
         )
@@ -1204,7 +1176,7 @@ class GraphsMixin:
                 cax = fig.add_axes(cb_rect)
                 cbar = fig.colorbar(im, cax=cax, orientation="horizontal")
                 cbar.set_ticks([0.0, max_sec if max_sec > 0 else 1.0])
-                cbar.set_ticklabels(["0s", (f"{max_sec:.2f}s" if max_sec < 1 else f"{max_sec:.1f}s")])
+                cbar.set_ticklabels(heatmap_grid.tick_labels(max_sec, st))
                 cbar.ax.tick_params(labelsize=int(st.get("tick_size", 9)), length=0,
                                     colors=st.get("tick_color", "#333333"))
                 try:
@@ -1212,7 +1184,7 @@ class GraphsMixin:
                 except Exception:
                     pass
                 cbar.outline.set_visible(False)
-                lbl = st.get("colorbar_label") or ""
+                lbl = heatmap_grid.colorbar_label(st)
                 if lbl:
                     cbar.set_label(lbl,
                                    fontsize=int(st.get("tick_size", 9)),
@@ -1231,6 +1203,18 @@ class GraphsMixin:
                 pass
 
         return fig
+
+    def _cell_divider_style(self, name, st, fallback_color):
+        """(color, alpha, linestyle, axis) for Cell Time's between-cell
+        lines: the user's gridline style when Gridlines is on, else plain
+        solid dividers in the arena colour. axis: 'both' / 'x' (vertical
+        lines) / 'y' (horizontal lines)."""
+        if "grid" in self._graph_style_caps(name) and st.get("grid", False):
+            return (st.get("grid_color", fallback_color),
+                    float(st.get("grid_alpha", 1.0)),
+                    st.get("grid_linestyle", "-"),
+                    st.get("grid_axis", "both"))
+        return fallback_color, 1.0, "-", "both"
 
     def _make_cell_time_heatmap_fig(self, arena):
         """Per-cell aggregate-time heatmap. Each grid cell is filled with a
@@ -1289,7 +1273,7 @@ class GraphsMixin:
                 quad = self._grid_cell_quad_px(arena, row, col)
                 ax.add_patch(Polygon(quad, closed=True,
                                      facecolor=cmap(norm(t)),
-                                     edgecolor=edge_color, linewidth=1.0))
+                                     edgecolor="none", linewidth=0))
                 # Cell number + time label, centered (with optional offset).
                 cx = sum(p[0] for p in quad) / 4.0
                 cy = sum(p[1] for p in quad) / 4.0
@@ -1300,12 +1284,32 @@ class GraphsMixin:
                 text_color = "#FFFFFF" if (0.299*r + 0.587*g + 0.114*b) < 0.5 else "#1C2127"
                 ax.text(cx, cy, f"{cid}\n{t:.1f}s",
                         ha="center", va="center", color=text_color,
-                        fontsize=9, linespacing=1.1,
-                        fontfamily=theme.mono_family())
+                        fontsize=int(st.get("cell_label_size", 9)),
+                        fontweight="bold" if st.get("cell_label_bold") else "normal",
+                        linespacing=1.1,
+                        fontfamily=st.get("cell_label_font") or theme.mono_family())
+
+        # Lines between the cells — Plot area → Gridlines styles them;
+        # off = the plain thin dividers in the arena colour.
+        gc, ga, gls, gax = self._cell_divider_style("Cell Time", st, edge_color)
+        # Same corner order (TL, TR, BR, BL) the cells are built from.
+        p0, p1, p2, p3 = self.zone_drawer._sorted_corners(arena)
+        for i in range(1, 4):
+            f = i / 4.0
+            top = (p0[0] + f * (p1[0] - p0[0]), p0[1] + f * (p1[1] - p0[1]))
+            bot = (p3[0] + f * (p2[0] - p3[0]), p3[1] + f * (p2[1] - p3[1]))
+            lft = (p0[0] + f * (p3[0] - p0[0]), p0[1] + f * (p3[1] - p0[1]))
+            rgt = (p1[0] + f * (p2[0] - p1[0]), p1[1] + f * (p2[1] - p1[1]))
+            for a, b, want in ((top, bot, gax in ("both", "x")),
+                               (lft, rgt, gax in ("both", "y"))):
+                if not want:
+                    continue
+                ax.plot([a[0], b[0]], [a[1], b[1]], color=gc, alpha=ga,
+                        linestyle=gls, linewidth=1.0, zorder=3)
 
         # Arena outline on top.
         ax.add_patch(Polygon(arena, closed=True, facecolor="none",
-                             edgecolor=edge_color, linewidth=arena_w))
+                             edgecolor=edge_color, linewidth=arena_w, zorder=4))
 
         # Tight crop.
         pad_x = (x_max - x_min) * 0.05
@@ -1381,6 +1385,18 @@ class GraphsMixin:
             values = [(df["Zone"] == z).sum() / fps for z in zones]
             value_fmt = lambda v: f"{v:.1f}s"
 
+        # Chosen time unit — only for bars measured in seconds (the plugin's
+        # axis title says "(s)"; Y-Maze bars are shares in %).
+        if bar_ylabel is None or re.search(r"\(s\)\s*$", bar_ylabel):
+            if bar_ylabel is not None:
+                st = dict(st, ylabel=bar_ylabel)
+            tfac, t_unit, st = time_axis(st, "ylabel")
+            if bar_ylabel is not None:
+                bar_ylabel = st["ylabel"]
+            values = [v * tfac for v in values]
+            value_fmt = ((lambda v: f"{v:.1f}s") if t_unit == "s"
+                         else (lambda v: f"{v:.2f} min"))
+
         colors = list(st.get("bar_colors") or default_colors)
         while len(colors) < len(labels):
             colors.append("#888888")
@@ -1406,8 +1422,9 @@ class GraphsMixin:
             ax.set_title(bar_title, color=tc,
                          fontsize=int(st.get("title_size", 12)))
         if bar_ylabel:
-            ax.set_ylabel(bar_ylabel, color=tc,
-                          fontsize=int(st.get("label_size", 10)))
+            size, bold, color = axis_title_style(st, "ylabel")
+            ax.set_ylabel(bar_ylabel, color=color, fontsize=size,
+                          fontweight="bold" if bold else "normal")
         fig.tight_layout()
         return fig
 
@@ -1461,13 +1478,15 @@ class GraphsMixin:
 
         dist_px = np.sqrt(np.diff(x)**2 + np.diff(y)**2)
         speed = dist_px * fps
-        if px_per_cm and px_per_cm > 0:
+        calibrated = bool(px_per_cm and px_per_cm > 0)
+        if calibrated:
             speed = speed / px_per_cm
-            unit_default = "Speed (cm/s)"
-        else:
-            unit_default = "Speed (px/s)"
+        # Chosen speed unit (Customize graphs → Speed unit); axis title follows.
+        factor, sp_unit, st = speed_axis(st, "Speed", "cm/s" if calibrated else "px/s")
+        speed = speed * factor
+        tfac, _t_unit, st = time_axis(st, "xlabel")      # chosen time unit
 
-        time = t[1:]
+        time = t[1:] * tfac
         fig, ax = plt.subplots(figsize=(8, 3), facecolor=st["bg"])
         ax.set_facecolor(st["bg"])
         ls = st.get("linestyle", "-")
@@ -1492,15 +1511,12 @@ class GraphsMixin:
         except Exception:
             thr = 0.0
         if thr > 0 and len(time):
+            thr = thr * factor               # threshold is set in cm/s
             wc = resolve_token("@warn", self._fig_mode())
             ax.axhline(thr, color=wc, linestyle=(0, (5, 3)), linewidth=1.0)
-            ax.text(float(time.max()), thr, f"move threshold {thr:g}",
+            ax.text(float(time.max()), thr, f"move threshold {thr:.3g} {sp_unit}",
                     ha="right", va="bottom", color=wc, fontsize=9)
-        # Default axis labels if user left blank.
-        if not st.get("xlabel"):
-            ax.set_xlabel("Time (s)", color=st.get("text_color", "#333"))
-        if not st.get("ylabel"):
-            ax.set_ylabel(unit_default, color=st.get("text_color", "#333"))
+        # Axis titles (with units) are filled in by speed_axis / time_axis.
         self._apply_style_axes(ax, "Speed", st)
         self._apply_style_text(ax, "Speed", st)
         self._apply_legend(ax, "Speed", st)
@@ -1519,6 +1535,10 @@ class GraphsMixin:
         if len(speeds) < 2:
             return None
         unit = unit_col.split("(")[-1].rstrip(")")  # e.g. "cm/s"
+        # Chosen speed unit (Customize graphs → Speed unit); axis title follows.
+        factor, unit, st = speed_axis(st, "Speed Histogram", unit)
+        speeds = speeds * factor
+        tfac, _t_unit, st = time_axis(st, "ylabel")      # bar height = time
         med = float(np.median(speeds))
         p90 = float(np.quantile(speeds, 0.90))
         p99 = float(np.quantile(speeds, 0.99))
@@ -1527,7 +1547,7 @@ class GraphsMixin:
         upper = min(float(np.max(speeds)), p99 * 1.5 + 1e-6)
         fps_h = float(self.fps or 30.0)
         ax.hist(speeds, bins=60, range=(0, upper), color=st["path_color"],
-                weights=np.full(len(speeds), 1.0 / fps_h),
+                weights=np.full(len(speeds), tfac / fps_h),
                 edgecolor=st.get("hist_edge_color", "#222222"), linewidth=0.5)
         mode_h = self._fig_mode()
         for v, lbl, c in (
@@ -1536,13 +1556,9 @@ class GraphsMixin:
             (p99, "P99",    resolve_token(GRAPH_ACCENTS["stat_p99"], mode_h)),
         ):
             ax.axvline(v, color=c, linewidth=1.0, linestyle=(0, (4, 3)),
-                       label=f"{lbl}: {v:.2f}")
-            ax.text(v, ax.get_ylim()[1] * 0.97, f" {lbl} {v:.1f}", color=c,
+                       label=f"{lbl}: {v:.3g} {unit}")
+            ax.text(v, ax.get_ylim()[1] * 0.97, f" {lbl} {v:.3g}", color=c,
                     fontsize=9, ha="left", va="top")
-        if not st.get("xlabel"):
-            ax.set_xlabel(f"Speed ({unit})", color=st.get("text_color", "#333"))
-        if not st.get("ylabel"):
-            ax.set_ylabel("Time (s)", color=st.get("text_color", "#333"))
         self._apply_style_axes(ax, "Speed Histogram", st)
         self._apply_style_text(ax, "Speed Histogram", st)
         self._apply_legend(ax, "Speed Histogram", st)
@@ -1561,13 +1577,16 @@ class GraphsMixin:
         if dist_col is None:
             return None
         unit = dist_col.split("(")[-1].rstrip(")")  # e.g. "cm"
-        x_start = df["Bin Start (s)"].values.astype(float) / 60.0  # minutes
+        # Chosen units: distance on y, time on x (bins are stored in s / cm).
+        dfac, unit, st = distance_axis(st, "ylabel", unit)
+        tfac, t_unit, st = time_axis(st, "xlabel", "s", "Bin center")
+        x_start = df["Bin Start (s)"].values.astype(float) * tfac
         if "Bin End (s)" in df.columns:
-            bin_w = (df["Bin End (s)"].values.astype(float) / 60.0 - x_start)
+            bin_w = (df["Bin End (s)"].values.astype(float) * tfac - x_start)
         else:
-            bin_w = np.full(len(x_start), (x_start[1] - x_start[0]) if len(x_start) > 1 else 1.0)
+            bin_w = np.full(len(x_start), (x_start[1] - x_start[0]) if len(x_start) > 1 else tfac)
         x_vals = x_start + bin_w / 2.0            # bin centres
-        y_vals = df[dist_col].values.astype(float)
+        y_vals = df[dist_col].values.astype(float) * dfac
         fig, ax = plt.subplots(figsize=(8, 3.5), facecolor=st["bg"])
         ax.set_facecolor(st["bg"])
         bar_col = st["path_color"]
@@ -1575,7 +1594,7 @@ class GraphsMixin:
                alpha=float(st.get("alpha", 0.9)))
         if len(x_vals) <= 12:
             for xv, yv in zip(x_vals, y_vals):
-                ax.text(xv, yv + max(y_vals) * 0.015, f"{yv:.0f}", ha="center",
+                ax.text(xv, yv + max(y_vals) * 0.015, f"{yv:.3g}", ha="center",
                         va="bottom", fontsize=int(st.get("tick_size", 9)),
                         color=st.get("tick_color", "#333"),
                         fontfamily=theme.mono_family())
@@ -1584,12 +1603,8 @@ class GraphsMixin:
             fit = slope * x_vals + intercept
             ax.plot(x_vals, fit, color=resolve_token(GRAPH_ACCENTS["linfit"], self._fig_mode()),
                     linestyle=(0, (6, 3)), linewidth=1.2,
-                    label=f"slope {slope:+.2f} {unit}/min")
+                    label=f"slope {slope:+.3g} {unit}/{t_unit}")
         ax.set_ylim(0, max(y_vals) * 1.18 if len(y_vals) and max(y_vals) > 0 else 1)
-        if not st.get("xlabel"):
-            ax.set_xlabel("Bin center (min)", color=st.get("text_color", "#333"))
-        if not st.get("ylabel"):
-            ax.set_ylabel(f"Distance ({unit})", color=st.get("text_color", "#333"))
         self._apply_style_axes(ax, "Habituation", st)
         self._apply_style_text(ax, "Habituation", st)
         self._apply_legend(ax, "Habituation", st)

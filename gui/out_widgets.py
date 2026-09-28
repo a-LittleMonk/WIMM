@@ -100,6 +100,10 @@ class OutPanel(QFrame):
         self._bar_layout.addWidget(b)
         return b
 
+    def add_widget(self, widget):
+        self._bar_layout.addWidget(widget)
+        return widget
+
 
 def copy_table_all(table, with_header=True):
     """Copy the whole table as TSV (Excel-friendly)."""

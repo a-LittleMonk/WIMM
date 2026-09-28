@@ -18,7 +18,8 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
 from gui.graph_style import (
     GRAPH_NAMES, GRAPH_FIELDS, BUILTIN_PRESETS, GraphStyleConfig,
-    ACCENT_COLORS, default_style_for, resolve_style, resolve_token,
+    ACCENT_COLORS, default_style_for, resolve_style, resolve_token, speed_axis,
+    time_axis, distance_axis, axis_title_style,
 )
 
 # ── choice lists ────────────────────────────────────────────────────────
@@ -160,6 +161,23 @@ LEGEND_INSET_TABLE = {
 }
 
 
+def apply_legend_labels(leg, st):
+    """Show the user's renamed legend entries (style 'legend_labels',
+    {default text: shown text}). The default texts are kept on the legend
+    as `_orig_labels` so the chart editor knows which entry is which."""
+    if leg is None:
+        return leg
+    texts = leg.get_texts()
+    leg._orig_labels = [t.get_text() for t in texts]
+    mapping = st.get("legend_labels") or {}
+    if isinstance(mapping, dict):
+        for t, orig in zip(texts, leg._orig_labels):
+            new = mapping.get(orig)
+            if isinstance(new, str) and new != orig:
+                t.set_text(new)
+    return leg
+
+
 def _legend_kwargs_for(ax, st):
     """Build ax.legend(**kwargs) options from a style dict. Three modes:
       - "best": matplotlib auto-placement; no bbox.
@@ -170,9 +188,11 @@ def _legend_kwargs_for(ax, st):
     """
     loc_choice = st.get("legend_loc", "best")
     kwargs = dict(
-        fontsize=int(st.get("legend_fontsize", 8)),
+        fontsize=float(st.get("legend_fontsize", 8)),
+        # Legend resize handles (chart editor) scale the markers with the text.
+        markerscale=float(st.get("legend_markerscale", 1.0) or 1.0),
         facecolor=st.get("legend_bg", "#FFFFFF"),
-        labelcolor=st.get("text_color", "black"),
+        labelcolor=st.get("legend_text_color") or st.get("text_color", "black"),
         edgecolor=st.get("grid_color", "#CCCCCC"),
         framealpha=0.95,
         fancybox=False,
@@ -1196,7 +1216,16 @@ class GraphStyleDialog(QDialog):
         dx = np.diff(xs, prepend=xs[0])
         dy = np.diff(ys, prepend=ys[0])
         step_d = np.sqrt(dx * dx + dy * dy)
-        speeds = step_d * fps
+        speeds = step_d * fps          # preview-box units — fallback only
+        speed_unit = "cm/s"
+        # Speed graphs must show the real tracked speeds (the positions above
+        # are rescaled to fit the preview box, so their speeds have no unit).
+        sp_col = next((c for c in raw_df.columns if str(c).startswith("Speed (")), None)
+        if sp_col is not None:
+            real = raw_df[sp_col].dropna().values.astype(float)
+            if real.size >= 2:
+                speeds = real
+                speed_unit = str(sp_col).split("(")[-1].rstrip(")")
 
         metrics = getattr(p, "metrics", None) or {}
         cell_times = np.zeros(16)
@@ -1229,14 +1258,19 @@ class GraphStyleDialog(QDialog):
         bin_df = getattr(p, "bin_df", None)
         bin_dists = np.array([])
         bin_centers_min = np.array([])
+        dist_unit = "a.u."     # preview-box units unless real bins exist
         if bin_df is not None and not bin_df.empty:
             try:
                 dist_col = next((c for c in bin_df.columns
                                  if c.startswith("Distance")), None)
                 if dist_col:
                     bin_dists = bin_df[dist_col].values.astype(float)
-                    bin_centers_min = (bin_df["Bin Start (s)"].values.astype(float)
-                                       / 60.0)
+                    dist_unit = dist_col.split("(")[-1].rstrip(")")
+                    start = bin_df["Bin Start (s)"].values.astype(float)
+                    end = (bin_df["Bin End (s)"].values.astype(float)
+                           if "Bin End (s)" in bin_df.columns else start)
+                    # bin centres, like the Output graph
+                    bin_centers_min = (start + end) / 2.0 / 60.0
             except Exception:
                 pass
         if bin_dists.size == 0:
@@ -1252,6 +1286,8 @@ class GraphStyleDialog(QDialog):
 
         return {
             "xs": xs, "ys": ys, "speeds": speeds, "step_d": step_d,
+            "speed_unit": speed_unit,
+            "dist_unit": dist_unit,
             "fps": fps, "n": n, "arena_half": arena_half,
             "cell_times": cell_times,
             "zone_times": zone_times,
@@ -1850,16 +1886,11 @@ class GraphStyleDialog(QDialog):
                          fontfamily=fam,
                          color=st.get("title_color") or st.get("text_color", "black"),
                          pad=title_pad)   # may go negative: title dragged down into the plot
-        if "xlabel" in allowed and st.get("xlabel"):
-            ax.set_xlabel(st["xlabel"], fontsize=int(st.get("label_size", 10)),
-                          fontweight="bold" if st.get("label_bold") else "normal",
-                          fontfamily=fam,
-                          color=st.get("label_color") or st.get("text_color", "black"))
-        if "ylabel" in allowed and st.get("ylabel"):
-            ax.set_ylabel(st["ylabel"], fontsize=int(st.get("label_size", 10)),
-                          fontweight="bold" if st.get("label_bold") else "normal",
-                          fontfamily=fam,
-                          color=st.get("label_color") or st.get("text_color", "black"))
+        for axis, setter in (("xlabel", ax.set_xlabel), ("ylabel", ax.set_ylabel)):
+            if axis in allowed and st.get(axis):
+                size, bold, color = axis_title_style(st, axis)
+                setter(st[axis], fontsize=size, fontfamily=fam, color=color,
+                       fontweight="bold" if bold else "normal")
 
     def _maybe_legend(self, ax, st, allowed, handles_labels=None, handles=None):
         if "legend_show" not in allowed or not st.get("legend_show", True):
@@ -1871,6 +1902,7 @@ class GraphStyleDialog(QDialog):
             leg = ax.legend(*handles_labels, **kwargs)
         else:
             leg = ax.legend(**kwargs)
+        apply_legend_labels(leg, st)
         # Note: matplotlib's built-in set_draggable is intentionally NOT
         # enabled here — the dialog owns drag via _setup_drag_handlers and
         # mpl's draggable would fight it. legend_draggable still controls
@@ -1932,6 +1964,22 @@ class GraphStyleDialog(QDialog):
         name = self._current
         st = resolve_style(self._cfg.get_for(self._current_plugin_key, name), _fig_mode())
         allowed = self._allowed_fields(name)
+        # Speed graphs: chosen speed unit — values converted below, and the
+        # speed-axis title carries the unit (sample / tracked speeds are cm/s).
+        sp_factor, sp_unit = 1.0, "cm/s"
+        t_factor, t_unit, d_factor, d_unit = 1.0, "s", 1.0, "cm"
+        _smp = self._sample or {}
+        if name in ("Speed", "Speed Histogram"):
+            sp_factor, sp_unit, st = speed_axis(
+                st, name, _smp.get("speed_unit", "cm/s"))
+        # Time / distance units — the same rules the Output graphs use.
+        if name == "Speed":
+            t_factor, t_unit, st = time_axis(st, "xlabel")
+        elif name in ("Speed Histogram", "Zone Time"):
+            t_factor, t_unit, st = time_axis(st, "ylabel")
+        elif name == "Habituation":
+            d_factor, d_unit, st = distance_axis(st, "ylabel", _smp.get("dist_unit", "cm"))
+            t_factor, t_unit, st = time_axis(st, "xlabel", "min", "Bin center")
         bg = st["bg"]
         # outer_bg paints fig + axes when present; bg fills inside the arena
         # polygon. When outer_bg isn't a capability (non-arena charts), bg
@@ -2043,22 +2091,13 @@ class GraphStyleDialog(QDialog):
 
         elif name == "Heatmap":
             fps = smp["fps"]
-            # High bin count so the square-bin grid is sub-pixel — combined
-            # with the polygon clip below, the angled arm walls render smooth
-            # (no stair-stepping). Blur sigma scales with the bin count to
-            # keep the same physical smoothing.
-            bins = 200
-            hm, _, _ = np.histogram2d(
-                xs_p, ys_p, bins=bins,
-                range=[[-arena_half, arena_half],
-                       [-arena_half, arena_half]])
-            hm_sec = (hm * (1.0 / fps)).T.astype(np.float32)
-            try:
-                import cv2
-                hm_sec = cv2.GaussianBlur(hm_sec, ksize=(0, 0),
-                                          sigmaX=3.75, sigmaY=3.75)
-            except Exception:
-                pass
+            # Grid size / blur / unit / fixed max from the style — same
+            # math as the Output heatmap (gui.heatmap_grid).
+            from gui import heatmap_grid
+            bins = heatmap_grid.bins(st)
+            hm_sec, _, _, total_s = heatmap_grid.seconds_grid(
+                xs_p, ys_p, [-arena_half, arena_half],
+                [-arena_half, arena_half], fps, st)
             # Mask bins outside the arena shape (Y / + / square) so the
             # heatmap only paints inside the detection area — no blue
             # colormap background bleeding into the corners.
@@ -2074,7 +2113,7 @@ class GraphStyleDialog(QDialog):
                     if len(poly) >= 3:
                         inside |= _MplPath(np.asarray(poly)).contains_points(pts)
                 hm_sec[~inside.reshape(gx.shape)] = np.nan
-            max_sec = float(np.nanmax(hm_sec)) if np.isfinite(hm_sec).any() else 0.0
+            hm_sec, max_sec = heatmap_grid.scale(hm_sec, total_s, st)
             cm_smooth = mcolors.LinearSegmentedColormap.from_list(
                 "cm_smooth", cmap(np.linspace(0, 1, 256)))
             cm_smooth.set_bad((1, 1, 1, 0))
@@ -2092,7 +2131,7 @@ class GraphStyleDialog(QDialog):
             hm_img = ax.imshow(
                       hm_sec, origin="upper",
                       extent=[-arena_half, arena_half, arena_half, -arena_half],
-                      cmap=cm_smooth, interpolation="bilinear", aspect="auto",
+                      cmap=cm_smooth, interpolation=heatmap_grid.interpolation(st), aspect="auto",
                       vmin=0.0, vmax=max_sec if max_sec > 0 else 1.0, zorder=1)
             # Clip the heatmap image to the exact shape outline so its square
             # bins are cut smoothly at the (angled) walls — no stair-stepping.
@@ -2123,7 +2162,8 @@ class GraphStyleDialog(QDialog):
             ax.set_ylim(arena_half + 3, -arena_half - 3)
             ax.set_aspect("equal", adjustable="box")
             cax = self._maybe_colorbar(ax, st, allowed, cm_smooth, vmax=max_sec,
-                                       fmt=lambda v: f"~{v:.1f}s")
+                                       labels=heatmap_grid.tick_labels(max_sec, st),
+                                       label=heatmap_grid.colorbar_label(st))
             self._drag_artists["cax"] = cax
 
         elif name == "Cell Time":
@@ -2142,8 +2182,7 @@ class GraphStyleDialog(QDialog):
                                   else "black")
                     ax.add_patch(Rectangle((c, 3 - r), 1, 1,
                                            facecolor=rgba,
-                                           edgecolor=st["arena_color"],
-                                           linewidth=0.7))
+                                           edgecolor="none", linewidth=0))
                     # In preview, each cell is 1 unit wide. Production uses
                     # pixel offsets — scale roughly so a px nudge visibly
                     # moves the label here too.
@@ -2152,11 +2191,30 @@ class GraphStyleDialog(QDialog):
                     tx = ax.text(c + 0.5 + cdx, 3 - r + 0.5 + cdy,
                                  f"{cid}\n{t:.1f}s",
                                  ha="center", va="center", color=text_color,
-                                 fontsize=9, linespacing=1.1)
+                                 fontsize=int(st.get("cell_label_size", 9)),
+                                 fontfamily=st.get("cell_label_font") or "monospace",
+                                 fontweight="bold" if st.get("cell_label_bold") else "normal",
+                                 linespacing=1.1)
                     cell_texts.append(tx)
+            # Lines between cells: Gridlines style when on, else plain
+            # dividers in the arena colour (matches the Output graph).
+            if "grid" in allowed and st.get("grid"):
+                gc = st.get("grid_color", st["arena_color"])
+                ga = float(st.get("grid_alpha", 1.0))
+                gls = st.get("grid_linestyle", "-")
+                gax = st.get("grid_axis", "both")
+            else:
+                gc, ga, gls, gax = st["arena_color"], 1.0, "-", "both"
+            for i in (1, 2, 3):
+                if gax in ("both", "x"):
+                    ax.plot([i, i], [0, 4], color=gc, alpha=ga, linestyle=gls,
+                            linewidth=0.8, zorder=3)
+                if gax in ("both", "y"):
+                    ax.plot([0, 4], [i, i], color=gc, alpha=ga, linestyle=gls,
+                            linewidth=0.8, zorder=3)
             ax.add_patch(Rectangle((0, 0), 4, 4, fill=False,
                                    edgecolor=st["arena_color"],
-                                   linewidth=st["arena_width"]))
+                                   linewidth=st["arena_width"], zorder=4))
             ax.set_xlim(-0.2, 4.2); ax.set_ylim(-0.2, 4.2)
             ax.set_aspect("equal", adjustable="box")
             cax = self._maybe_colorbar(ax, st, allowed, cmap, vmax=max_t,
@@ -2165,8 +2223,8 @@ class GraphStyleDialog(QDialog):
             self._drag_artists["cell_texts"] = cell_texts
 
         elif name == "Speed":
-            fps = smp["fps"]; speeds = smp["speeds"]
-            t = np.arange(speeds.size) / fps
+            fps = smp["fps"]; speeds = smp["speeds"] * sp_factor
+            t = np.arange(speeds.size) / fps * t_factor
             ax.plot(t, speeds, color=st["path_color"],
                     linewidth=max(0.3, st["path_width"] * 0.4),
                     alpha=alpha * 0.7, linestyle=ls,
@@ -2182,10 +2240,12 @@ class GraphStyleDialog(QDialog):
                 self._drag_artists["legend"] = self._maybe_legend(ax, st, allowed)
 
         elif name == "Speed Histogram":
-            speeds = smp["speeds"]
+            speeds = smp["speeds"] * sp_factor
             p99 = float(np.quantile(speeds, 0.99))
             upper = min(float(np.max(speeds)), p99 * 1.5 + 1e-6)
+            # Bar height = time at that speed (same as the Output graph).
             ax.hist(speeds, bins=60, range=(0, upper),
+                    weights=np.full(len(speeds), t_factor / float(smp["fps"])),
                     color=st["path_color"],
                     edgecolor=st.get("hist_edge_color", "#222222"))
             for v, lbl, c in (
@@ -2194,23 +2254,29 @@ class GraphStyleDialog(QDialog):
                 (p99,                            "P99",    resolve_token(ACCENT_COLORS["stat_p99"], _fig_mode())),
             ):
                 ax.axvline(v, color=c, linewidth=1.5, linestyle="--",
-                           label=f"{lbl}: {v:.2f}")
+                           label=f"{lbl}: {v:.3g} {sp_unit}")
             self._drag_artists["legend"] = self._maybe_legend(ax, st, allowed)
 
         elif name == "Habituation":
-            x_v = smp["bin_centers_min"]; y_v = smp["bin_dists"]
-            ax.plot(x_v, y_v, color=st["path_color"],
-                    linewidth=st["path_width"], alpha=alpha,
-                    linestyle=ls,
-                    marker=mk_plt if mk_plt else "o",
-                    markersize=int(st.get("marker_size", 5)),
-                    label="Distance per bin")
+            # Bars per time bin + linear fit — drawn like the Output graph.
+            x_v = np.asarray(smp["bin_centers_min"], float) * t_factor
+            y_v = np.asarray(smp["bin_dists"], float) * d_factor
+            bw = (float(np.min(np.diff(x_v))) if x_v.size > 1 else t_factor)
+            ax.bar(x_v, y_v, width=bw * 0.7, color=st["path_color"],
+                   alpha=alpha, label="Distance per bin")
+            if 0 < x_v.size <= 12 and y_v.max() > 0:
+                for xv, yv in zip(x_v, y_v):
+                    ax.text(xv, yv + y_v.max() * 0.015, f"{yv:.3g}", ha="center",
+                            va="bottom", fontsize=int(st.get("tick_size", 9)),
+                            color=st.get("tick_color", "#333"))
             if x_v.size >= 2:
                 slope, intercept = np.polyfit(x_v, y_v, 1)
-                ax.plot(x_v, slope * x_v + intercept, "--",
+                ax.plot(x_v, slope * x_v + intercept,
                         color=resolve_token(ACCENT_COLORS["linfit"], _fig_mode()),
-                        linewidth=max(0.5, st["path_width"] * 0.8),
-                        label=f"Linear fit: {slope:+.2f}/min")
+                        linestyle=(0, (6, 3)), linewidth=1.2,
+                        label=f"slope {slope:+.3g} {d_unit}/{t_unit}")
+            if y_v.size and y_v.max() > 0:
+                ax.set_ylim(0, y_v.max() * 1.18)
             self._drag_artists["legend"] = self._maybe_legend(ax, st, allowed)
 
         elif name == "Zone Time":
@@ -2222,13 +2288,15 @@ class GraphStyleDialog(QDialog):
                             ["#1B2436", "#8A8F95", "#86672E", "#B3382E"])
             while len(colors_b) < len(labels):
                 colors_b.append("#888888")
-            times = [zt.get(k, 0.0) for k in labels]
+            times = [zt.get(k, 0.0) * t_factor for k in labels]
             bars = ax.bar(labels, times, color=colors_b[:len(labels)], width=0.5)
             tc = st.get("tick_color", "#333333")
+            top = max(times) if times else 0.0
             for b, t in zip(bars, times):
                 if t > 0:
                     ax.text(b.get_x() + b.get_width() / 2,
-                            b.get_height() + 0.3, f"{t:.1f}s",
+                            b.get_height() + top * 0.02,
+                            f"{t:.1f}s" if t_unit == "s" else f"{t:.2f} min",
                             ha="center", color=tc,
                             fontsize=int(st.get("tick_size", 9)))
 
@@ -2255,7 +2323,10 @@ class GraphStyleDialog(QDialog):
         self._setup_drag_handlers(ax)
         self._canvas.draw_idle()
 
-    def _maybe_colorbar(self, ax, st, allowed, cmap, vmax=None, fmt=None):
+    def _maybe_colorbar(self, ax, st, allowed, cmap, vmax=None, fmt=None,
+                        labels=None, label=None):
+        """`labels` = [left, right] tick texts (overrides fmt); `label` =
+        colour-bar title (defaults to the style's colorbar_label)."""
         if "colorbar_show" not in allowed or not st.get("colorbar_show", True):
             return None
         try:
@@ -2273,13 +2344,14 @@ class GraphStyleDialog(QDialog):
             cb_rect = [bx, by, bw, bh]
             cax = self._fig.add_axes(cb_rect)
             cbar = self._fig.colorbar(sm, cax=cax, orientation="horizontal")
-            if vmax is not None and vmax > 0 and fmt is not None:
+            if vmax is not None and vmax > 0 and (fmt is not None or labels):
                 cbar.set_ticks([0.0, vmax])
-                cbar.set_ticklabels(["0s", fmt(vmax)])
+                cbar.set_ticklabels(labels or ["0s", fmt(vmax)])
                 cbar.ax.tick_params(labelsize=10, length=0)
             else:
                 cbar.set_ticks([])
-            label = st.get("colorbar_label") or ""
+            if label is None:
+                label = st.get("colorbar_label") or ""
             if label:
                 cbar.set_label(label, fontsize=int(st.get("tick_size", 9)),
                                color=st.get("tick_color", "#333333"))

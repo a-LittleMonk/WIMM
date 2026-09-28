@@ -47,6 +47,10 @@ class ZoneDrawer(QLabel):
     point_clicked     = pyqtSignal(float, float)   # norm x, norm y — correction mode
     mode_changed      = pyqtSignal(object)         # active tool changed (None = idle)
     view_changed      = pyqtSignal()               # layer / cell-highlight look changed
+    # Perspective on: a corner of the (full-frame) warped arena was dragged
+    # to (norm x, norm y) of the warped view. The host maps it back onto the
+    # original arena and re-warps; see set_perspective_corner_handler.
+    perspective_corner_dragged = pyqtSignal(int, float, float)
 
     MODE_IDLE    = None
     MODE_CALIB   = "calibration"
@@ -111,6 +115,9 @@ class ZoneDrawer(QLabel):
         # drag to horizontal / vertical / 45° lines while Shift is held.
         self._drag_anchor_norm = None
         self._perspective_locked = False   # disables corner editing when perspective on
+        # True when the host re-warps on perspective_corner_dragged — then
+        # corners stay draggable while locked (Open Field / NOR).
+        self._perspective_corners_editable = False
 
         # exclusion brush
         self.brush_radius  = 20          # video pixels
@@ -229,6 +236,16 @@ class ZoneDrawer(QLabel):
     def set_perspective_locked(self, locked: bool):
         self._perspective_locked = bool(locked)
         self.update()
+
+    def set_perspective_corners_editable(self, editable: bool):
+        """Keep the arena corner handles while perspective is on; drags
+        are reported through perspective_corner_dragged instead of moving
+        the arena."""
+        self._perspective_corners_editable = bool(editable)
+        self.update()
+
+    def _corners_draggable(self):
+        return (not self._perspective_locked) or self._perspective_corners_editable
 
     def set_zone_colors(self, colors: dict):
         # Legacy: incoming dict may use "center"; upgrade to "center_zone".
@@ -519,7 +536,7 @@ class ZoneDrawer(QLabel):
             return
         # Idle-mode corner drag (when no tool is active and arena exists)
         if (self.mode == self.MODE_IDLE and self.arena and
-                event.button() == Qt.LeftButton and not self._perspective_locked):
+                event.button() == Qt.LeftButton and self._corners_draggable()):
             ox, oy, dw, dh = self._get_disp_rect()
             r2 = self._corner_grab_px * self._corner_grab_px
             for i, p in enumerate(self.arena):
@@ -671,9 +688,16 @@ class ZoneDrawer(QLabel):
 
     def mouseReleaseEvent(self, event):
         if self._dragging_corner is not None:
-            self._dragging_corner = None
+            idx, self._dragging_corner = self._dragging_corner, None
             self._drag_anchor_norm = None
-            self.emit_change("arena corner dragged")
+            if self._perspective_locked:
+                # The warped view always shows the arena as the full frame;
+                # hand the new corner to the host, which moves the ORIGINAL
+                # corner and re-warps (and resets self.arena).
+                nx, ny = self.arena[idx]
+                self.perspective_corner_dragged.emit(idx, float(nx), float(ny))
+            else:
+                self.emit_change("arena corner dragged")
             self.update()
             return
         if self._dragging_extra is not None:
@@ -770,7 +794,7 @@ class ZoneDrawer(QLabel):
                 ly = max(12, min(p[1] for p in pts) - 9)
                 painter.drawText(lx, ly, self.arena_label)
             # Editable handles in idle mode: square dark corner markers
-            if self.mode == self.MODE_IDLE and not self._perspective_locked:
+            if self.mode == self.MODE_IDLE and self._corners_draggable():
                 for i, (hx, hy) in enumerate(pts):
                     painter.setPen(QPen(arena_color, 1.4))
                     painter.setBrush(arena_color if self._dragging_corner == i

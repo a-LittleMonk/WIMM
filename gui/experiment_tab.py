@@ -37,6 +37,7 @@ from gui.graph_style import (
 )
 
 PRESETS_PATH = os.path.join(os.path.expanduser("~"), ".mice_tracker_presets.json")
+_TUNING_RESET = 2   # Model-tuning dialog result: Reset pressed (reopen with new values)
 # Reserved combo entries — never stored as real entries in self._presets.
 DEFAULT_PRESET_NAME = "Default"
 
@@ -228,7 +229,11 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self._metrics_debounce.setSingleShot(True)
         self._metrics_debounce.setInterval(150)
         self._metrics_debounce.timeout.connect(self._fire_debounced_recompute)
+        # Set once a video's own saved settings are applied — those win
+        # over the remembered Detection preset at start-up.
+        self._settings_applied = False
         self._build_ui()
+        QTimer.singleShot(0, self._restore_last_preset)
         self._setup_shortcuts()
         # zone_mode is OF-specific (controls the 4x4 cell grid). Only honor
         # the saved app-config default for OF; everyone else stays on the
@@ -369,6 +374,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
     def apply_settings(self, s: dict):
         if not isinstance(s, dict):
             return
+        self._settings_applied = True
         # Block signals on widgets whose handlers mutate cross-video state or
         # touch disk while we're swapping in the new video's settings.
         # Some widgets are OF-only (perspective, zone-mode, cage-shape,
@@ -587,9 +593,11 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             if self._H is not None:
                 zd.arena = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
                 zd.set_perspective_locked(True)
+                zd.set_perspective_corners_editable(True)
                 self._perspective_on = True
                 # Coordinate space becomes the warp target (matters for
                 # square cage with non-square video).
+                self._native_video_size = (self.video_w, self.video_h)
                 target = self._warp_target_size()
                 if target:
                     self.video_w, self.video_h = target
@@ -597,11 +605,13 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
                 self._original_arena = None
                 self._perspective_on = False
                 zd.set_perspective_locked(False)
+                zd.set_perspective_corners_editable(False)
         else:
             self._original_arena = None
             self._H = None
             self._perspective_on = False
             zd.set_perspective_locked(False)
+            zd.set_perspective_corners_editable(False)
 
     # ── _open_corrections_popup lives in gui/output/corrections_mixin.py
 
@@ -889,17 +899,17 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         "#7FA6D9", "#A98BD9", "#D36BA6", "#FFFFFF", "#A9B4C6",
     ]
 
-    def _open_zone_colors_dialog(self):
+    def _open_zone_colors_dialog(self, start_key="arena"):
         self._open_colors_dialog(
             (("arena", "Arena"), ("center_zone", "Center Zone"), ("grid", "Grid")),
-            "Zone Colors",
+            "Zone Colors", start_key=start_key,
         )
 
     def _open_dot_colors_dialog(self):
         keys = (("body", "Body"),)
         self._open_colors_dialog(keys, "Dot Colors")
 
-    def _open_colors_dialog(self, keys, title):
+    def _open_colors_dialog(self, keys, title, start_key=None):
         backup = {k: self._colors[k] for k, _ in keys}
 
         dlg = QDialog(self)
@@ -983,7 +993,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         btn_row.addWidget(cancel_btn)
         main.addLayout(btn_row)
 
-        select(first_key)
+        select(start_key if start_key in dict(keys) else first_key)
         accepted = dlg.exec_() == QDialog.Accepted
         if not accepted:
             for k, hex_c in backup.items():
@@ -1029,6 +1039,8 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             self._video_legend.update()
         if key in ("arena", "center_zone", "grid"):
             self.zone_drawer.set_zone_colors(self._colors)
+            if getattr(self, "_zone_chips", None) is not None:
+                self._zone_chips.update()        # button swatches
         elif key == "detection":
             if self._preview_active:
                 self._update_preview()
@@ -1186,14 +1198,24 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
 
         add_section(f"Model — {model}", list(params.items()), "model")
         add_section("Post-process", list(self._post_params.items()), "post")
+        v.addStretch(1)      # extra height goes below the rows, not between them
 
         scroll.setWidget(host)
         outer.addWidget(scroll, 1)
 
         btn_row = QHBoxLayout()
-        reset_btn = QPushButton("Reset defaults")
+        # Reset goes back to the selected Detection preset's values for this
+        # model when that preset has them, else to the built-in defaults.
+        sel = self._selected_preset() or {}
+        preset_model = (sel.get("model_params") or {}).get(model)
+        preset_post = sel.get("post_params")
+        from_preset = isinstance(preset_model, dict) or isinstance(preset_post, dict)
+        reset_btn = QPushButton("Reset to preset" if from_preset else "Reset defaults")
+        reset_btn.setToolTip(
+            f"Back to the values saved in preset “{self.combo_preset.currentText()}”"
+            if from_preset else "Back to the built-in default values")
         reset_btn.setFixedHeight(24)
-        reset_btn.setFixedWidth(110)
+        reset_btn.setFixedWidth(120)
         ok_btn = QPushButton("OK")
         ok_btn.setFixedHeight(24)
         ok_btn.setFixedWidth(70)
@@ -1202,11 +1224,14 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         cancel_btn.setFixedWidth(70)
 
         def do_reset():
-            self._model_params[model] = dict(DEFAULT_MODEL_PARAMS[model])
-            self._post_params = dict(DEFAULT_POST_PARAMS)
-            dlg.accept()
-            self._save_tuning_to_config()
-            self._open_model_tuning_dialog()
+            self._model_params[model] = {**DEFAULT_MODEL_PARAMS[model],
+                                         **(preset_model if isinstance(preset_model, dict) else {})}
+            self._post_params = {**DEFAULT_POST_PARAMS,
+                                 **(preset_post if isinstance(preset_post, dict) else {})}
+            # Close with a dedicated code (not Accepted): the old field
+            # values must NOT be written back over the reset — that used to
+            # undo every Reset. The dialog reopens below with the new values.
+            dlg.done(_TUNING_RESET)
 
         reset_btn.clicked.connect(do_reset)
         ok_btn.clicked.connect(dlg.accept)
@@ -1217,14 +1242,22 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         btn_row.addWidget(cancel_btn)
         outer.addLayout(btn_row)
 
-        dlg.resize(440, 520)
-        if dlg.exec_() == QDialog.Accepted:
+        # Fit the dialog to its rows (scrolls only when they don't fit).
+        m = outer.contentsMargins()
+        fit_h = (host.sizeHint().height() + btn_row.sizeHint().height()
+                 + outer.spacing() + m.top() + m.bottom())
+        dlg.resize(440, min(fit_h, 520))
+        result = dlg.exec_()
+        if result == QDialog.Accepted:
             for (store, key), getter in getters.items():
                 if store == "model":
                     self._model_params[model][key] = getter()
                 else:
                     self._post_params[key] = getter()
             self._save_tuning_to_config()
+        elif result == _TUNING_RESET:
+            self._save_tuning_to_config()
+            self._open_model_tuning_dialog()      # show the reset values
 
     def _save_tuning_to_config(self):
         self.config["model_params"] = {m: dict(p) for m, p in self._model_params.items()}
@@ -1617,6 +1650,11 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
 
         self.zone_drawer = ZoneDrawer()
         self.zone_drawer.zones_changed.connect(self._on_zones_changed)
+        # Arena corners stay adjustable after perspective correction (only
+        # switched on by this tab's own perspective toggle / restore — EPM
+        # and Y-Maze lock the drawer with their own warps).
+        self.zone_drawer.perspective_corner_dragged.connect(
+            self._on_perspective_corner_dragged)
         self.zone_drawer.exclusion_changed.connect(self._on_exclusion_changed)
         self.zone_drawer.point_clicked.connect(self._on_correction_click)
         vlay.addWidget(self.zone_drawer, 1)
@@ -1795,7 +1833,8 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             "Ctrl+← / →  step 100\n"
             "Home / End  first / last\n"
             "N  next missed frame\n"
-            "D  toggle Preview Detection\n"
+            "D  toggle Detected area\n"
+            "M  toggle Show mask\n"
             "E  toggle View Effects"
         )
         self.slider_scrub.valueChanged.connect(self._on_scrub)
@@ -2132,6 +2171,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self._table_summary.horizontalHeader().setVisible(False)
         self._table_summary.setVisible(False)
         self._summary_panel = OutPanel("Summary")
+        self._build_unit_selectors(self._summary_panel)
         self._summary_panel.add_button("Copy table", lambda: copy_table_all(self._table_summary, False))
         self._summary_panel.body.addWidget(self._table_summary)
         self._summary_panel.setMaximumWidth(880)
@@ -2233,7 +2273,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             g._header.set_number(i)
             lay = g.layout()
             if lay is not None:
-                lay.setContentsMargins(48, 0, 14, 14)
+                lay.setContentsMargins(48, 0, 14, 4)
                 lay.setSpacing(7)
             layout.addWidget(g)
             g.setChecked(default_open.get(g._status_id, False))
@@ -2387,9 +2427,11 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self._first_frame_bgr = frame.copy()
         self._preview_bg_raw = None
         self._preview_active = False
-        self.btn_preview.setChecked(False)
-        self.btn_preview.setEnabled(False)
-        self.btn_preview_mode.setEnabled(False)
+        for sw in (self.btn_preview, self.btn_preview_mode):
+            sw.blockSignals(True)
+            sw.setChecked(False)
+            sw.blockSignals(False)
+            sw.setEnabled(False)
         self.zone_drawer.set_frame(frame)
 
         self.slider_scrub.setMaximum(max(0, frame_count - 1))
@@ -2437,6 +2479,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             self._H = None
             self._original_arena = None
             self.zone_drawer.set_perspective_locked(False)
+            self.zone_drawer.set_perspective_corners_editable(False)
         if hasattr(self, "chk_perspective") and not plugin_owns_perspective:
             self.chk_perspective.setEnabled(False)
         self._update_run_button()
@@ -3067,6 +3110,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
                 return
             self.zone_drawer.arena = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
             self.zone_drawer.set_perspective_locked(True)
+            self.zone_drawer.set_perspective_corners_editable(True)
             self._perspective_on = True
             # The active coordinate space becomes the warp target — body
             # coords from the tracker will be in (warp_w, warp_h). All code
@@ -3081,6 +3125,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             self._original_arena = None
             self._H = None
             self.zone_drawer.set_perspective_locked(False)
+            self.zone_drawer.set_perspective_corners_editable(False)
             self._perspective_on = False
             # Restore the pre-perspective video size.
             if hasattr(self, "_native_video_size") and self._native_video_size:
@@ -3089,6 +3134,57 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self._compute_center()
         if self._first_frame_bgr is not None:
             self._on_scrub(self.slider_scrub.value())
+
+    def _on_perspective_corner_dragged(self, idx, nx, ny):
+        """A corner handle was dragged in the perspective-corrected view.
+        Map the drop point back to the original video (inverse warp), move
+        that corner of the original arena, and re-warp — the corrected view
+        keeps showing the arena as the full frame."""
+        zd = self.zone_drawer
+        full = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+        if not (self._perspective_on and self._H is not None
+                and self._original_arena and len(self._original_arena) == 4):
+            zd.arena = full
+            zd.update()
+            return
+        NW, NH = (getattr(self, "_native_video_size", None)
+                  or (self.video_w, self.video_h))
+        TW, TH = self.video_w, self.video_h          # warped (current) space
+        try:
+            inv = np.linalg.inv(self._H)
+            p = cv2.perspectiveTransform(
+                np.array([[[nx * TW, ny * TH]]], dtype=np.float32), inv)[0, 0]
+        except (np.linalg.LinAlgError, cv2.error):
+            zd.arena = full
+            zd.update()
+            return
+        # Warped corner idx ↔ original corner in TL, TR, BR, BL order (the
+        # order _build_homography maps onto the full frame).
+        quad = self._sort_quad_screen(
+            [(x * NW, y * NH) for x, y in self._original_arena])
+        quad = [(float(x), float(y)) for x, y in quad]
+        quad[idx] = (min(max(float(p[0]), 0.0), NW), min(max(float(p[1]), 0.0), NH))
+        src = np.array(quad, dtype=np.float32)
+        target = self._warp_target_size() or (TW, TH)
+        dst = np.array([(0, 0), (target[0], 0), (target[0], target[1]),
+                        (0, target[1])], dtype=np.float32)
+        H = None
+        if cv2.isContourConvex(src.reshape(-1, 1, 2)) and \
+                abs(cv2.contourArea(src)) > 100:
+            try:
+                H = cv2.getPerspectiveTransform(src, dst)
+            except cv2.error:
+                H = None
+        zd.arena = full
+        if H is None:          # folded / collapsed quad — keep the old one
+            zd.update()
+            return
+        self._original_arena = [(x / NW, y / NH) for x, y in quad]
+        self._H = H
+        self._compute_center()
+        if self._first_frame_bgr is not None:
+            self._on_scrub(self.slider_scrub.value())
+        zd.emit_change("perspective arena corner adjusted")
 
     def _on_zones_changed(self):
         self._update_calib_status()
@@ -3147,7 +3243,8 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         if self.zone_drawer.arena:
             self.set_step_status("geometry", "ok")
         elif getattr(self, "_arena_auto_movement", False):
-            self.set_step_status("geometry", "warn")
+            # Arena is built from movement during the run — a valid choice.
+            self.set_step_status("geometry", "ok")
         else:
             self.set_step_status("geometry", "blocked")
 
@@ -3163,26 +3260,27 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self._preview_bg_raw = bg
         if bg is not None:
             self.btn_preview.setEnabled(True)
-            self.lbl_adjust.setText("Adjust sliders then click Preview Detection.")
+            self.btn_preview_mode.setEnabled(True)
+            self.lbl_adjust.setText("Adjust sliders, then turn on Detected area or Show mask.")
             theme.set_tone(self.lbl_adjust, "faint", "font-size:11px;")
             if not self.tracking_results and not getattr(self, "_suppress_auto_preview", False):
                 self.btn_preview.setChecked(True)
         else:
             self.lbl_adjust.setText("Preview unavailable for this video.")
 
-    def _on_preview_toggled(self, checked):
-        self._preview_active = checked
-        self.btn_preview_mode.setEnabled(checked)
-        if checked:
-            self.btn_preview.setText("Preview ON")
+    def _on_preview_toggled(self, _checked=None):
+        """Detected area / Show mask changed — each works on its own. The
+        detection preview renders while either is on."""
+        self._preview_mode = "mask" if self.btn_preview_mode.isChecked() else "overlay"
+        self._preview_active = (self.btn_preview.isChecked()
+                                or self.btn_preview_mode.isChecked())
+        if self._preview_active:
             self._update_preview()
         else:
-            self.btn_preview.setText("Preview Detection")
             self._on_scrub(self.slider_scrub.value())
 
-    def _on_preview_mode_toggled(self, checked):
-        self._preview_mode = "mask" if checked else "overlay"
-        self._update_preview()
+    def _on_preview_mode_toggled(self, _checked=None):
+        self._on_preview_toggled()
 
     def _get_processed_frame_bgr(self, frame):
         return apply_preprocessing_bgr(
@@ -3245,14 +3343,63 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         if exc is not None and exc.any():
             mask = cv2.bitwise_and(mask, cv2.bitwise_not(exc))
 
-        base = self._get_processed_frame_bgr(current) if self.btn_view_processed.isChecked() else current
-        if self._preview_mode == "overlay":
+        # Show mask → the black-and-white mask is the picture; otherwise the
+        # (processed) frame. Detected area → highlight drawn on top of it.
+        if self.btn_preview_mode.isChecked():
+            base = make_mask_view(mask)
+        else:
+            base = self._get_processed_frame_bgr(current) if self.btn_view_processed.isChecked() else current
+        if self.btn_preview.isChecked():
             display = make_overlay(base, mask, self._bgr("detection"),
                                    self.overlay_alpha / 100.0)
         else:
-            display = make_mask_view(mask)
+            display = base
 
         self.zone_drawer.set_frame(display)
+
+    _LAST_PRESET_KEY = "detection_preset_by_test"   # config: {test key: preset name}
+
+    def _remember_preset(self, name):
+        """Remember the Detection preset last chosen for this test, so the
+        app shows it again next time it opens."""
+        key = getattr(getattr(self, "experiment", None), "key", None) or "open_field"
+        d = dict(self.config.get(self._LAST_PRESET_KEY) or {})
+        if d.get(key) != name:
+            d[key] = name
+            self._persist_config(self._LAST_PRESET_KEY, d)
+
+    def _restore_last_preset(self):
+        """Start-up: select the preset last chosen for this test and load
+        its values — unless a video's own saved settings were already
+        applied (those are that video's real settings)."""
+        combo = getattr(self, "combo_preset", None)
+        if combo is None:
+            return
+        key = getattr(getattr(self, "experiment", None), "key", None) or "open_field"
+        name = (self.config.get(self._LAST_PRESET_KEY) or {}).get(key)
+        idx = combo.findText(name) if name else -1
+        if idx < 0:
+            return
+        combo.setCurrentIndex(idx)
+        if name != DEFAULT_PRESET_NAME and not self._settings_applied:
+            self._load_preset(remember=False)
+
+    def _selected_preset(self):
+        """The saved preset chosen in the Detection card, or None when
+        Default (or nothing known) is selected."""
+        combo = getattr(self, "combo_preset", None)
+        name = combo.currentText() if combo is not None else ""
+        if name and name != DEFAULT_PRESET_NAME and name in self._presets:
+            return self._presets[name]
+        return None
+
+    def _reset_to_preset(self):
+        """Reset = back to the preset you started from: the selected saved
+        preset, or the built-in defaults when Default is selected."""
+        if self._selected_preset() is not None:
+            self._load_preset()
+        else:
+            self._reset_sliders()
 
     def _reset_sliders(self):
         self.slider_brightness.setValue(0)
@@ -3339,6 +3486,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             idx = self.combo_preset.findText(current)
             if idx >= 0:
                 self.combo_preset.setCurrentIndex(idx)
+            self._remember_preset(current)
             return
         # Default (or nothing recognized) is selected — Save always creates
         # a new named preset; Default itself is never overwritten.
@@ -3360,9 +3508,12 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         idx = self.combo_preset.findText(name)
         if idx >= 0:
             self.combo_preset.setCurrentIndex(idx)
+        self._remember_preset(name)
 
-    def _load_preset(self):
+    def _load_preset(self, remember=True):
         name = self.combo_preset.currentText()
+        if remember:
+            self._remember_preset(name)
         if name == DEFAULT_PRESET_NAME:
             self._reset_sliders()
             return
@@ -3447,6 +3598,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             del self._presets[name]
             self._save_presets_file()
             self._populate_preset_combo()
+            self._remember_preset(DEFAULT_PRESET_NAME)
 
     def _export_preset(self):
         """Write the selected custom preset to a standalone .json file —
@@ -3519,7 +3671,9 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
     # ── Step 5 ────────────────────────────────────────────────────────────
 
     def _update_run_button(self):
-        ready = self.video_path is not None and self.zone_drawer.arena is not None
+        ready = self.video_path is not None and (
+            self.zone_drawer.arena is not None
+            or getattr(self, "_arena_auto_movement", False))
         self.set_step_status("analysis", "ok" if ready else "blocked")
 
     def _on_tracking_preview(self, frame):
@@ -3991,17 +4145,32 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         return f"{thr_t} · bin {b:g} s" if b > 0 else f"{thr_t} · no bins"
 
     def _card_status(self, g):
+        """Status dot of a config card:
+        red    — no video, or a required setting of this step is missing
+                 (or only partly done, e.g. 2 of 3 Y-Maze arms);
+        orange — required part is fine but an optional setting is not set;
+        green  — everything set."""
         sid = g._status_id
-        loaded = bool(self.video_path)
-        has_results = bool(self.tracking_results)
-        if sid in ("source", "animal"):
-            return "ok" if loaded else "none"
-        if sid == "zones":
+        if not self.video_path:
+            return "blocked"
+        if sid == "source":
+            return "ok"
+        if sid == "animal":                       # all fields optional
+            fields = [self.edit_meta_id.text(), self.edit_meta_group.text(),
+                      self.combo_meta_sex.currentText(), self.edit_meta_trial.text(),
+                      self.edit_meta_date.text(), self.edit_meta_notes.text()]
+            return "ok" if any(f.strip() for f in fields) else "warn"
+        if sid in ("geometry", "zones"):
             geo = self._step_groups.get("geometry")
-            return geo._status if geo is not None else "none"
-        if sid in ("analysis", "metrics"):
-            return "ok" if has_results else "none"
-        return g._status
+            status = geo._status if geo is not None else "blocked"
+            return "ok" if status == "ok" else "blocked"
+        if sid == "scale":                        # optional step
+            return "ok" if g._status == "ok" else "warn"
+        if sid == "metrics":                      # Move threshold / Time bin are optional
+            off = (self.spin_movement_thr.value() <= 0
+                   or self.spin_bin_size.value() <= 0)
+            return "warn" if off else "ok"
+        return "ok" if g._status == "ok" else "blocked"
 
     def _open_analysis_card(self):
         g = getattr(self, "_step_groups", {}).get("metrics")

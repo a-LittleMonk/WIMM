@@ -24,9 +24,12 @@ from gui.redesign_widgets import SegmentedControl, StatusPill, ThemeToggle
 
 
 class _NoScrollFilter(QObject):
-    """Always block mouse-wheel value changes on spinboxes / sliders / combos.
-    Use ↑/↓ keys or click+drag instead."""
-    _BLOCK_TYPES = (QAbstractSpinBox, QSlider, QComboBox)
+    """Always block mouse-wheel value changes on spinboxes / sliders.
+    Use ↑/↓ keys or click+drag instead. Drop-downs (QComboBox) are NOT
+    blocked: the wheel steps through the choices of a closed drop-down and
+    scrolls an open drop-down's list (the popup list is a child of the
+    combo, so blocking combos also froze long lists like the font list)."""
+    _BLOCK_TYPES = (QAbstractSpinBox, QSlider)
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.Wheel:
@@ -39,6 +42,21 @@ class _NoScrollFilter(QObject):
                     return True
                 w = w.parent() if hasattr(w, "parent") else None
         return super().eventFilter(obj, event)
+
+
+class _StayOpenMenuFilter(QObject):
+    """Toggling a checkable entry (e.g. a panel in View ▸ Panels) keeps the
+    menu open, so several panels can be shown / hidden in one go."""
+
+    def eventFilter(self, menu, event):
+        if (event.type() == QEvent.MouseButtonRelease
+                and event.button() == Qt.LeftButton and isinstance(menu, QMenu)):
+            act = menu.actionAt(event.pos())
+            if act is not None and act.isCheckable() and act.isEnabled():
+                act.trigger()
+                return True
+        return False
+
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".mice_tracker.json")
 
@@ -192,6 +210,8 @@ class MainWindow(QMainWindow):
         # Panels ▸ — show / hide the current test's movable panels.
         self.panels_menu = self.view_menu.addMenu("Panels")
         self.panels_menu.aboutToShow.connect(self._fill_panels_menu)
+        self._stay_open_filter = _StayOpenMenuFilter(self)
+        self.panels_menu.installEventFilter(self._stay_open_filter)
         act_appearance = QAction("Appearance…", self)
         act_appearance.setToolTip("Background palette for light and dark mode")
         act_appearance.triggered.connect(self._open_appearance)
@@ -329,8 +349,10 @@ class MainWindow(QMainWindow):
         # into the "»" overflow button — size it from its items.
         fm = self._menubar.fontMetrics()
         menus_w = sum(fm.horizontalAdvance(a.text()) + 24 for a in self._menubar.actions())
-        self._menubar.setFixedSize(menus_w + 8, 34)
-        h.addWidget(self._menubar)
+        # Height = the items' own height, so View / Settings sit centred in
+        # the header instead of at the top of a taller, empty bar.
+        self._menubar.setFixedSize(menus_w + 8, self._menubar.sizeHint().height())
+        h.addWidget(self._menubar, 0, Qt.AlignVCenter)
         h.addStretch(1)
 
         self.pill = StatusPill()
@@ -670,7 +692,7 @@ class MainWindow(QMainWindow):
         m_lay.setSpacing(4)
         m_note = QLabel(
             "Alternative tracking models with their default tunings. "
-            "Disabled for now — for review only."
+            "Pick one in the Tracking step's Model drop-down."
         )
         m_note.setWordWrap(True)
         m_note.setProperty("role", "muted")
@@ -725,7 +747,8 @@ class MainWindow(QMainWindow):
         outer.setContentsMargins(12, 12, 12, 12)
 
         note = QLabel(
-            "Pick a model to see its default parameters. Disabled — for review."
+            "Pick a model to see its default parameters. To use one, choose "
+            "it in the Tracking step's Model drop-down."
         )
         note.setWordWrap(True)
         note.setProperty("role", "muted")

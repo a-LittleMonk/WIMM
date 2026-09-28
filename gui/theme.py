@@ -884,7 +884,7 @@ QLabel[role="frame"] {{ font-family: "{mono}"; font-size: 11.5px; color: {TEXT};
 QGroupBox#StepGroup {{
     margin: 0; background: transparent; border: 0; border-bottom: 1px solid {BORDER};
     /* 46 px header (step_card.HEADER_H) + 12 px gap before the content */
-    padding: 58px 0px 14px 0px; font-size: 12px; color: {TEXT};
+    padding: 58px 0px 6px 0px; font-size: 12px; color: {TEXT};
 }}
 QGroupBox#StepGroup::title {{ subcontrol-origin: margin; height: 0px; padding: 0; }}
 QToolButton#InfoBtn {{
