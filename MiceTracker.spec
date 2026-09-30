@@ -63,7 +63,18 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    # Launcher-screen + header logo mark (gui/launcher.py loads this by
+    # relative path — QtSvg's <mask> support is too limited for the source
+    # SVG, so it renders from this PNG instead). Only the file actually used
+    # at runtime — the rest of assets/logo-package-v4 (other sizes/marks,
+    # the SVGs, README) is reference material, not shipped.
+    datas=[
+        ('assets/logo-package-v4/png/mouse-track-4e-outline-white-1024.png',
+         'assets/logo-package-v4/png'),
+        # Bundled fonts (Instrument Sans, JetBrains Mono, Quicksand Bold +
+        # OFL licences) — registered at start-up by gui.theme.
+        ('assets/fonts', 'assets/fonts'),
+    ],
     hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},

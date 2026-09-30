@@ -9,7 +9,7 @@ The arrangement is saved per experiment in config["panel_layout"].
 """
 import base64
 
-from PyQt5.QtCore import QByteArray, Qt, QTimer
+from PyQt5.QtCore import QByteArray, QSize, Qt, QTimer
 from PyQt5.QtWidgets import QDockWidget, QFrame, QMainWindow, QVBoxLayout, QWidget
 
 from gui.widgets_v2 import IconButton
@@ -60,6 +60,18 @@ class Panel(QDockWidget):
         self.setWidget(self.holder)
         self.topLevelChanged.connect(self._on_floating)
 
+    def set_compact(self, on):
+        """Narrow mode: icon-only header buttons, no pop-out button."""
+        self.header.set_compact(on)
+        self.b_float.setVisible(not on)
+        self.header.layout().invalidate()
+        self.header.updateGeometry()
+        # Qt raises the dock's own minimum width to its title bar's; put back
+        # the configured value so the narrower header can take effect.
+        self.setMinimumWidth(getattr(self, "cfg_min_w", 0))
+        # QDockWidget caches its title-bar size; flipping a feature flag
+        # forces it to re-measure.
+
     def _on_floating(self, floating):
         # Floating windows have no aurora behind them — use solid fills.
         for w in (self.header, self.holder):
@@ -88,9 +100,16 @@ class PanelHost(QMainWindow):
         self._min_timer.setSingleShot(True)
         self._min_timer.setInterval(50)
         self._min_timer.timeout.connect(self._update_window_minimum)
+        self._narrow = False       # narrow mode (see _set_narrow)
+        self._full_need = None     # layout minimum measured before narrowing
+        self.narrow_hooks = []     # callables(bool) for widgets outside the docks
+        self._fell_back = False   # True → showing the default layout, don't overwrite the saved one
 
     # Qt squeezes docks on top of each other when the window is smaller
-    # than their combined minimum — so the window may not get that small.
+    # than their combined minimum — so the window may not get that small, and
+    # when even the whole screen is too small the panels fold into tabs.
+    FRAME_MARGIN = 40   # window title bar / borders, not part of availableGeometry
+
     def _update_window_minimum(self):
         win = self.window()
         if win is self or not self.isVisible():
@@ -99,11 +118,57 @@ class PanelHost(QMainWindow):
         need = self.minimumSizeHint()
         extra_w = max(0, win.width() - self.width())    # header, footer, margins
         extra_h = max(0, win.height() - self.height())
-        w, h = need.width() + extra_w, need.height() + extra_h
         screen = win.screen().availableGeometry() if win.screen() else None
         if screen is not None:
-            w, h = min(w, screen.width()), min(h, screen.height())
+            avail_w = screen.width() - extra_w
+            avail_h = screen.height() - extra_h - self.FRAME_MARGIN
+            # A saved arrangement that cannot fit this screen (made on a bigger
+            # monitor / scale) would make Qt stack the panels on top of each
+            # other — fall back to the default arrangement, once, unsaved.
+            if ((need.width() > avail_w or need.height() > avail_h)
+                    and not self._fell_back and self._default_state is not None):
+                self._fell_back = True
+                for p in self.panels:
+                    p.setFloating(False)
+                    p.show()
+                self.restoreState(self._default_state)
+                self._min_timer.start()
+                return
+            # Still too big → narrow mode: shrink chrome (icon-only buttons,
+            # fewer read-outs) so every panel stays visible on one screen.
+            if (need.width() > avail_w or need.height() > avail_h) and not self._narrow:
+                self._full_need = QSize(need)
+                self._set_narrow(True)
+                QTimer.singleShot(0, self._remeasure_docks)
+                return
+            if self._narrow and self._full_need is not None                     and self._full_need.width() <= avail_w and self._full_need.height() <= avail_h:
+                self._set_narrow(False)
+                QTimer.singleShot(0, self._remeasure_docks)
+                return
+        w, h = need.width() + extra_w, need.height() + extra_h
+        if screen is not None:
+            w, h = min(w, screen.width()), min(h, screen.height() - self.FRAME_MARGIN)
         win.setMinimumSize(max(w, base.width()), max(h, base.height()))
+
+    def _set_narrow(self, on):
+        self._narrow = bool(on)
+        for p in self.panels:
+            p.set_compact(self._narrow)
+        for fn in self.narrow_hooks:
+            try:
+                fn(self._narrow)
+            except Exception:
+                pass
+
+    def _remeasure_docks(self):
+        """After the headers have re-laid-out, make each dock re-read its
+        title-bar size (Qt caches it) and the host its dock minimums."""
+        for p in self.panels:
+            p.setTitleBarWidget(None)
+            p.setTitleBarWidget(p.header)
+            p.header.show()
+        self.restoreState(self.saveState())
+        self._min_timer.start()
 
     @staticmethod
     def _base_minimum(win):
@@ -116,16 +181,23 @@ class PanelHost(QMainWindow):
         super().showEvent(e)
         self._min_timer.start()
 
+
     def hideEvent(self, e):
         super().hideEvent(e)
         win = self.window()
         if win is not self:
             win.setMinimumSize(self._base_minimum(win))   # launcher etc.
 
-    def add_panel(self, key, title, body, header, area, min_width=None):
+    def add_panel(self, key, title, body, header, area, min_width=None, min_height=None):
         p = Panel(key, title, body, header, self)
+        p.cfg_min_w = min_width or 0
         if min_width:
             p.setMinimumWidth(min_width)
+        # An explicit minimum on the holder replaces the content's own (larger)
+        # minimumSizeHint, so the panels can be squeezed onto small / scaled
+        # screens instead of stacking on top of each other.
+        if min_width or min_height:
+            p.holder.setMinimumSize(min_width or 0, min_height or 0)
         self.addDockWidget(area, p)
         for sig in (p.dockLocationChanged, p.topLevelChanged, p.visibilityChanged):
             sig.connect(lambda *_: self._saver.start())
@@ -153,7 +225,19 @@ class PanelHost(QMainWindow):
     def _keys(self):
         return [p.key for p in self.panels]
 
+    def refresh_layout(self):
+        """Force Qt to fully redo the dock geometry, preserving the current
+        arrangement — the same effect as the user closing and reopening a
+        panel (the known workaround for QMainWindowLayout sometimes leaving
+        stale / overlapping dock geometry after the central widget's content
+        changes size, e.g. right after a video loads and the Configuration
+        panel's rows go from placeholder to real values). Call this after
+        any such bulk content change."""
+        self.restoreState(self.saveState())
+        self._min_timer.start()
+
     def reset_layout(self):
+        self._fell_back = False
         if self._default_state is not None:
             for p in self.panels:
                 p.setFloating(False)
@@ -162,6 +246,8 @@ class PanelHost(QMainWindow):
             self._save_state()
 
     def _save_state(self):
+        if self._fell_back:
+            return
         data = {"panels": self._keys(),
                 "state": base64.b64encode(bytes(self.saveState())).decode("ascii")}
         layouts = self._config.setdefault("panel_layout", {})

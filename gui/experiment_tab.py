@@ -1814,6 +1814,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self.btn_view_popup.hide()   # the View button lives in the canvas toolbar
         cv.addLayout(row1)
         cv.addSpacing(8)
+        self._transport_extras = (self.lbl_total, fblock)
 
         # Speed / Center-periphery / Missed tracks — shown as separate panels.
         self.speed_timeline = TimelineTracks(self)
@@ -1871,6 +1872,11 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         oh.addWidget(w, 1)
         oh.addWidget(self.measure_panel)
         return outer
+    def set_transport_compact(self, on):
+        """Narrow mode: hide the time total and FRAME read-out."""
+        for w in getattr(self, "_transport_extras", ()):
+            w.setHidden(bool(on))
+
     def _build_legend(self):
         w = QWidget()
         h = QHBoxLayout(w)

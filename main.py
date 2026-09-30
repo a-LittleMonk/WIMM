@@ -2,13 +2,14 @@ import sys
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt
 from gui.main_window import MainWindow, load_config
-from gui.theme import apply_theme, load_aurora, load_fonts
+from gui.theme import apply_theme, load_aurora, load_fonts, register_bundled_fonts
 
 
 def main():
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     app = QApplication(sys.argv)
     app.setApplicationName("Mice Tracker")
+    register_bundled_fonts()
     config = load_config()
     load_aurora(config)
     load_fonts(config)

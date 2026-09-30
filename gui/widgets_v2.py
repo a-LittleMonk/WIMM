@@ -91,6 +91,21 @@ class IconButton(QToolButton):
         self._name = name
         self._render()
 
+    def set_compact(self, on):
+        """Icon-only (label kept as tooltip) — used when space is tight."""
+        on = bool(on)
+        if on == getattr(self, "_compact", False):
+            return
+        self._compact = on
+        if on:
+            self._full_text = self.text()
+            if not self.toolTip():
+                self.setToolTip(self._full_text)
+            self.setText("")
+        else:
+            self.setText(getattr(self, "_full_text", ""))
+        self.updateGeometry()
+
     def _render(self, *_):
         from PyQt5.QtGui import QIcon
         ic = QIcon()
@@ -131,6 +146,21 @@ class IconTextButton(QPushButton):
             self.setProperty("primary", True)
         self._render()
         theme.notifier.changed.connect(self._render)
+
+    def set_compact(self, on):
+        """Icon-only (label kept as tooltip) — used when space is tight."""
+        on = bool(on)
+        if on == getattr(self, "_compact", False):
+            return
+        self._compact = on
+        if on:
+            self._full_text = self.text()
+            if not self.toolTip():
+                self.setToolTip(self._full_text)
+            self.setText("")
+        else:
+            self.setText(getattr(self, "_full_text", ""))
+        self.updateGeometry()
 
     def _render(self, *_):
         from PyQt5.QtGui import QIcon
@@ -260,6 +290,11 @@ class PaneHeader(QWidget):
     def add_left(self, widget):
         self._lay.addWidget(widget, 0, Qt.AlignVCenter)
         return widget
+
+    def set_compact(self, on):
+        """Narrow mode: text buttons in this header shrink to icons."""
+        for b in self.findChildren(IconTextButton):
+            b.set_compact(on)
 
     def add_right(self, widget):
         if not self._stretch_added:

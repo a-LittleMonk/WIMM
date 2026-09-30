@@ -4,13 +4,13 @@ from html import escape
 from PyQt5.QtWidgets import (
     QMainWindow, QTabWidget, QAction, QFileDialog, QStatusBar, QMessageBox,
     QPushButton, QShortcut, QStackedWidget, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QFrame, QGridLayout, QApplication, QAbstractSpinBox, QSlider, QComboBox,
+    QLabel, QFrame, QApplication, QAbstractSpinBox, QSlider, QComboBox,
     QDialog, QGroupBox, QFormLayout, QLineEdit, QCheckBox, QMenu, QMenuBar,
     QToolButton,
 )
 from tracking.tracker import DEFAULT_MODEL_PARAMS
-from PyQt5.QtCore import Qt, QObject, QEvent, QPointF, QRectF, QTimer
-from PyQt5.QtGui import QColor, QKeySequence, QPainter, QPen, QPixmap
+from PyQt5.QtCore import Qt, QObject, QEvent, QTimer
+from PyQt5.QtGui import QKeySequence
 from gui.openfield_batch_tab import OpenFieldBatchTab
 from gui.y_maze_tab import YMazeBatchTab
 from gui.nor_tab import NORBatchTab
@@ -20,6 +20,7 @@ from gui.log_dialog import LogDialog
 from core import logger
 from gui import theme
 from gui.backdrop import AuroraBackdrop
+from gui.launcher import LOGO_OUTLINE, BrandColumn, TestGrid, tinted_svg_pixmap
 from gui.redesign_widgets import SegmentedControl, StatusPill, ThemeToggle
 
 
@@ -70,27 +71,6 @@ def load_config():
         except Exception:
             pass
     return {}
-
-
-def _brand_pixmap(size, color):
-    """Logo glyph from the redesign: a framed square with a centre dot."""
-    dpr = QApplication.instance().devicePixelRatio() if QApplication.instance() else 1.0
-    pm = QPixmap(int(size * dpr), int(size * dpr))
-    pm.setDevicePixelRatio(dpr)
-    pm.fill(Qt.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    pen = QPen(QColor(color), size / 11.0)
-    pen.setJoinStyle(Qt.RoundJoin)
-    p.setPen(pen)
-    p.setBrush(Qt.NoBrush)
-    m = size * 0.16
-    p.drawRoundedRect(QRectF(m, m, size - 2 * m, size - 2 * m), size * 0.06, size * 0.06)
-    p.setPen(Qt.NoPen)
-    p.setBrush(QColor(color))
-    p.drawEllipse(QPointF(size / 2, size / 2), size * 0.09, size * 0.09)
-    p.end()
-    return pm
 
 
 class FooterBar(QWidget):
@@ -172,7 +152,7 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self):
         self.setWindowTitle("Mice Tracker")
-        self.setMinimumSize(1000, 700)
+        self.setMinimumSize(900, 560)
 
         # The View / Settings menus live inside the app header (redesign v2),
         # so they use their own QMenuBar instead of the window's native one.
@@ -393,8 +373,7 @@ class MainWindow(QMainWindow):
         self._help_dialog.show_tab(title)
 
     def _refresh_brand(self, *_):
-        self.brand_mark.setPixmap(_brand_pixmap(16, theme.ON_ACCENT))
-        self._launcher_mark.setPixmap(_brand_pixmap(24, theme.ON_ACCENT))
+        self.brand_mark.setPixmap(tinted_svg_pixmap(LOGO_OUTLINE, 26, theme.TEXT))
 
     def _current_panel_host(self):
         if self.stack.currentIndex() != 1:
@@ -439,46 +418,29 @@ class MainWindow(QMainWindow):
 
     def _build_launcher(self):
         w = QWidget()
-        v = QVBoxLayout(w)
-        v.setContentsMargins(40, 56, 40, 40)
-        v.setSpacing(6)
+        h = QHBoxLayout(w)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(0)
 
-        mark = QLabel()
-        mark.setObjectName("LauncherMark")
-        mark.setAlignment(Qt.AlignCenter)
-        mark.setFixedSize(40, 40)
-        self._launcher_mark = mark
-        v.addWidget(mark, 0, Qt.AlignCenter)
-        v.addSpacing(8)
-        title = QLabel("Mice Tracker")
-        title.setObjectName("LauncherTitle")
-        title.setAlignment(Qt.AlignCenter)
-        subtitle = QLabel("Choose a behavioral test")
-        subtitle.setObjectName("LauncherSub")
-        subtitle.setAlignment(Qt.AlignCenter)
-        v.addWidget(title)
-        v.addWidget(subtitle)
-        v.addSpacing(24)
+        self.brand_column = BrandColumn()
+        h.addWidget(self.brand_column, 0)
 
-        grid = QGridLayout()
-        grid.setSpacing(12)
-        grid.setAlignment(Qt.AlignCenter)
+        tests = []
+        for i, (_menu, card, enabled, opener) in enumerate(self._TESTS, start=1):
+            cb = getattr(self, opener) if (enabled and opener) else None
+            label = card if enabled else f"{card} (coming soon)"
+            tests.append((f"{i:02d}", label, enabled, cb))
+        self.test_grid = TestGrid(tests)
+        h.addWidget(self.test_grid, 1)
 
-        for i, (_menu, card, enabled, opener) in enumerate(self._TESTS):
-            btn = QPushButton(card if enabled else f"{card}\n(coming soon)")
-            btn.setObjectName("TestCard")
-            btn.setFixedSize(190, 72)
-            btn.setEnabled(enabled)
-            btn.setCursor(Qt.PointingHandCursor if enabled else Qt.ArrowCursor)
-            if opener:
-                btn.clicked.connect(getattr(self, opener))
-            grid.addWidget(btn, i // 3, i % 3)
-
-        grid_wrap = QWidget()
-        grid_wrap.setLayout(grid)
-        v.addWidget(grid_wrap, 0, Qt.AlignCenter)
-        v.addStretch()
+        self.brand_column.set_narrow(self.width() < BrandColumn.NARROW_BREAKPOINT)
         return w
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        bc = getattr(self, "brand_column", None)
+        if bc is not None:
+            bc.set_narrow(self.width() < BrandColumn.NARROW_BREAKPOINT)
 
     def _open_open_field(self):
         self.tabs.setCurrentWidget(self.of_tab)

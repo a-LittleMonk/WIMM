@@ -180,6 +180,7 @@ def main():
     app = QApplication(sys.argv)
     config = load_config()
     theme.load_aurora(config)
+    theme.register_bundled_fonts()
     theme.load_fonts(config)
     theme.apply_theme(app, config.get("theme", "dark"))
     w = KitWindow()

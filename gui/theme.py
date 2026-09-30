@@ -1,16 +1,23 @@
 """Application theme — implements the "Mice Tracker Redesign v2" look.
 
 Warm neutral greys, a single deep-navy accent (light theme) / soft steel-blue
-accent (dark theme), Instrument Sans + JetBrains Mono (falls back to
-Segoe UI / Consolas when the fonts aren't installed).
+accent (dark theme), Segoe UI + Consolas (system fonts). Only the launcher logo
+fonts (Quicksand Bold, Instrument Sans Medium) ship in assets/fonts; they are
+registered at start-up by `register_bundled_fonts()`.
 
 `apply_theme(app, mode)` installs palette + stylesheet; `set_mode()` swaps the
 colour tokens at runtime and `notifier.changed` fires so custom-painted
 widgets can repaint.  Modules read tokens as `theme.TEXT`, `theme.ACCENT` ...
 (attribute access at call time — don't `from gui.theme import TEXT`).
 """
+import glob
+import os
+
 from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QFontDatabase, QPalette
+
+FONTS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "fonts")
 
 # ── Design tokens (from the redesign) ──────────────────────────────────────
 # Names map to the mock-up's CSS variables:
@@ -260,8 +267,8 @@ def load_aurora(config):
 
 VIDEO_BG = "#0D0A1E"   # video canvas stays dark in both themes
 
-SANS_STACK = ["Instrument Sans", "Segoe UI", "Helvetica Neue", "Arial"]
-MONO_STACK = ["JetBrains Mono", "Cascadia Mono", "Consolas", "Courier New"]
+SANS_STACK = ["Segoe UI", "Helvetica Neue", "Arial"]
+MONO_STACK = ["Consolas", "Cascadia Mono", "Courier New"]
 
 # Live tokens — populated by set_mode(); defaults keep static analysers happy.
 BG = SURFACE = SURFACE_2 = HOVER = INPUT = BORDER = BORDER_2 = ""
@@ -422,16 +429,50 @@ FONTS = {"ui": None, "data": None, "label": None}
 FONT_CHOICES = {  # suggestions shown first, when installed
     "ui": ["Segoe UI", "Segoe UI Variable Text", "Bahnschrift", "Aptos", "Calibri",
            "Inter", "IBM Plex Sans", "Roboto", "Source Sans 3", "Arial", "Verdana", "Tahoma"],
-    "data": ["Cascadia Mono", "Consolas", "JetBrains Mono", "IBM Plex Mono", "Roboto Mono",
+    "data": ["Consolas", "Cascadia Mono", "IBM Plex Mono", "Roboto Mono",
              "Source Code Pro", "Lucida Console", "Courier New"],
 }
 _families = None
+# Not offered as UI / data fonts (the bundled logo font and the old defaults).
+HIDDEN_FAMILY_PREFIXES = ("Instrument Sans", "JetBrains Mono")
+
+
+def _user_font_dirs():
+    """Per-user font folders that matplotlib does not scan on its own."""
+    local = os.environ.get("LOCALAPPDATA")
+    return [os.path.join(local, "Microsoft", "Windows", "Fonts")] if local else []
+
+
+def register_bundled_fonts():
+    """Load assets/fonts into Qt (and matplotlib) so the app never depends on
+    what is installed on the machine. Call once, after QApplication exists and
+    before any font lookup. Missing files are skipped silently (the stacks
+    still fall back to system fonts)."""
+    global _families
+    files = sorted(glob.glob(os.path.join(FONTS_DIR, "*.ttf"))
+                   + glob.glob(os.path.join(FONTS_DIR, "*.otf")))
+    for path in files:
+        QFontDatabase.addApplicationFont(path)
+    _families = None
+    try:  # matplotlib graphs use theme.mono_family() too
+        from matplotlib import font_manager
+        extra = list(files)
+        for d in _user_font_dirs():
+            extra += glob.glob(os.path.join(d, "*.ttf")) + glob.glob(os.path.join(d, "*.otf"))
+        for path in extra:
+            try:
+                font_manager.fontManager.addfont(path)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 def installed_families():
     global _families
     if _families is None:
-        _families = set(QFontDatabase().families())
+        _families = {f for f in QFontDatabase().families()
+                     if not f.startswith(HIDDEN_FAMILY_PREFIXES)}
     return _families
 
 
@@ -688,7 +729,7 @@ QWidget[tone="err"] {{ color: {ERR}; }}
 /* Header */
 QWidget#AppHeader {{ background: {SURFACE}; border-bottom: 1px solid {BORDER}; }}
 QFrame#HeaderSep {{ background: {BORDER}; border: 0; }}
-QLabel#BrandMark {{ background: {ACCENT}; border-radius: 6px; }}
+QLabel#BrandMark {{ background: transparent; }}
 QLabel#BrandName {{ font-size: 13px; font-weight: 700; }}
 QLabel#BrandTag {{
     font-family: "{label}"; font-size: 9px; letter-spacing: 1px; color: {FAINT};
@@ -706,17 +747,6 @@ QFrame#Segmented QPushButton {{
 }}
 QFrame#Segmented QPushButton:hover {{ background: {HOVER}; color: {TEXT}; }}
 QFrame#Segmented QPushButton:checked {{ background: {SURFACE}; color: {TEXT}; font-weight: 600; }}
-
-/* Launcher */
-QLabel#LauncherMark {{ background: {ACCENT}; border-radius: 8px; }}
-QLabel#LauncherTitle {{ font-size: 22px; font-weight: 700; letter-spacing: -0.3px; }}
-QLabel#LauncherSub {{ font-size: 12px; color: {MUTED}; }}
-QPushButton#TestCard {{
-    font-size: 13px; font-weight: 600; background: {SURFACE}; border: 1px solid {BORDER};
-    border-radius: 8px;
-}}
-QPushButton#TestCard:hover {{ border-color: {ACCENT}; background: {ACCENT_BG}; }}
-QPushButton#TestCard:disabled {{ color: {FAINT}; font-weight: 400; background: {SURFACE_2}; }}
 
 /* Redesign v2 building blocks */
 QWidget#FooterBar {{ background: transparent; }}
@@ -940,11 +970,9 @@ QWidget#MeasBody, QWidget#PaneHeader, QWidget#StatCell, QWidget[role="meas-secti
     background: transparent;
 }}
 QWidget#PaneHeader {{ border-top-left-radius: 14px; border-top-right-radius: 14px; }}
-QFrame#ResultCard, QFrame[role="card"], QPushButton#TestCard {{
+QFrame#ResultCard, QFrame[role="card"] {{
     background: {G_PANEL}; border: 1px solid {G_RIM}; border-top-color: {G_HI}; border-radius: 12px;
 }}
-QPushButton#TestCard:hover {{ background: {G_HOVER}; border-color: {G_ACC_LINE}; }}
-QPushButton#TestCard:disabled {{ background: {G_SOFT}; border-color: {G_LINE}; }}
 QFrame#StatGrid, QFrame#GridCells {{ background: {G_SUNK}; border: 1px solid {G_LINE}; border-radius: 10px; }}
 QWidget#StatCell, QWidget#GridCell {{ background: transparent; }}
 QFrame#RunPanel {{

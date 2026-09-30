@@ -2135,8 +2135,8 @@ class ExperimentBatchTab(QWidget):
         self.panel_host = PanelHost(right, self.config, type(self).__name__, self._save_config)
         root.addWidget(self.panel_host, 1)
         ph = self.panel_host
-        p_queue = ph.add_panel("queue", "Queue", left, qh, Qt.LeftDockWidgetArea, 200)
-        p_config = ph.add_panel("config", "Configuration", middle, ch, Qt.LeftDockWidgetArea, 250)
+        p_queue = ph.add_panel("queue", "Queue", left, qh, Qt.LeftDockWidgetArea, 236, 260)
+        p_config = ph.add_panel("config", "Configuration", middle, ch, Qt.LeftDockWidgetArea, 270, 100)
         ph.splitDockWidget(p_queue, p_config, Qt.Horizontal)
         sizes = [(p_queue, 244), (p_config, 324)]
         mp = getattr(self.embedded_tab, "measure_panel", None)
@@ -2145,10 +2145,11 @@ class ExperimentBatchTab(QWidget):
             mp.setMinimumWidth(200)
             mp.setMaximumWidth(16777215)
             mh = PaneHeader("analysis", "Measurements")
-            p_meas = ph.add_panel("measure", "Measurements", mp, mh, Qt.RightDockWidgetArea, 200)
+            p_meas = ph.add_panel("measure", "Measurements", mp, mh, Qt.RightDockWidgetArea, 200, 62)
             sizes.append((p_meas, 296))
         heights = self._add_timeline_panels(ph, sizes)
         ph.finish(sizes, heights)
+        ph.narrow_hooks.append(self.embedded_tab.set_transport_compact)
         # Output folder + export buttons live in the Export sub-tab now.
 
     def _add_timeline_panels(self, ph, sizes):
@@ -2181,16 +2182,16 @@ class ExperimentBatchTab(QWidget):
             return h
 
         area = Qt.BottomDockWidgetArea
-        p_speed = ph.add_panel("speed", "Speed", body(tl.speed), header("analysis", "Speed"), area)
+        p_speed = ph.add_panel("speed", "Speed", body(tl.speed), header("analysis", "Speed"), area, 150, 70)
         p_zone = ph.add_panel("zone", "Center / periphery", body(tl.zone),
-                              header("zones", "Center / periphery"), area)
+                              header("zones", "Center / periphery"), area, 150, 60)
         miss_row = QHBoxLayout()
         miss_row.setSpacing(10)
         miss_row.addWidget(et.btn_miss_card)
         miss_row.addWidget(et.lbl_missed_count)
         miss_row.addStretch(1)
         p_miss = ph.add_panel("missed", "Missed frames", body(tl.missed, miss_row),
-                              header("detection", "Missed frames"), area)
+                              header("detection", "Missed frames"), area, 150, 80)
         hint = QLabel("Scrub to a frame, turn on Fix position, then click the "
                       "animal on the video to override the tracked point.")
         hint.setWordWrap(True)
@@ -2201,7 +2202,7 @@ class ExperimentBatchTab(QWidget):
                     margins=(12, 2, 12, 12))
         corr.layout().addStretch(1)
         p_corr = ph.add_panel("corrections", "Frame corrections", corr,
-                              header("edit", "Frame corrections"), area, 220)
+                              header("edit", "Frame corrections"), area, 210, 125)
         ph.splitDockWidget(p_speed, p_corr, Qt.Horizontal)
         ph.splitDockWidget(p_speed, p_zone, Qt.Vertical)
         ph.splitDockWidget(p_zone, p_miss, Qt.Vertical)
@@ -3618,6 +3619,13 @@ class ExperimentBatchTab(QWidget):
                 et.zone_drawer.set_frame(et._first_frame_bgr)
         # Force immediate repaint so the new frame shows before a slider is touched.
         et.zone_drawer.repaint()
+        # The Configuration panel's rows just went from placeholder to real
+        # values (resolution, fps, arena/zone summaries, …), which can change
+        # its natural width — nudge the dock layout so it reflows instead of
+        # leaving stale/overlapping panel geometry (see PanelHost.refresh_layout).
+        ph = getattr(self, "panel_host", None)
+        if ph is not None:
+            ph.refresh_layout()
         return True
 
     def _open_apply_to_dialog(self):
