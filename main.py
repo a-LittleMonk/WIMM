@@ -1,4 +1,12 @@
+import os
 import sys
+
+# Keep every file the app writes inside the app folder — matplotlib's font
+# cache included (it defaults to ~/.matplotlib). Must run before matplotlib
+# is imported anywhere.
+from core.app_paths import CACHE_DIR
+os.environ.setdefault("MPLCONFIGDIR", os.path.join(CACHE_DIR, "matplotlib"))
+
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt
 from gui.main_window import MainWindow, load_config
@@ -13,7 +21,7 @@ def main():
     config = load_config()
     load_aurora(config)
     load_fonts(config)
-    apply_theme(app, config.get("theme", "light"))
+    apply_theme(app, config.get("theme", "dark"))   # first start: dark · Graphite
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())

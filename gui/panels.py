@@ -9,7 +9,7 @@ The arrangement is saved per experiment in config["panel_layout"].
 """
 import base64
 
-from PyQt5.QtCore import QByteArray, QSize, Qt, QTimer
+from PyQt5.QtCore import QByteArray, QEvent, QSize, Qt, QTimer
 from PyQt5.QtWidgets import QDockWidget, QFrame, QMainWindow, QVBoxLayout, QWidget
 
 from gui.widgets_v2 import IconButton
@@ -104,6 +104,9 @@ class PanelHost(QMainWindow):
         self._full_need = None     # layout minimum measured before narrowing
         self.narrow_hooks = []     # callables(bool) for widgets outside the docks
         self._fell_back = False   # True → showing the default layout, don't overwrite the saved one
+        self._folded_state = None  # arrangement before panels were folded into tabs
+        self._fold_stage = 0       # 0 none · 1 right side tabbed · 2 left side too
+        self._fold_need = None     # layout minimum measured before folding
 
     # Qt squeezes docks on top of each other when the window is smaller
     # than their combined minimum — so the window may not get that small, and
@@ -141,7 +144,23 @@ class PanelHost(QMainWindow):
                 self._set_narrow(True)
                 QTimer.singleShot(0, self._remeasure_docks)
                 return
-            if self._narrow and self._full_need is not None                     and self._full_need.width() <= avail_w and self._full_need.height() <= avail_h:
+            # Even narrow mode does not fit this screen → stack the panels of
+            # each column as tabs (Qt would otherwise draw them on top of
+            # each other). Not saved; undone when there is room again.
+            if (need.width() > avail_w or need.height() > avail_h) and self._narrow \
+                    and self._fold_stage < 2:
+                if self._folded_state is None:
+                    self._fold_need = QSize(need)
+                self._fold_panels()
+                self._min_timer.start()
+                return
+            if self._folded_state is not None and self._fold_need is not None \
+                    and self._fold_need.width() <= avail_w and self._fold_need.height() <= avail_h:
+                self._unfold_panels()
+                self._min_timer.start()
+                return
+            if self._narrow and self._folded_state is None and self._full_need is not None \
+                    and self._full_need.width() <= avail_w and self._full_need.height() <= avail_h:
                 self._set_narrow(False)
                 QTimer.singleShot(0, self._remeasure_docks)
                 return
@@ -149,6 +168,46 @@ class PanelHost(QMainWindow):
         if screen is not None:
             w, h = min(w, screen.width()), min(h, screen.height() - self.FRAME_MARGIN)
         win.setMinimumSize(max(w, base.width()), max(h, base.height()))
+
+    FOLD_WIDTH = {int(Qt.LeftDockWidgetArea): 300, int(Qt.RightDockWidgetArea): 250}
+
+    def _fold_panels(self):
+        """Tab together the docked panels that share a side. Stage 1 folds
+        the right / top / bottom sides; stage 2 (only if that is still too
+        big for the screen) the left side as well."""
+        if self._folded_state is None:
+            self._folded_state = self.saveState()
+        self._fold_stage += 1
+        left = int(Qt.LeftDockWidgetArea)
+        by_area = {}
+        for p in self.panels:
+            if not p.isFloating() and not p.isHidden():
+                by_area.setdefault(int(self.dockWidgetArea(p)), []).append(p)
+        for area, group in by_area.items():
+            if area == left and self._fold_stage < 2:
+                continue
+            if len(group) < 2:
+                continue
+            for other in group[1:]:
+                self.tabifyDockWidget(group[0], other)
+            group[0].raise_()
+            w = self.FOLD_WIDTH.get(area)
+            if w:
+                self.resizeDocks([group[0]], [w], Qt.Horizontal)
+
+    def _unfold_panels(self):
+        state, self._folded_state = self._folded_state, None
+        self._fold_stage = 0
+        if state is not None:
+            self.restoreState(state)
+
+    def event(self, e):
+        # A panel's or the preview's content changed size (video loaded,
+        # buttons appeared, a step expanded …) → re-check the window minimum,
+        # so a non-maximised window never ends up smaller than its panels.
+        if e.type() == QEvent.LayoutRequest:
+            self._min_timer.start()
+        return super().event(e)
 
     def _set_narrow(self, on):
         self._narrow = bool(on)
@@ -238,6 +297,8 @@ class PanelHost(QMainWindow):
 
     def reset_layout(self):
         self._fell_back = False
+        self._folded_state = None
+        self._fold_stage = 0
         if self._default_state is not None:
             for p in self.panels:
                 p.setFloating(False)
@@ -246,7 +307,7 @@ class PanelHost(QMainWindow):
             self._save_state()
 
     def _save_state(self):
-        if self._fell_back:
+        if self._fell_back or self._folded_state is not None:
             return
         data = {"panels": self._keys(),
                 "state": base64.b64encode(bytes(self.saveState())).decode("ascii")}

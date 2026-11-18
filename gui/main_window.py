@@ -9,8 +9,8 @@ from PyQt5.QtWidgets import (
     QToolButton,
 )
 from tracking.tracker import DEFAULT_MODEL_PARAMS
-from PyQt5.QtCore import Qt, QObject, QEvent, QTimer
-from PyQt5.QtGui import QKeySequence
+from PyQt5.QtCore import Qt, QObject, QEvent, QTimer, QPropertyAnimation, QEasingCurve, pyqtProperty
+from PyQt5.QtGui import QKeySequence, QPainter
 from gui.openfield_batch_tab import OpenFieldBatchTab
 from gui.y_maze_tab import YMazeBatchTab
 from gui.nor_tab import NORBatchTab
@@ -59,11 +59,13 @@ class _StayOpenMenuFilter(QObject):
         return False
 
 
-CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".mice_tracker.json")
+# Settings live inside the app folder (settings/mice_tracker.json), never in
+# the user's home folder — every copy of the app keeps its own settings.
+from core.app_paths import CONFIG_PATH, ensure_dir
 
 
 def load_config():
-    """Read ~/.mice_tracker.json (empty dict when missing / unreadable)."""
+    """Read settings/mice_tracker.json (empty dict when missing / unreadable)."""
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH) as f:
@@ -71,6 +73,33 @@ def load_config():
         except Exception:
             pass
     return {}
+
+
+class _FadeOverlay(QWidget):
+    """Snapshot of the window before a theme switch, painted on top and
+    faded out so the new theme cross-fades in instead of popping."""
+
+    def __init__(self, parent, pixmap):
+        super().__init__(parent)
+        self._pix = pixmap
+        self._opacity = 1.0
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self.setGeometry(parent.rect())
+
+    def get_opacity(self):
+        return self._opacity
+
+    def set_opacity(self, v):
+        self._opacity = float(v)
+        self.update()
+
+    opacity = pyqtProperty(float, fget=get_opacity, fset=set_opacity)
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.setOpacity(self._opacity)
+        p.drawPixmap(self.rect(), self._pix)
 
 
 class FooterBar(QWidget):
@@ -145,7 +174,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.config = self._load_config()
-        self._check_output_folder()
+        # No folder prompt on first start: runs are backed up automatically
+        # to <app folder>/backup, and each export asks where to save.
         self._no_scroll_filter = _NoScrollFilter()
         QApplication.instance().installEventFilter(self._no_scroll_filter)
         self._build_ui()
@@ -399,11 +429,48 @@ class MainWindow(QMainWindow):
         from gui.appearance_dialog import AppearanceDialog
         AppearanceDialog(self.config, self._save_config, self).exec_()
 
+    THEME_FADE_MS = 300
+
     def _on_theme_toggled(self, index):
         new_mode = "dark" if index == 1 else "light"
         self.config["theme"] = new_mode
-        self._save_config()
-        theme.apply_theme(QApplication.instance(), new_mode)
+        self._crossfade(lambda: theme.apply_theme(QApplication.instance(), new_mode))
+        # Write the setting after the switch is on screen.
+        QTimer.singleShot(self.THEME_FADE_MS + 50, self._save_config)
+
+    def _crossfade(self, change):
+        """Run `change` (a restyle) under a snapshot of the current window,
+        then fade the snapshot out: the new look fades in smoothly."""
+        old = getattr(self, "_fade_overlay", None)
+        if old is not None:                      # rapid re-toggle
+            old.hide()
+            old.deleteLater()
+            self._fade_overlay = None
+        try:
+            snap = self.grab()
+        except Exception:
+            snap = None
+        if snap is None or snap.isNull():
+            change()
+            return
+        overlay = _FadeOverlay(self, snap)
+        overlay.show()
+        overlay.raise_()
+        self._fade_overlay = overlay
+        change()
+        anim = QPropertyAnimation(overlay, b"opacity", overlay)
+        anim.setDuration(self.THEME_FADE_MS)
+        anim.setStartValue(1.0)
+        anim.setEndValue(0.0)
+        anim.setEasingCurve(QEasingCurve.InOutQuad)
+
+        def _done():
+            overlay.hide()
+            overlay.deleteLater()
+            if getattr(self, "_fade_overlay", None) is overlay:
+                self._fade_overlay = None
+        anim.finished.connect(_done)
+        anim.start()
 
     def _sync_header(self, *_):
         on_tool = self.stack.currentIndex() == 1
@@ -870,8 +937,9 @@ class MainWindow(QMainWindow):
         QApplication.quit()
 
     def _refresh_status(self, *_):
-        folder = self.config.get("output_folder") or "Not set — go to Settings to configure"
-        self.footer.set_paths(folder, self.config.get("backup_folder") or "")
+        from core.app_paths import backup_dir
+        folder = self.config.get("output_folder") or "chosen when you export"
+        self.footer.set_paths(folder, backup_dir(self.config))
         if hasattr(self, "lbl_crumb"):
             self._refresh_crumb()
         self._refresh_footer_run()
@@ -902,5 +970,9 @@ class MainWindow(QMainWindow):
         return load_config()
 
     def _save_config(self):
-        with open(CONFIG_PATH, "w") as f:
+        ensure_dir(os.path.dirname(CONFIG_PATH))
+        # Write to a temp file first so a crash mid-write can't wipe settings.
+        tmp = CONFIG_PATH + ".tmp"
+        with open(tmp, "w") as f:
             json.dump(self.config, f, indent=2)
+        os.replace(tmp, CONFIG_PATH)

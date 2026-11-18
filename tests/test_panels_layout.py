@@ -89,3 +89,27 @@ def test_default_layout_used_when_saved_one_cannot_fit(app):
     host._save_state()
     assert "called" not in saved     # ...and never overwrites the user's saved layout
     win.close()
+
+
+def test_panels_fold_into_tabs_instead_of_overlapping(app):
+    """When even narrow mode cannot fit the screen, the panels of a side are
+    tabbed together — never drawn on top of each other."""
+    from PyQt5.QtWidgets import QWidget as _W
+    screen_h = QApplication.primaryScreen().availableGeometry().height()
+    win = QMainWindow()
+    host = PanelHost(QLabel("centre"), {}, "T2", lambda: None)
+    win.setCentralWidget(host)
+    for i in range(6):   # a right-hand column far taller than the screen
+        hdr = PaneHeader("queue", f"Panel {i}")
+        host.add_panel(f"r{i}", f"Panel {i}", _W(), hdr, Qt.RightDockWidgetArea,
+                       150, screen_h // 3)
+    host.finish()
+    win.show()
+    for _ in range(6):
+        host._update_window_minimum()
+        app.processEvents()
+    assert host._fold_stage >= 1
+    shown = [p for p in host.panels if p.isVisible() and not p.visibleRegion().isEmpty()]
+    rects = [p.geometry() for p in shown]
+    assert not any(a.intersects(b) for i, a in enumerate(rects) for b in rects[i + 1:])
+    win.close()

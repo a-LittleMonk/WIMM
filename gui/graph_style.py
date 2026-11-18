@@ -323,13 +323,25 @@ def export_bg():
     return _export_bg
 
 
+# Fields that carry the data (lines, bars, markers). Their colours are the
+# same on screen as in exported files in BOTH themes — only the background
+# and the reading aids (text, axes, grid, arena outline, legend box) follow
+# light / dark mode so the on-screen graph stays readable.
+DATA_COLOR_FIELDS = {
+    "path_color", "bar_colors", "pin_start_color", "pin_end_color",
+    "center_pct_color",
+}
+
+
 def resolve_token(value, mode="light"):
-    """Map "@ink"-style tokens to hex for `mode` ("light" | "dark" |
-    "export" = light palette on a white or transparent ground)."""
+    """Map "@ink"-style tokens to hex for `mode`:
+      "light" / "dark"  on-screen colours of that theme
+      "export"          files: fixed light palette on a white or transparent ground
+      "data"            fixed light palette — data colours, identical on screen
+                        and in exports whatever the theme"""
     if mode == "export":
         if value in ("@surface", "@surface2"):
             return EXPORT_BG_CHOICES[_export_bg]
-        mode = "light"
     if isinstance(value, (list, tuple)):
         return [resolve_token(v, mode) for v in value]
     if isinstance(value, str) and value.startswith("@"):
@@ -340,10 +352,22 @@ def resolve_token(value, mode="light"):
             return theme.mono_family()
         key = _TOKEN_KEYS.get(value)
         if key:
+            if mode in ("export", "data"):
+                # Fixed palette: exports never depend on the UI theme or the
+                # Appearance colours.
+                return theme.LIGHT[key]
             if mode == theme.mode():
                 return getattr(theme, key)  # live palette (View → Appearance)
             return (theme.DARK if mode == "dark" else theme.LIGHT)[key]
     return value
+
+
+def resolve_field(field, value, mode="light"):
+    """resolve_token for one style field: data colours use the fixed
+    palette (same as the export) in every mode."""
+    if field in DATA_COLOR_FIELDS and mode != "export":
+        mode = "data"
+    return resolve_token(value, mode)
 
 
 # Drag-to-position fields (chart editor). Every graph has a title and a plot
@@ -473,7 +497,7 @@ def speed_axis(st, name, base_unit="cm/s"):
 
 
 def resolve_style(style, mode="light"):
-    return {k: resolve_token(v, mode) for k, v in style.items()}
+    return {k: resolve_field(k, v, mode) for k, v in style.items()}
 
 
 def _style(**overrides):

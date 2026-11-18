@@ -113,6 +113,8 @@ class OutputTabsMixin:
     def _on_graph_select(self, index):
         name = self._combo_graph.itemText(index)
         pix = self._graph_pixmaps.get(name)
+        if hasattr(self, "_ensure_screen_graph"):
+            pix = self._ensure_screen_graph(name) or pix   # redraw after a theme switch
         if pix:
             self._graph_lbl.setPixmap(pix)
         if hasattr(self, "_sync_graph_panel"):

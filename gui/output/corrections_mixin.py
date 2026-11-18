@@ -187,12 +187,15 @@ class CorrectionsMixin:
                 self.slider_scrub.setValue(i + offset)
                 return
 
-    def _interpolate_gaps(self):
+    def _interpolate_gaps(self, max_len=None):
+        """Fill runs of missed frames with a straight line between the good
+        frames on both sides. `max_len` (frames): longer runs are skipped."""
         if not self.tracking_results:
             return
         results = self.tracking_results
         n = len(results)
         filled = 0
+        skipped = 0
         i = 0
         while i < n:
             if results[i].get("x") is None:
@@ -200,14 +203,18 @@ class CorrectionsMixin:
                 while j < n and results[j].get("x") is None:
                     j += 1
                 prev = i - 1
-                if prev >= 0 and j < n:
+                if max_len is not None and (j - i) > int(max_len):
+                    skipped += 1            # longer than Max gap: leave missed
+                elif prev >= 0 and j < n:
                     x0, y0 = results[prev]["x"], results[prev]["y"]
                     x1, y1 = results[j]["x"], results[j]["y"]
                     span = j - prev
                     for k in range(i, j):
                         t = (k - prev) / span
                         for r in self._result_rows(k):
-                            r["orig_x"], r["orig_y"] = None, None   # for Clear
+                            if "orig_x" not in r:      # keep a removed point's original
+                                r["orig_x"], r["orig_y"] = None, None   # for Clear
+                            r.pop("corrected", None)
                             r["x"] = x0 + t * (x1 - x0)
                             r["y"] = y0 + t * (y1 - y0)
                             r["interpolated"] = True
@@ -219,7 +226,8 @@ class CorrectionsMixin:
         if filled:
             self.btn_clear_fixes.setEnabled(True)
             self._corrections_changed()
-            self.lbl_track.setText(f"Interpolated {filled} missing frames")
+            self.lbl_track.setText(f"Interpolated {filled} missing frames"
+                                   + (f" ({skipped} longer gap(s) left)" if skipped else ""))
             theme.set_tone(self.lbl_track, "warn", "font-size:11px;")
         else:
             self.lbl_track.setText("No gaps to interpolate")

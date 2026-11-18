@@ -108,7 +108,7 @@ AURORA_PRESETS = {
         "Graphite": {"accent": "#F2B35B", "base": "#0A0B0D", "colors": [["#2A2F38", 0.50], ["#1B2230", 0.50]]},
     },
 }
-AURORA_DEFAULT_PRESET = {"light": "Lilac daylight", "dark": "Dusk violet"}
+AURORA_DEFAULT_PRESET = {"light": "Lilac daylight", "dark": "Graphite"}
 
 
 def copy_spec(spec):
@@ -334,19 +334,23 @@ def _assets():
     radio dot, combo / spin arrows) for the current mode. Returns
     {name: forward-slash path}. Each asset also gets an @2x twin for HiDPI."""
     import os
-    import tempfile
     from PyQt5.QtCore import QPointF, QRectF, Qt
     from PyQt5.QtGui import QBrush, QPainter, QPen, QPixmap
     from gui import icons
+    from core.app_paths import CACHE_DIR
 
-    # Keyed by the colours used: Qt caches stylesheet images by path.
+    # Keyed by the colours used: Qt caches stylesheet images by path. Kept in
+    # the app folder (settings/cache), not the system temp folder.
     key = "_".join(c.lstrip("#") for c in (ACCENT, INPUT, BORDER_2, ON_ACCENT, FAINT, TEXT_2, SCROLL))
-    folder = os.path.join(tempfile.gettempdir(), "mice_tracker_theme", f"{_mode}_{key}")
+    folder = os.path.join(CACHE_DIR, "theme", f"{_mode}_{key}")
     os.makedirs(folder, exist_ok=True)
     out = {}
 
     def save(name, size, draw, height=None):
         height = height or size
+        out[name] = '"' + os.path.join(folder, f"{name}.png").replace("\\", "/") + '"'
+        if all(os.path.exists(os.path.join(folder, f"{name}{sfx}.png")) for sfx in ("", "@2x")):
+            return          # same colours rendered before — reuse (faster theme switch)
         for scale, suffix in ((1, ""), (2, "@2x")):
             pm = QPixmap(size * scale, height * scale)
             pm.fill(Qt.transparent)
@@ -356,8 +360,6 @@ def _assets():
             draw(p, scale)
             p.end()
             pm.save(os.path.join(folder, f"{name}{suffix}.png"), "PNG")
-        # quoted: the temp path may contain spaces
-        out[name] = '"' + os.path.join(folder, f"{name}.png").replace("\\", "/") + '"'
 
     def box(checked, hover=False):
         def draw(p, _s):

@@ -110,7 +110,7 @@ def draw_body_overlay(frame, r, frame_idx=None, results=None,
                      style="off", do_ellipse=False,
                      do_trail=False, trail_len=0, trail_fade=False,
                      color_fn=None, tag_lines=None,
-                     shape="ring", size=15):
+                     shape="dot", size=5):
     """Burn body / ellipse / trail overlays onto a numpy frame.
 
     Parameters

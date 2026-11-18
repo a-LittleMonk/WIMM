@@ -108,21 +108,13 @@ class GraphsMixin:
         if len(x) < 2:
             logger.warn("Export: not enough data points", source="graphs")
             return False
-        _, arena, _, _ = self._graph_data()
-        builders = self._make_graph_builders(x, y, arena)
-        builder = builders.get(graph_name)
-        if builder is None:
-            logger.warn(f"Export: unknown graph '{graph_name}'", source="graphs")
-            return False
-        self._force_fig_mode = "export"     # light palette, white / transparent ground
         try:
-            fig = builder()
+            # light palette, white / transparent ground — same as the preview
+            fig = self._build_export_figure(graph_name)
         except Exception as e:
             logger.warn(f"Export: build failed for '{graph_name}': {e}",
                         source="graphs")
             return False
-        finally:
-            self._force_fig_mode = None
         if fig is None:
             logger.warn(f"Export: builder declined '{graph_name}' "
                         "(missing zone mode / no data)", source="graphs")
@@ -131,7 +123,7 @@ class GraphsMixin:
             fmt = self.EXPORT_FORMATS[ext][0]
             # bbox_inches="tight" keeps colorbar / legend inside the page
             # even when the user dragged them outside the axes.
-            fig.savefig(out_path, format=fmt, dpi=200, bbox_inches="tight")
+            fig.savefig(out_path, format=fmt, dpi=self.EXPORT_DPI, bbox_inches="tight")
         except Exception as e:
             logger.warn(f"Export: savefig failed for '{graph_name}': {e}",
                         source="graphs")
@@ -185,6 +177,11 @@ class GraphsMixin:
         if full:
             self._graph_pixmaps = {}
             self._graph_png_bytes = {}
+            self._graph_screen_stale = set()
+        else:
+            stale = getattr(self, "_graph_screen_stale", None)
+            if stale:
+                stale.difference_update(only)
 
         # Single source of truth for build order + builder lambdas. Shared
         # with _export_graph_to_path so vector exports build the same figs.
@@ -261,13 +258,105 @@ class GraphsMixin:
         self._graph_scroll.setVisible(True)
         if hasattr(self, "_rebuild_graph_list"):
             self._rebuild_graph_list()
+        if hasattr(self, "_fill_graph_preset_combo"):
+            self._fill_graph_preset_combo()     # Customize… may have changed it
 
     def _on_theme_graphs(self, _mode):
+        """Theme switched. Only the on-screen pictures follow the theme (the
+        export PNGs use the fixed export look), so nothing is rebuilt here —
+        that used to redraw every graph twice and made the switch take ~1 s.
+        The graph on screen is redrawn once the cross-fade has finished; the
+        others are redrawn when they are opened."""
+        if self.raw_df is None or not getattr(self, "_graph_pixmaps", None):
+            return
+        self._graph_screen_stale = set(self._graph_pixmaps)
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(self.THEME_GRAPH_DELAY_MS, self._refresh_shown_graph_if_stale)
+
+    THEME_GRAPH_DELAY_MS = 340      # just after the theme cross-fade
+
+    def _refresh_shown_graph_if_stale(self):
+        name = self._combo_graph.currentText() if hasattr(self, "_combo_graph") else ""
+        if name:
+            self._ensure_screen_graph(name)
+
+    def _ensure_screen_graph(self, name):
+        """Redraw graph `name` for the current theme when a theme switch left
+        its on-screen picture outdated. Returns the (fresh) pixmap or None."""
+        stale = getattr(self, "_graph_screen_stale", None)
+        if not stale or name not in stale:
+            return self._graph_pixmaps.get(name)
+        stale.discard(name)
         try:
-            if self.raw_df is not None and self._graph_pixmaps:
-                self._populate_graph_tab()
+            if self.raw_df is None:
+                return None
+            x = self.raw_df["X (px)"].dropna().values
+            y = self.raw_df["Y (px)"].dropna().values
+            if len(x) < 2:
+                return None
+            _, arena, _, _ = self._graph_data()
+            fig = self._make_graph_builders(x, y, arena)[name]()
+            if fig is None:
+                return self._graph_pixmaps.get(name)
+            pix = self._fig_to_pixmap_and_bytes(fig)[0]
         except Exception as e:
-            logger.warn(f"graph theme refresh failed: {e}", source="graphs")
+            logger.warn(f"graph theme refresh failed for '{name}': {e}", source="graphs")
+            return self._graph_pixmaps.get(name)
+        self._graph_pixmaps[name] = pix
+        if self._combo_graph.currentText() == name:
+            self._graph_lbl.setPixmap(pix)
+        return pix
+
+    # ── Export preview (exactly what the saved files look like) ───────────
+
+    EXPORT_DPI = 200
+
+    def _build_export_figure(self, graph_name):
+        """Figure for `graph_name` in the export look: export preset, light
+        palette, white / transparent ground. Same builder the SVG / PDF / PNG
+        export and the Excel images use. None when it cannot be drawn."""
+        if self.raw_df is None or len(self.raw_df) == 0:
+            return None
+        x = self.raw_df["X (px)"].dropna().values
+        y = self.raw_df["Y (px)"].dropna().values
+        if len(x) < 2:
+            return None
+        _, arena, _, _ = self._graph_data()
+        builder = self._make_graph_builders(x, y, arena).get(graph_name)
+        if builder is None:
+            return None
+        self._force_fig_mode = "export"
+        try:
+            return builder()
+        finally:
+            self._force_fig_mode = None
+
+    def _render_export_png(self, graph_name, dpi=None):
+        """PNG bytes of `graph_name` exactly as Export writes it, or None."""
+        import matplotlib.pyplot as plt
+        try:
+            fig = self._build_export_figure(graph_name)
+        except Exception as e:
+            logger.warn(f"Export preview: build failed for '{graph_name}': {e}", source="graphs")
+            return None
+        if fig is None:
+            return None
+        buf = BytesIO()
+        try:
+            fig.savefig(buf, format="png", dpi=dpi or self.EXPORT_DPI, bbox_inches="tight")
+        finally:
+            plt.close(fig)
+        return buf.getvalue()
+
+    def _open_export_preview(self):
+        """Popup showing the selected graph exactly as it will be exported."""
+        if self.raw_df is None or not self._combo_graph.currentText():
+            QMessageBox.information(self, "Export preview", "Run tracking first.")
+            return
+        from gui.export_preview import ExportPreviewDialog
+        names = [self._combo_graph.itemText(i) for i in range(self._combo_graph.count())]
+        dlg = ExportPreviewDialog(self, names, self._combo_graph.currentText())
+        dlg.exec_()
 
     # ── Tracking Issues tab → gui/output/tracking_issues_mixin.py
 
@@ -619,6 +708,81 @@ class GraphsMixin:
         return [_pt(lo, lo), _pt(hi, lo), _pt(hi, hi), _pt(lo, hi)]
 
 
+    # ── True-shape spatial graphs (square arena → square graph) ───────────
+
+    def _arena_phys_ratio(self):
+        """Height / width of the real arena, or None when unknown.
+
+        Square cage → 1. Rectangle with auto-calibration from the cage size
+        → the entered H / W. Otherwise the arena as drawn (mean of opposite
+        edges). Only for Open Field / NOR (EPM and Y-Maze draw a canonical
+        maze)."""
+        if self._plugin_key() not in ("open_field", "nor"):
+            return None
+        if self._plugin_key() == "nor":
+            return 1.0                  # the NOR cage is always square
+        combo = getattr(self, "combo_cage_shape", None)
+        shape = (combo.currentData() if combo is not None
+                 else self.config.get("cage_shape", "rectangle"))
+        if shape == "square":
+            return 1.0
+        calib = self._calib_mode() if hasattr(self, "_calib_mode") else "auto"
+        if shape == "rectangle" and calib == "auto":
+            try:
+                w = float(self.spin_cage_w.value())
+                h = float(self.spin_cage_h.value())
+                if w > 0 and h > 0:
+                    return h / w
+            except Exception:
+                pass
+        # Measured from the arena corners in the original video.
+        zd = getattr(self, "zone_drawer", None)
+        if getattr(self, "_perspective_on", False) and getattr(self, "_original_arena", None):
+            quad = self._original_arena
+            vw, vh = (getattr(self, "_native_video_size", None)
+                      or (self.video_w, self.video_h))
+        else:
+            quad = getattr(zd, "arena", None)
+            vw, vh = self.video_w, self.video_h
+        if not quad or len(quad) != 4 or not vw or not vh:
+            return None
+        pts = [(float(x) * vw, float(y) * vh) for x, y in quad]
+        tl = min(pts, key=lambda p: p[0] + p[1])
+        br = max(pts, key=lambda p: p[0] + p[1])
+        tr = max(pts, key=lambda p: p[0] - p[1])
+        bl = min(pts, key=lambda p: p[0] - p[1])
+        d = lambda a, b: float(np.hypot(a[0] - b[0], a[1] - b[1]))
+        w = (d(tl, tr) + d(bl, br)) / 2.0
+        h = (d(tl, bl) + d(tr, br)) / 2.0
+        return h / w if w > 0 and h > 0 else None
+
+    def _true_shape(self, fig, ax, width_in=6.0):
+        """Draw the arena with its real proportions — a square arena becomes
+        a square plot even when the video frame is not square — and size
+        the figure to match so the saved picture has no empty side bands."""
+        ratio = self._arena_phys_ratio()
+        if ratio is None:
+            return
+        x0, x1 = ax.get_xlim()
+        y0, y1 = ax.get_ylim()
+        bw, bh = abs(x1 - x0), abs(y1 - y0)
+        if bw <= 0 or bh <= 0:
+            return
+        ax.set_aspect(ratio * bw / bh, adjustable="box")
+        # New figure height = same top / bottom margins (in inches) + a plot
+        # area of the arena's shape. Other axes (the colour bar) keep their
+        # distance from the bottom edge, so no gap opens above them.
+        W, H0 = fig.get_figwidth(), fig.get_figheight()
+        sp = fig.subplotpars
+        top_in, bot_in = (1.0 - sp.top) * H0, sp.bottom * H0
+        plot_w_in = max(0.5, (sp.right - sp.left) * W)
+        H = max(1.0, top_in + bot_in + plot_w_in * ratio)
+        others = [(a, a.get_position()) for a in fig.axes if a is not ax]
+        fig.set_size_inches(W, H)
+        fig.subplots_adjust(bottom=bot_in / H, top=1.0 - top_in / H)
+        for a, pos in others:
+            a.set_position([pos.x0, pos.y0 * H0 / H, pos.width, pos.height * H0 / H])
+
     @staticmethod
     def _text_color_for_bg(bg_hex):
         """Pick black/white text for readability on a given bg color."""
@@ -708,7 +872,10 @@ class GraphsMixin:
             _, arena, _, _ = self._graph_data()
         except Exception:
             return False
-        dims = getattr(getattr(self, "zone_drawer", None), "cage_dims_cm", None)
+        try:
+            dims = self._arena_dims_cm()     # fresh — same on screen and in files
+        except Exception:
+            dims = getattr(getattr(self, "zone_drawer", None), "cage_dims_cm", None)
         if not (arena and len(arena) >= 3 and dims):
             return False
         w_cm, h_cm = float(dims[0]), float(dims[1])
@@ -1001,6 +1168,8 @@ class GraphsMixin:
             handles.extend(plugin_handles)
         self._apply_legend(ax, "Trajectory", st, handles=handles)
         ax.set_aspect("equal", adjustable="box")
+        if not shape_polys:
+            self._true_shape(fig, ax)
         fig.tight_layout()
         return fig
 
@@ -1202,6 +1371,8 @@ class GraphsMixin:
             except Exception:
                 pass
 
+        if mask_polys_px and not shape_polys:
+            self._true_shape(fig, ax)
         return fig
 
     def _cell_divider_style(self, name, st, fallback_color):
@@ -1357,6 +1528,7 @@ class GraphsMixin:
             except Exception:
                 pass
 
+        self._true_shape(fig, ax)
         return fig
 
     def _make_zone_bar_fig(self):
@@ -1381,7 +1553,7 @@ class GraphsMixin:
             df = self.raw_df
             zones  = ["center_zone", "periphery", "undetected", "outside"]
             labels = ["Center Zone", "Periphery", "Undetected", "Outside"]
-            default_colors = resolve_token(["@ac", "@ink3", "@warn", "@err"], self._fig_mode())
+            default_colors = resolve_token(["@ac", "@ink3", "@warn", "@err"], "data")
             values = [(df["Zone"] == z).sum() / fps for z in zones]
             value_fmt = lambda v: f"{v:.1f}s"
 
@@ -1512,7 +1684,7 @@ class GraphsMixin:
             thr = 0.0
         if thr > 0 and len(time):
             thr = thr * factor               # threshold is set in cm/s
-            wc = resolve_token("@warn", self._fig_mode())
+            wc = resolve_token("@warn", "data")
             ax.axhline(thr, color=wc, linestyle=(0, (5, 3)), linewidth=1.0)
             ax.text(float(time.max()), thr, f"move threshold {thr:.3g} {sp_unit}",
                     ha="right", va="bottom", color=wc, fontsize=9)
@@ -1549,7 +1721,7 @@ class GraphsMixin:
         ax.hist(speeds, bins=60, range=(0, upper), color=st["path_color"],
                 weights=np.full(len(speeds), tfac / fps_h),
                 edgecolor=st.get("hist_edge_color", "#222222"), linewidth=0.5)
-        mode_h = self._fig_mode()
+        mode_h = "data"                 # same stat-line colours on screen and in files
         for v, lbl, c in (
             (med, "median", resolve_token(GRAPH_ACCENTS["stat_median"], mode_h)),
             (p90, "P90",    resolve_token(GRAPH_ACCENTS["stat_p90"], mode_h)),
@@ -1601,7 +1773,7 @@ class GraphsMixin:
         if len(x_vals) >= 2:
             slope, intercept = np.polyfit(x_vals, y_vals, 1)
             fit = slope * x_vals + intercept
-            ax.plot(x_vals, fit, color=resolve_token(GRAPH_ACCENTS["linfit"], self._fig_mode()),
+            ax.plot(x_vals, fit, color=resolve_token(GRAPH_ACCENTS["linfit"], "data"),
                     linestyle=(0, (6, 3)), linewidth=1.2,
                     label=f"slope {slope:+.3g} {unit}/{t_unit}")
         ax.set_ylim(0, max(y_vals) * 1.18 if len(y_vals) and max(y_vals) > 0 else 1)

@@ -101,6 +101,62 @@ APPLY_FIELD_GROUPS = [
 # explicitly opts in to overwriting arena / metadata / etc.
 APPLY_DEFAULTS_ON = {"Detection (sliders / threshold / model)"}
 
+# Batch rule: every setting that changes the data is shared by the whole
+# batch (taken from the video the user set up). Only what is drawn on /
+# tied to one particular video stays per video.
+PER_VIDEO_KEYS = frozenset({
+    # Arena / area detection
+    "arena", "original_arena", "perspective",
+    "arena_auto_movement", "arena_define_mode", "arena_pad_pct",
+    "center_zone", "center",          # center is re-derived from center_pct
+    # Calibration line drawn on this video
+    "calib_p1", "calib_p2", "calib_cm",
+    # Masks / crop / animal info
+    "exclusion_mask", "crop", "metadata",
+    "video_w", "video_h",
+    # EPM geometry
+    "arms_norm", "center_norm", "arm_kinds", "arm_custom_names",
+    "epm_endpoints", "epm_hub", "epm_original_endpoints", "epm_original_hub",
+    "epm_homography", "epm_warp_size", "epm_perspective",
+    # Y-Maze geometry
+    "neutral_norm", "ym_endpoints", "ym_hub",
+    "ym_original_endpoints", "ym_original_hub", "ym_perspective",
+    # NOR object placement / roles
+    "objects_norm",
+})
+
+
+def merge_batch_settings(shared_src, own):
+    """Settings one video runs with in a batch: its own per-video keys plus
+    every other key from `shared_src` (deep-copied so videos never share
+    mutable objects)."""
+    import copy
+    merged = dict(own or {})
+    for k, v in (shared_src or {}).items():
+        if k in PER_VIDEO_KEYS:
+            continue
+        merged[k] = copy.deepcopy(v)
+    return merged
+
+
+def derive_center_zone(s, exp_key):
+    """Open Field: rebuild the center polygon from the arena and center_pct,
+    exactly as the panel does, so a shared / swept center % really applies.
+    Mutates and returns `s`."""
+    if exp_key != "open_field":
+        return s
+    arena = s.get("arena")
+    if not arena or len(arena) < 3 or s.get("center_pct") is None:
+        return s
+    pct = float(s["center_pct"]) / 100.0
+    n = float(len(arena))
+    cx = sum(p[0] for p in arena) / n
+    cy = sum(p[1] for p in arena) / n
+    s["center_zone"] = [(cx + (p[0] - cx) * pct, cy + (p[1] - cy) * pct)
+                        for p in arena]
+    s.pop("center", None)
+    return s
+
 
 class _RangeSlider(QWidget):
     """Horizontal slider with two handles: start (left) and end (right).
@@ -1052,7 +1108,7 @@ class ExperimentBatchTab(QWidget):
         grid.setColumnStretch(1, 1)
 
         # ── Output folder section
-        folder_box = Section("Output folder")
+        folder_box = Section("Export folder")
         fl = QHBoxLayout()
         fl.setSpacing(6)
         self.lbl_output = ElidingLabel("(not set)")
@@ -1061,6 +1117,7 @@ class ExperimentBatchTab(QWidget):
         self.lbl_output.setTextInteractionFlags(Qt.TextSelectableByMouse)
         fl.addWidget(self.lbl_output, 1)
         b_change = QPushButton("Change…")
+        b_change.setToolTip("Folder the export dialogs open in. Every export still lets you pick.")
         b_change.clicked.connect(self._change_output_folder)
         fl.addWidget(b_change)
         b_open = QPushButton("Open")
@@ -1130,8 +1187,8 @@ class ExperimentBatchTab(QWidget):
         preset_row.addWidget(self.combo_export_preset, 1)
         batch_box.body.addLayout(preset_row)
         hint = QLabel(
-            "Per-video Excel files are saved automatically to the output "
-            "folder when tracking finishes."
+            "Each video's Excel is backed up automatically when tracking "
+            "finishes. The buttons above ask where to save the export."
         )
         theme.set_tone(hint, "faint", "font-size:11px;")
         hint.setWordWrap(True)
@@ -1455,15 +1512,9 @@ class ExperimentBatchTab(QWidget):
                 theme.set_tone(self.lbl_export_video, "faint", "font-size:11px;")
                 return
             targets = picked
-        # Output folder is the one configured in the Output folder section
-        # at the top of this tab. No save dialog — every target is written
-        # as <output_folder>/<videoname>_annotated.mp4.
-        out_folder = self.config.get("output_folder")
-        if not out_folder or not os.path.isdir(out_folder):
-            QMessageBox.warning(
-                self, "Output folder not set",
-                "Set an output folder above first (Output folder → Change…)."
-            )
+        # Every target is written as <chosen folder>/<videoname>_annotated.mp4.
+        out_folder = self._ask_export_folder("Save rendered video(s) to…")
+        if not out_folder:
             return
         # Warn before silently overwriting any existing files.
         existing = []
@@ -1709,10 +1760,10 @@ class ExperimentBatchTab(QWidget):
         if not self._completed_data:
             self.lbl_export_status.setText("Nothing to export — run tracking first.")
             return
-        out_folder = self.config.get("output_folder")
+        out_folder = self._ask_export_folder("Save combined raw data to…")
         if not out_folder:
-            self.lbl_export_status.setText("Set an output folder first.")
             return
+        self._prepare_exports()
         from datetime import datetime
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         out_path = os.path.join(out_folder, f"open_field_raw-{ts}.xlsx")
@@ -1750,7 +1801,8 @@ class ExperimentBatchTab(QWidget):
         if gs is None:
             return None
         names = gs.all_preset_names()
-        for cand in (self.config.get("export_graph_preset"), gs.active_preset):
+        # The Output graphs and the exports use one preset: the active one.
+        for cand in (gs.active_preset, self.config.get("export_graph_preset")):
             if cand in names:
                 return cand
         return names[0]
@@ -1769,7 +1821,15 @@ class ExperimentBatchTab(QWidget):
         combo.blockSignals(False)
 
     def _on_export_preset(self, _i=None):
-        self.config["export_graph_preset"] = self.combo_export_preset.currentText()
+        name = self.combo_export_preset.currentText()
+        et = getattr(self, "embedded_tab", None)
+        # Same preset for the Output graphs and the exports, so what is on
+        # screen matches the files.
+        if et is not None and hasattr(et, "_choose_graph_preset"):
+            if not et._choose_graph_preset(name):
+                self._fill_export_presets()          # cancelled → show the active one
+                return
+        self.config["export_graph_preset"] = name
         self._save_config()
 
     def _export_preset_name(self):
@@ -1777,8 +1837,8 @@ class ExperimentBatchTab(QWidget):
         already are exactly that preset (cached images can be reused)."""
         gs = getattr(getattr(self, "embedded_tab", None), "_graph_style", None)
         name = self._chosen_export_preset()
-        if name is None or (name == gs.active_preset and not gs.is_modified()):
-            return None
+        if name is None or name == gs.active_preset:
+            return None             # exports = the graphs as shown (incl. edits)
         return name
 
     @contextmanager
@@ -1843,6 +1903,76 @@ class ExperimentBatchTab(QWidget):
                 self._load_into_embedded(shown)
             QApplication.restoreOverrideCursor()
 
+    # ── Keep exports identical to what the app shows ─────────────────────
+
+    def _graph_sig(self):
+        """Everything that changes how graphs are drawn."""
+        import json
+        from gui.graph_style import export_bg
+        et = getattr(self, "embedded_tab", None)
+        gs = getattr(et, "_graph_style", None)
+        try:
+            return json.dumps([gs.to_dict() if gs is not None else None, export_bg(),
+                               dict(theme.FONTS)], sort_keys=True, default=str)
+        except Exception:
+            return None
+
+    def _settings_sig(self, path):
+        import json
+        try:
+            return json.dumps(self.video_settings.get(path) or {}, sort_keys=True, default=str)
+        except Exception:
+            return None
+
+    def _sync_completed_from_embedded(self):
+        """Copy the loaded video's current results (with corrections),
+        numbers and graph images into its export cache."""
+        path = self._embedded_loaded_path
+        data = self._completed_data.get(path) if path else None
+        et = self.embedded_tab
+        if not data or et._raw_results is None or et.raw_df is None:
+            return
+        data["results"] = [dict(r) for r in et._raw_results]
+        data["metrics"] = dict(et.metrics or {})
+        data["raw_df"] = et.raw_df
+        data["bin_df"] = et.bin_df
+        if getattr(et, "_graph_png_bytes", None):
+            data["graph_pngs"] = dict(et._graph_png_bytes)
+            data["graph_sig"] = self._graph_sig()
+        data["settings_sig"] = self._settings_sig(path)
+        for i, row in enumerate(self._completed):
+            if row and row[0] == path:
+                self._completed[i] = (row[0], row[1], dict(data["metrics"]), row[3])
+
+    def _prepare_exports(self):
+        """Before a batch export: save the shown video's edits, then redo
+        any video whose numbers or graphs are older than its settings /
+        the current graph style."""
+        if not getattr(self, "_read_only", False):
+            self._capture_embedded_settings()
+        self._sync_completed_from_embedded()
+        sig = self._graph_sig()
+        stale = [p for p, d in self._completed_data.items()
+                 if d.get("results") and (d.get("graph_sig") != sig
+                                          or d.get("settings_sig") != self._settings_sig(p))]
+        if not stale:
+            return
+        from PyQt5.QtWidgets import QApplication
+        shown = self._embedded_loaded_path
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            for p in stale:
+                if self._embedded_loaded_path == p:
+                    self.embedded_tab._recompute_metrics_and_views()
+                else:
+                    self._load_into_embedded(p, read_only=True)
+                self._sync_completed_from_embedded()
+                QApplication.processEvents()
+        finally:
+            if shown and self._embedded_loaded_path != shown:
+                self._load_into_embedded(shown)
+            QApplication.restoreOverrideCursor()
+
     def _render_export_pngs_all(self):
         """{path: png map} in the export preset, or {} when cached images match it."""
         if self._export_preset_name() is None:
@@ -1851,10 +1981,10 @@ class ExperimentBatchTab(QWidget):
         self._for_each_completed(lambda p: out.__setitem__(p, self._render_export_pngs()))
         return out
 
-    def _write_vector_graphs(self, name):
-        """SVG / PDF of the loaded video's graphs into <output>/<name>_graphs.
+    def _write_vector_graphs(self, name, out_folder):
+        """SVG / PDF of the loaded video's graphs into <out_folder>/<name>_graphs.
         Returns the number of files written (0 when switched off)."""
-        out_folder = (self.config.get("output_folder") or "").strip()
+        out_folder = (out_folder or "").strip()
         want = [ext for ext, key in ((".svg", "export_svg"), (".pdf", "export_pdf"))
                 if self.config.get(key)]
         et = self.embedded_tab
@@ -1881,17 +2011,17 @@ class ExperimentBatchTab(QWidget):
         if not (self.config.get("export_svg") or self.config.get("export_pdf")):
             lbl.setText("Tick “Also save SVG” and/or “Also save PDF” first.")
             return
-        out_folder = (self.config.get("output_folder") or "").strip()
-        if not out_folder or not os.path.isdir(out_folder):
-            lbl.setText("Set an output folder first.")
-            return
         if not self._completed_data:
             lbl.setText("Nothing to export — run tracking first.")
             return
+        out_folder = self._ask_export_folder("Save SVG / PDF graphs to…")
+        if not out_folder:
+            return
+        self._prepare_exports()
         count = {"files": 0, "videos": 0}
 
         def one(path):
-            n = self._write_vector_graphs(os.path.splitext(os.path.basename(path))[0])
+            n = self._write_vector_graphs(os.path.splitext(os.path.basename(path))[0], out_folder)
             count["files"] += n
             count["videos"] += 1 if n else 0
         self._for_each_completed(one)
@@ -1905,10 +2035,10 @@ class ExperimentBatchTab(QWidget):
         if not self._completed_data:
             self.lbl_export_status.setText("Nothing to combine — run tracking first.")
             return
-        out_folder = self.config.get("output_folder")
+        out_folder = self._ask_export_folder("Save combined Excel to…")
         if not out_folder:
-            self.lbl_export_status.setText("Set an output folder first.")
             return
+        self._prepare_exports()
         from datetime import datetime
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         exp = getattr(self.embedded_tab, "experiment", None) if hasattr(
@@ -2138,7 +2268,8 @@ class ExperimentBatchTab(QWidget):
         p_queue = ph.add_panel("queue", "Queue", left, qh, Qt.LeftDockWidgetArea, 236, 260)
         p_config = ph.add_panel("config", "Configuration", middle, ch, Qt.LeftDockWidgetArea, 270, 100)
         ph.splitDockWidget(p_queue, p_config, Qt.Horizontal)
-        sizes = [(p_queue, 244), (p_config, 324)]
+        sizes = [(p_queue, 290), (p_config, 305)]
+        p_meas = None
         mp = getattr(self.embedded_tab, "measure_panel", None)
         if mp is not None:
             mp.setParent(None)              # lift it out of the preview row
@@ -2146,15 +2277,18 @@ class ExperimentBatchTab(QWidget):
             mp.setMaximumWidth(16777215)
             mh = PaneHeader("analysis", "Measurements")
             p_meas = ph.add_panel("measure", "Measurements", mp, mh, Qt.RightDockWidgetArea, 200, 62)
-            sizes.append((p_meas, 296))
-        heights = self._add_timeline_panels(ph, sizes)
+            sizes.append((p_meas, 240))
+        heights = self._add_timeline_panels(ph, sizes, p_meas)
         ph.finish(sizes, heights)
         ph.narrow_hooks.append(self.embedded_tab.set_transport_compact)
         # Output folder + export buttons live in the Export sub-tab now.
 
-    def _add_timeline_panels(self, ph, sizes):
-        """Speed · Center / periphery · Missed frames · Frame corrections
-        panels, docked under the video by default. Returns default heights."""
+    def _add_timeline_panels(self, ph, sizes, p_meas=None):
+        """Frame corrections · Speed · Center / periphery · Missed frames
+        panels. Default arrangement: one right-hand column, top to bottom
+        Measurements · Frame corrections · Speed · Center / periphery ·
+        Missed frames (Queue | Configuration on the left, preview in the
+        middle). Returns default heights."""
         et = self.embedded_tab
         tl = getattr(et, "speed_timeline", None)
         if tl is None or not hasattr(tl, "speed"):
@@ -2181,7 +2315,7 @@ class ExperimentBatchTab(QWidget):
             h.setFixedHeight(38)
             return h
 
-        area = Qt.BottomDockWidgetArea
+        area = Qt.RightDockWidgetArea
         p_speed = ph.add_panel("speed", "Speed", body(tl.speed), header("analysis", "Speed"), area, 150, 70)
         p_zone = ph.add_panel("zone", "Center / periphery", body(tl.zone),
                               header("zones", "Center / periphery"), area, 150, 60)
@@ -2203,12 +2337,17 @@ class ExperimentBatchTab(QWidget):
         corr.layout().addStretch(1)
         p_corr = ph.add_panel("corrections", "Frame corrections", corr,
                               header("edit", "Frame corrections"), area, 210, 125)
-        ph.splitDockWidget(p_speed, p_corr, Qt.Horizontal)
+        # One column under Measurements, in this order.
+        if p_meas is not None:
+            ph.splitDockWidget(p_meas, p_corr, Qt.Vertical)
+        ph.splitDockWidget(p_corr, p_speed, Qt.Vertical)
         ph.splitDockWidget(p_speed, p_zone, Qt.Vertical)
         ph.splitDockWidget(p_zone, p_miss, Qt.Vertical)
-        sizes.append((p_corr, 250))
         et._show_corrections_panel = lambda: (p_corr.show(), p_corr.raise_())
-        return [(p_speed, 150), (p_zone, 96), (p_miss, 100)]
+        heights = [(p_corr, 180), (p_speed, 140), (p_zone, 125), (p_miss, 140)]
+        if p_meas is not None:
+            heights.insert(0, (p_meas, 125))
+        return heights
 
     # ── Drag-and-drop ─────────────────────────────────────────────────────
 
@@ -2564,6 +2703,21 @@ class ExperimentBatchTab(QWidget):
                 return False
         return True
 
+    def _experiment_key(self):
+        exp = getattr(getattr(self, "embedded_tab", None), "experiment", None)
+        return getattr(exp, "key", None)
+
+    def _smooth_for_metrics(self, results, s):
+        window = int(s.get("smooth", 0) or 0)
+        et = getattr(self, "embedded_tab", None)
+        if window <= 1 or et is None or not hasattr(et, "_apply_smoothing"):
+            return results
+        try:
+            return et._apply_smoothing(results, window)
+        except Exception as e:
+            logger.warn(f"Smoothing skipped: {e}", source="tracking")
+            return results
+
     def _has_arena(self, path):
         """True if `path` has an arena polygon saved OR is queued for
         auto-from-movement detection (which builds the arena during the run).
@@ -2587,11 +2741,13 @@ class ExperimentBatchTab(QWidget):
         arena = s.get("arena")
         return bool(arena) and len(arena) >= 3
 
-    def _preflight_video(self, path):
+    def _preflight_video(self, path, s=None):
         """Return (status, reasons) where status ∈ {ok, warn, blocked}.
-        Blocked = cannot run; warn = runs but with caveats; ok = green."""
+        Blocked = cannot run; warn = runs but with caveats; ok = green.
+        `s` overrides the saved settings (used for the batch-merged ones)."""
         reasons = []
-        s = self.video_settings.get(path) or {}
+        if s is None:
+            s = self.video_settings.get(path) or {}
         # Arena (blocking).
         if not self._has_arena(path):
             reasons.append(("blocked", "no arena drawn"))
@@ -2617,15 +2773,16 @@ class ExperimentBatchTab(QWidget):
             return "warn", reasons
         return "ok", reasons
 
-    def _show_preflight_dialog(self, report):
+    def _show_preflight_dialog(self, report, note=None):
         """report: list of (path, status, reasons). Returns True if user
-        wants to proceed, False to cancel."""
+        wants to proceed, False to cancel. With `note`, the dialog is shown
+        even when every video is ready."""
         from PyQt5.QtWidgets import QDialog, QDialogButtonBox
         glyphs = {"ok": "✓", "warn": "⚠", "blocked": "✗"}
         colors = {"ok": theme.OK, "warn": theme.WARN, "blocked": theme.ERR}
         any_blocked = any(st == "blocked" for _, st, _ in report)
         any_warn    = any(st == "warn"    for _, st, _ in report)
-        if not any_blocked and not any_warn:
+        if not any_blocked and not any_warn and not note:
             return True
         dlg = QDialog(self)
         dlg.setWindowTitle("Pre-flight check")
@@ -2633,10 +2790,16 @@ class ExperimentBatchTab(QWidget):
         v = QVBoxLayout(dlg)
         hdr = QLabel(
             "Cannot run — fix the blocked videos first." if any_blocked
-            else "Run anyway? Some videos have warnings."
+            else "Run anyway? Some videos have warnings." if any_warn
+            else f"Ready to run {len(report)} video(s)."
         )
         hdr.setStyleSheet("font-weight:bold; font-size:13px;")
         v.addWidget(hdr)
+        if note:
+            nl = QLabel(note)
+            nl.setWordWrap(True)
+            nl.setStyleSheet("font-size:11px;")
+            v.addWidget(nl)
         for path, status, reasons in report:
             row = QHBoxLayout()
             glyph = QLabel(glyphs[status])
@@ -2657,7 +2820,8 @@ class ExperimentBatchTab(QWidget):
             bb.rejected.connect(dlg.reject)
         else:
             bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-            bb.button(QDialogButtonBox.Ok).setText("Run anyway")
+            bb.button(QDialogButtonBox.Ok).setText(
+                "Run anyway" if any_warn else "Run all")
             bb.accepted.connect(dlg.accept)
             bb.rejected.connect(dlg.reject)
         v.addWidget(bb)
@@ -2667,10 +2831,45 @@ class ExperimentBatchTab(QWidget):
         if not self.videos:
             QMessageBox.warning(self, "Nothing to run", "Add videos first.")
             return
-        # Pre-flight: per-video readiness check.
-        report = [(p, *self._preflight_video(p)) for p in self.videos]
-        if not self._show_preflight_dialog(report):
+        # One settings source for the whole batch: the video currently shown
+        # in the panel. Everything that affects the data comes from it; only
+        # per-video geometry (arena, zones, calibration line, mask, crop,
+        # animal info) stays with each video.
+        src = self._embedded_loaded_path
+        if not src or src not in self.videos:
+            QMessageBox.information(
+                self, "Pick the settings video",
+                "Click the video whose settings the whole batch should use, "
+                "then press Run all again."
+            )
             return
+        if not getattr(self, "_read_only", False):
+            self._capture_embedded_settings()
+        try:
+            shared = dict(self.embedded_tab.snapshot_settings())
+        except Exception:
+            shared = dict(self.video_settings.get(src) or {})
+        exp_key = self._experiment_key()
+        merged = {}
+        for p in self.videos:
+            own = self.video_settings.get(p) or {}
+            merged[p] = derive_center_zone(merge_batch_settings(shared, own), exp_key)
+        # Pre-flight: per-video readiness check on the settings that will run.
+        report = [(p, *self._preflight_video(p, merged[p])) for p in self.videos]
+        note = None
+        if len(self.videos) > 1:
+            note = (f"All videos will use the settings of <b>{os.path.basename(src)}</b>. "
+                    "Only the arena, zones, calibration line, exclusion mask, crop "
+                    "and animal info stay per video.")
+        if not self._show_preflight_dialog(report, note=note):
+            return
+        for p in self.videos:
+            self.video_settings[p] = merged[p]
+            self._mark_ready_if_eligible(p, merged[p])
+        logger.info(
+            f"Batch settings source: {os.path.basename(src)} -> {len(self.videos)} video(s)",
+            source="tracking",
+        )
         configured = list(self.videos)
         self._stop_flag = False
         self._low_detection = []
@@ -2749,14 +2948,9 @@ class ExperimentBatchTab(QWidget):
                 "Click the row to select it, then draw the arena (Step 3)."
             )
             return
-        out_folder = self.config.get("output_folder")
-        if not out_folder:
-            out_folder = QFileDialog.getExistingDirectory(self, "Choose output folder")
-            if not out_folder:
-                return
-            self.config["output_folder"] = out_folder
-            self._save_config()
-            self._refresh_output_label()
+        # No folder needed to run: results are backed up automatically
+        # (<app folder>/backup unless one is set in Settings).
+        out_folder = None
 
         s = dict(self.video_settings.get(path, {}))
         row = self.row_widgets.get(path)
@@ -3108,14 +3302,17 @@ class ExperimentBatchTab(QWidget):
             s.get("cell_min_dwell_s", s.get("cell_min_dwell", 0.2))
         )
         plugin_settings["trim_start_s"] = float(s.get("trim_start", 0.0))
+        # Apply the track-smoothing setting ("Smoothing, frames") so batch /
+        # Multi-Run numbers match what the panel shows for this video.
+        metric_results = self._smooth_for_metrics(results, s)
         exp = getattr(self.embedded_tab, "experiment", None)
         if exp is not None:
             metrics, raw_df, bin_df = exp.compute_metrics(
-                results, plugin_settings, fps, px_per_cm,
+                metric_results, plugin_settings, fps, px_per_cm,
             )
         else:
             metrics, raw_df, bin_df = compute_metrics(
-                results=results, arena=arena_px, center_zone=center_px,
+                results=metric_results, arena=arena_px, center_zone=center_px,
                 px_per_cm=px_per_cm, fps=fps,
                 movement_threshold=plugin_settings["movement_threshold"],
                 bin_size_s=plugin_settings["bin_size_s"],
@@ -3155,14 +3352,17 @@ class ExperimentBatchTab(QWidget):
         self._load_into_embedded(path)
         graph_images = dict(getattr(self.embedded_tab, "_graph_png_bytes", {}) or {})
         self._completed_data[path]["graph_pngs"] = graph_images
+        self._completed_data[path]["graph_sig"] = self._graph_sig()
+        self._completed_data[path]["settings_sig"] = self._settings_sig(path)
         # Files use the export preset (the Output tab keeps the current look).
         if self._export_preset_name() is not None:
             graph_images = self._render_export_pngs() or graph_images
 
-        # Autosave goes to the BACKUP folder (separate from the main output
-        # folder driven by the manual Export button). xlsx only — no CSVs.
-        # Skip entirely if no backup folder is set.
-        backup_folder = (self.config.get("backup_folder") or "").strip()
+        # Autosave goes to the BACKUP folder (separate from the exports the
+        # user starts, which ask for a folder). xlsx only — no CSVs. Default:
+        # <app folder>/backup, or the folder set in Settings.
+        from core.app_paths import backup_dir
+        backup_folder = backup_dir(self.config)
         if backup_folder and os.path.isdir(backup_folder):
             backup_path = os.path.join(backup_folder, f"{name}_open_field.xlsx")
             exp = getattr(self.embedded_tab, "experiment", None)
@@ -3188,7 +3388,7 @@ class ExperimentBatchTab(QWidget):
                 "Backup skipped — no backup folder set (Settings → Set Backup Folder…)",
                 source="backup",
             )
-        self._write_vector_graphs(name)
+        self._write_vector_graphs(name, backup_folder)
 
     # ── Multi-Run helper ────────────────────────────────────────────────
     def _track_for_multirun(self, path, s, progress_cb=None):
@@ -3215,6 +3415,7 @@ class ExperimentBatchTab(QWidget):
             vw, vh = full_vw, full_vh
 
         # Multi-Run requires an explicit arena (no auto-from-movement here).
+        s = derive_center_zone(dict(s), self._experiment_key())
         arena_norm = s.get("arena")
         center_norm = s.get("center_zone", s.get("center"))  # legacy fallback
         if not arena_norm:
@@ -3385,14 +3586,17 @@ class ExperimentBatchTab(QWidget):
             s.get("cell_min_dwell_s", s.get("cell_min_dwell", 0.2))
         )
         plugin_settings["trim_start_s"] = float(s.get("trim_start", 0.0))
+        # Apply the track-smoothing setting ("Smoothing, frames") so batch /
+        # Multi-Run numbers match what the panel shows for this video.
+        metric_results = self._smooth_for_metrics(results, s)
         exp = getattr(self.embedded_tab, "experiment", None)
         if exp is not None:
             metrics, raw_df, bin_df = exp.compute_metrics(
-                results, plugin_settings, fps, px_per_cm,
+                metric_results, plugin_settings, fps, px_per_cm,
             )
         else:
             metrics, raw_df, bin_df = compute_metrics(
-                results=results, arena=arena_px, center_zone=center_px,
+                results=metric_results, arena=arena_px, center_zone=center_px,
                 px_per_cm=px_per_cm, fps=fps,
                 movement_threshold=plugin_settings["movement_threshold"],
                 bin_size_s=plugin_settings["bin_size_s"],
@@ -3491,6 +3695,9 @@ class ExperimentBatchTab(QWidget):
         # (no-op in read-only mode).
         if self._embedded_loaded_path and self._embedded_loaded_path != path:
             self._capture_embedded_settings()
+            # Keep the edits made on the video we leave (corrections, new
+            # thresholds / zones, graph style) for its exports.
+            self._sync_completed_from_embedded()
         # Reset stale state so a previous video's results / scrub frame can't
         # bleed onto the new one's preview.
         et = self.embedded_tab
@@ -3612,8 +3819,13 @@ class ExperimentBatchTab(QWidget):
         data = self._completed_data.get(path)
         if data and data.get("results"):
             # Pass the whole cache dict — _apply_results_to_embedded will
-            # reuse cached metrics + graphs and skip the recompute.
-            self._apply_results_to_embedded(data["results"], cached=data)
+            # reuse cached metrics + graphs and skip the recompute — unless
+            # this video's settings changed since (e.g. "Apply to…"): then
+            # recompute so numbers match the settings.
+            fresh = data.get("settings_sig") == self._settings_sig(path)
+            self._apply_results_to_embedded(data["results"], cached=data if fresh else None)
+            if not fresh:
+                self._sync_completed_from_embedded()
         else:
             if et._first_frame_bgr is not None:
                 et.zone_drawer.set_frame(et._first_frame_bgr)
@@ -3764,8 +3976,11 @@ class ExperimentBatchTab(QWidget):
                 self._hydrate_cached_graphs(et, cached.get("graph_pngs") or {})
                 # timeline / sidebar / heat layer aren't part of the cache
                 et._refresh_redesign_data()
-                if theme.mode() == "dark" and et.raw_df is not None:
-                    et._populate_graph_tab()    # cached PNGs are the light renders
+                if et.raw_df is not None:
+                    # Redraw with the CURRENT preset / style (it may have
+                    # changed since this video was tracked); also refreshes
+                    # the export images used by Excel.
+                    et._populate_graph_tab()
             except Exception:
                 import traceback
                 traceback.print_exc()
@@ -3843,17 +4058,39 @@ class ExperimentBatchTab(QWidget):
         if not hasattr(self, "lbl_output"):
             return
         f = self.config.get("output_folder")
-        self.lbl_output.setText(f if f else "(not set)")
+        self.lbl_output.setText(f if f else "(you choose the folder at each export)")
         if hasattr(self, "lbl_backup_note"):
-            bk = self.config.get("backup_folder")
+            from core.app_paths import backup_dir
+            bk = backup_dir(self.config)
             mono = theme.mono_family()
             self.lbl_backup_note.setText(
-                f"Backup folder: <span style=\"font-family:'{mono}'; color:{theme.TEXT_2}\">"
-                f"{bk if bk else 'Not set'}</span> — set in Settings to autosave "
-                f"Excel after each run.")
+                f"Automatic backup after each run: <span style=\"font-family:'{mono}'; "
+                f"color:{theme.TEXT_2}\">{bk}</span> — change in Settings → Set Backup Folder…")
+
+    def _ask_export_folder(self, title="Export to…"):
+        """Folder picker shown by every export; opens in the last folder used
+        and remembers the choice. Returns the folder or None (cancelled)."""
+        from core.app_paths import app_dir
+        start = self.config.get("output_folder") or ""
+        if not os.path.isdir(start):
+            start = app_dir()
+        folder = QFileDialog.getExistingDirectory(self, title, start)
+        if not folder:
+            return None
+        if folder != self.config.get("output_folder"):
+            self.config["output_folder"] = folder
+            self._save_config()
+            self._refresh_output_label()
+            win = self.window()
+            if hasattr(win, "_refresh_status"):
+                win._refresh_status()
+        return folder
 
     def _change_output_folder(self):
-        start = self.config.get("output_folder") or os.path.expanduser("~")
+        start = self.config.get("output_folder") or ""
+        if not os.path.isdir(start):
+            from core.app_paths import app_dir
+            start = app_dir()
         folder = QFileDialog.getExistingDirectory(self, "Choose output folder", start)
         if folder:
             self.config["output_folder"] = folder

@@ -35,3 +35,10 @@ results/
 output/
 # Source-code package — exempt from the `output/` ignore for run artifacts.
 !gui/output/
+
+# App settings + caches (kept inside the app folder, per copy)
+settings/
+backup/
+
+# Local copies of earlier versions
+WIMM old versions/

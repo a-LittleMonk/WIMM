@@ -155,9 +155,9 @@ class VideoLegend(QWidget):
     def _paint_marker(self, p, c, r):
         """Legend sample of the body marker in its current shape + colour."""
         tab = self._tab
-        col = QColor(getattr(tab, "_colors", {}).get("body", "#F2F4F7"))
+        col = QColor(getattr(tab, "_colors", {}).get("body", "#F70004"))
         combo = getattr(tab, "combo_marker_shape", None)
-        shape = combo.currentData() if combo is not None else "ring"
+        shape = combo.currentData() if combo is not None else "dot"
         p.setBrush(Qt.NoBrush)
         p.setPen(QPen(col, 1.4, Qt.DashLine if shape == "ring" else Qt.SolidLine))
         if shape == "dot":

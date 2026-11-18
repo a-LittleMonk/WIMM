@@ -36,7 +36,7 @@ from gui.graph_style import (
     ACCENT_COLORS as GRAPH_ACCENTS,
 )
 
-PRESETS_PATH = os.path.join(os.path.expanduser("~"), ".mice_tracker_presets.json")
+from core.app_paths import PRESETS_PATH, ensure_dir as _ensure_dir   # inside the app folder
 _TUNING_RESET = 2   # Model-tuning dialog result: Reset pressed (reopen with new values)
 # Reserved combo entries — never stored as real entries in self._presets.
 DEFAULT_PRESET_NAME = "Default"
@@ -97,7 +97,7 @@ def _migrate_combo_value(value, legacy_list, default):
 
 
 DEFAULT_COLORS = {
-    "body":         "#F2F4F7",
+    "body":         "#F70004",      # body marker: red filled dot
     "nose":         "#5DBB85",
     "tail":         "#A9B4C6",
     "arena":        "#A9B4C6",
@@ -299,7 +299,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             "model_params": {m: dict(p) for m, p in self._model_params.items()},
             "post_params":  dict(self._post_params),
             "body_style":   self.combo_body_style.currentData() or "dot",
-            "marker_shape": self.combo_marker_shape.currentData() or "ring",
+            "marker_shape": self.combo_marker_shape.currentData() or "dot",
             "marker_size":  int(self.spin_marker_size.value()),
             "marker_tag":   self.chk_marker_tag.isChecked(),
             "ellipse":      self.chk_ellipse.isChecked(),
@@ -683,7 +683,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             "trail_fade":   self.chk_trail_fade.isChecked(),
             "ellipse":      self.chk_ellipse.isChecked(),
             "body_style":   self.combo_body_style.currentData() or "dot",
-            "marker_shape": self.combo_marker_shape.currentData() or "ring",
+            "marker_shape": self.combo_marker_shape.currentData() or "dot",
             "marker_size":  int(self.spin_marker_size.value()),
             "marker_tag":   self.chk_marker_tag.isChecked(),
             "body_color":   self._colors.get("body"),
@@ -1575,11 +1575,13 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self.combo_marker_shape = QComboBox()
         for key, label in MARKER_SHAPES:
             self.combo_marker_shape.addItem(label, key)
+        self.combo_marker_shape.setCurrentIndex(
+            max(0, self.combo_marker_shape.findData("dot")))   # default: filled dot
         self.combo_marker_shape.currentIndexChanged.connect(self._on_body_marker_changed)
 
         self.spin_marker_size = QSpinBox()
         self.spin_marker_size.setRange(2, 60)
-        self.spin_marker_size.setValue(15)
+        self.spin_marker_size.setValue(5)
         self.spin_marker_size.setSuffix(" px")
         self.spin_marker_size.setToolTip(
             "Marker radius, in pixels of a 640 px wide video\n"
@@ -1815,6 +1817,16 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         cv.addLayout(row1)
         cv.addSpacing(8)
         self._transport_extras = (self.lbl_total, fblock)
+        # Parts hidden one by one when the bar gets narrow (least useful
+        # first), so the preview never forces the window to be wide.
+        self._transport_row = row1
+        self._transport_card = card
+        self._transport_droppable = [fblock, self.lbl_total,
+                                     self.seg_play_speed, self.btn_issues]
+        self._transport_forced = False
+        self._transport_fitting = False
+        card.setMinimumWidth(240)
+        card.installEventFilter(self)
 
         # Speed / Center-periphery / Missed tracks — shown as separate panels.
         self.speed_timeline = TimelineTracks(self)
@@ -1874,8 +1886,42 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         return outer
     def set_transport_compact(self, on):
         """Narrow mode: hide the time total and FRAME read-out."""
-        for w in getattr(self, "_transport_extras", ()):
-            w.setHidden(bool(on))
+        self._transport_forced = bool(on)
+        self._fit_transport()
+
+    def eventFilter(self, obj, event):
+        from PyQt5.QtCore import QEvent
+        if obj is getattr(self, "_transport_card", None) and event.type() == QEvent.Resize:
+            self._fit_transport()
+        return super().eventFilter(obj, event)
+
+    def _fit_transport(self):
+        """Show as many transport parts as fit the bar's current width."""
+        card = getattr(self, "_transport_card", None)
+        if card is None or self._transport_fitting:
+            return
+        self._transport_fitting = True
+        try:
+            row = self._transport_row
+            m = card.contentsMargins()
+            lm = card.layout().contentsMargins()
+            avail = card.width() - m.left() - m.right() - lm.left() - lm.right()
+            forced = set(map(id, self._transport_extras)) if self._transport_forced else set()
+            items = self._transport_droppable
+            # Show everything allowed, then drop parts until the row fits.
+            for wd in items:
+                if id(wd) not in forced:
+                    wd.setHidden(False)
+                else:
+                    wd.setHidden(True)
+            # btn_issues only shows when it has a reason to (results loaded).
+            for wd in items:
+                row.invalidate()
+                if row.minimumSize().width() <= avail:
+                    break
+                wd.setHidden(True)
+        finally:
+            self._transport_fitting = False
 
     def _build_legend(self):
         w = QWidget()
@@ -1928,7 +1974,8 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
 
         # left: graph list
         left = OutPanel()
-        left.setFixedWidth(200)
+        left.setMinimumWidth(130)       # shrinks when the preview is narrow
+        left.setMaximumWidth(200)
         self._graph_list_lay = QVBoxLayout()
         self._graph_list_lay.setContentsMargins(4, 4, 4, 4)
         self._graph_list_lay.setSpacing(0)
@@ -1977,6 +2024,10 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             lambda i: self._set_export_bg("transparent" if i else "white"))
         right._bar_layout.addWidget(self.seg_export_bg)
 
+        # Preset strip: which graph-style preset the graphs (on screen and
+        # in every export) are drawn with, plus the Export preview popup.
+        right.body.addWidget(self._build_graph_preset_bar())
+
         self._graph_scroll = right          # toggled by _populate_graph_tab
         self._graph_lbl = _FitLabel()
         self._graph_lbl.setMinimumHeight(320)
@@ -2008,6 +2059,103 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
 
         self._graph_pixmaps = {}
         return w
+
+    def _build_graph_preset_bar(self):
+        bar = QWidget()
+        bar.setObjectName("GraphPresetBar")
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(14, 8, 14, 0)
+        h.setSpacing(8)
+        lbl = QLabel("Preset")
+        theme.set_tone(lbl, "text2", "font-size: 11px;")
+        h.addWidget(lbl)
+
+        tab = self
+
+        class _PresetCombo(QComboBox):
+            def showPopup(self):            # pick up presets made meanwhile
+                tab._fill_graph_preset_combo()
+                super().showPopup()
+
+        self.combo_graph_preset = _PresetCombo()
+        self.combo_graph_preset.setMinimumWidth(150)
+        self.combo_graph_preset.setToolTip(
+            "Graph-style preset used for these graphs and for every exported "
+            "graph (SVG / PDF / PNG files and Excel images). Make presets in "
+            "Customize… (Ctrl+G).")
+        self.combo_graph_preset.activated.connect(
+            lambda _i: self._choose_graph_preset(self.combo_graph_preset.currentText()))
+        h.addWidget(self.combo_graph_preset)
+        self.lbl_graph_preset_state = QLabel("")
+        h.addWidget(self.lbl_graph_preset_state)
+        h.addSpacing(6)
+        self.btn_export_preview = QPushButton("Export preview")
+        self.btn_export_preview.setFixedHeight(24)
+        self.btn_export_preview.setCursor(Qt.PointingHandCursor)
+        self.btn_export_preview.setToolTip(
+            "Open the selected graph exactly as it will be exported — export "
+            "colours and background, independent of light / dark mode")
+        self.btn_export_preview.clicked.connect(self._open_export_preview)
+        h.addWidget(self.btn_export_preview)
+        h.addStretch(1)
+        self._fill_graph_preset_combo()
+        # set_tone bakes the colour in — re-tone (cheap) when the theme flips.
+        theme.notifier.changed.connect(lambda _m: theme.set_tone(
+            self.lbl_graph_preset_state, "warn", "font-size: 11px;"))
+        return bar
+
+    def _fill_graph_preset_combo(self):
+        """Show the active preset (and whether the graphs were changed since)."""
+        combo = getattr(self, "combo_graph_preset", None)
+        gs = getattr(self, "_graph_style", None)
+        if combo is None or gs is None:
+            return
+        names = gs.all_preset_names()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(names)
+        combo.setCurrentText(gs.active_preset)
+        combo.blockSignals(False)
+        modified = gs.is_modified()
+        self.lbl_graph_preset_state.setText("● modified" if modified else "")
+        theme.set_tone(self.lbl_graph_preset_state, "warn", "font-size: 11px;")
+        self.lbl_graph_preset_state.setToolTip(
+            "The graphs were changed in Customize… after this preset was "
+            "loaded. Save them as a preset there to keep them." if modified else "")
+
+    def _choose_graph_preset(self, name):
+        """Load preset `name` into the graphs and use it for exports too.
+        Returns False when the user cancels (unsaved graph changes)."""
+        gs = getattr(self, "_graph_style", None)
+        if gs is None or not name:
+            return False
+        if name == gs.active_preset and not gs.is_modified():
+            self._fill_graph_preset_combo()
+            return True
+        if gs.is_modified():
+            ans = QMessageBox.question(
+                self, "Switch graph preset",
+                "Your graph changes are not saved in a preset.\n\n"
+                f"Load preset “{name}” and discard them?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if ans != QMessageBox.Yes:
+                self._fill_graph_preset_combo()
+                return False
+        gs.apply_preset(name)
+        owner = getattr(self, "_batch_owner", None)
+        if owner is not None and isinstance(getattr(owner, "config", None), dict):
+            owner.config["export_graph_preset"] = name
+        self.config["export_graph_preset"] = name
+        self._save_graph_style_to_config()
+        if owner is not None and hasattr(owner, "_fill_export_presets"):
+            owner._fill_export_presets()
+        self._fill_graph_preset_combo()
+        try:
+            if self.raw_df is not None:
+                self._populate_graph_tab()
+        except Exception as e:
+            logger.warn(f"graph preset refresh failed: {e}", source="graphs")
+        return True
 
     def _rebuild_graph_list(self):
         """(Re)create the left-hand graph buttons from the combo entries."""
@@ -3305,6 +3453,14 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         if frame is None:
             return
         display = self._get_processed_frame_bgr(frame) if self.btn_view_processed.isChecked() else frame.copy()
+        self._draw_tracked_point(display)
+        self.zone_drawer.set_frame(display)
+
+    def _draw_tracked_point(self, display):
+        """Draw the tracked point of the current frame (body marker, or the
+        hand-fixed / interpolated marker) onto `display` (BGR, in place)."""
+        if display is None or getattr(display, "ndim", 3) != 3:
+            return
         if self.tracking_results:
             rel_idx = self._slider_to_results_idx(self.slider_scrub.value())
             r = self.tracking_results[rel_idx]
@@ -3320,7 +3476,27 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
                     cv2.circle(display, (int(xv), int(yv)), 9, (130, 70, 170), 2)
             else:
                 self._draw_body_on_frame(display, r, rel_idx)
-        self.zone_drawer.set_frame(display)
+
+    def _detection_mask(self, frame_bgr):
+        """What the current Detection settings find on `frame_bgr`
+        (uint8 mask), or None while the preview background isn't ready."""
+        if frame_bgr is None or self._preview_bg_raw is None:
+            return None
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        bg_raw = self._warp(self._preview_bg_raw) if self._H is not None else self._preview_bg_raw
+        if bg_raw.shape[:2] != gray.shape[:2]:
+            return None
+        args = (self.slider_brightness.value(), self.slider_contrast.value() / 100.0,
+                self.slider_blur.value(), self.slider_gamma.value() / 100.0,
+                self.slider_sharpen.value(), self.spin_clahe.value())
+        proc_frame = apply_preprocessing(gray, *args)
+        proc_bg = apply_preprocessing(bg_raw, *args)
+        mask = get_mask(proc_frame, proc_bg, self.spin_threshold.value(),
+                        self.zone_drawer.get_arena_pixels())
+        exc = self.zone_drawer.get_exclusion_mask()
+        if exc is not None and exc.any():
+            mask = cv2.bitwise_and(mask, cv2.bitwise_not(exc))
+        return mask
 
     def _update_preview(self):
         if not self._preview_active:
@@ -3331,23 +3507,10 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         if current is None or self._preview_bg_raw is None:
             return
 
-        brightness = self.slider_brightness.value()
-        contrast   = self.slider_contrast.value() / 100.0
-        blur       = self.slider_blur.value()
-        gamma      = self.slider_gamma.value() / 100.0
-        sharpen    = self.slider_sharpen.value()
-        clahe_clip = self.spin_clahe.value()
-        threshold  = self.spin_threshold.value()
-        arena      = self.zone_drawer.get_arena_pixels()
-
-        gray = cv2.cvtColor(current, cv2.COLOR_BGR2GRAY)
-        bg_raw = self._warp(self._preview_bg_raw) if self._H is not None else self._preview_bg_raw
-        proc_frame = apply_preprocessing(gray, brightness, contrast, blur, gamma, sharpen, clahe_clip)
-        proc_bg    = apply_preprocessing(bg_raw, brightness, contrast, blur, gamma, sharpen, clahe_clip)
-        mask = get_mask(proc_frame, proc_bg, threshold, arena)
-        exc = self.zone_drawer.get_exclusion_mask()
-        if exc is not None and exc.any():
-            mask = cv2.bitwise_and(mask, cv2.bitwise_not(exc))
+        mask = self._detection_mask(current)
+        if mask is None:
+            self._render_current_frame()
+            return
 
         # Show mask → the black-and-white mask is the picture; otherwise the
         # (processed) frame. Detected area → highlight drawn on top of it.
@@ -3360,7 +3523,9 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
                                    self.overlay_alpha / 100.0)
         else:
             display = base
-
+        # After a run, show the tracked point on top of the detected area,
+        # so detection problems and tracking glitches can be told apart.
+        self._draw_tracked_point(display)
         self.zone_drawer.set_frame(display)
 
     _LAST_PRESET_KEY = "detection_preset_by_test"   # config: {test key: preset name}
@@ -3429,6 +3594,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         return {}
 
     def _save_presets_file(self):
+        _ensure_dir(os.path.dirname(PRESETS_PATH))
         with open(PRESETS_PATH, "w") as f:
             json.dump(self._presets, f, indent=2)
 
@@ -3459,7 +3625,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             "model_params": {m: dict(p) for m, p in self._model_params.items()},
             "post_params":  dict(self._post_params),
             "body_style":   self.combo_body_style.currentData() or "dot",
-            "marker_shape": self.combo_marker_shape.currentData() or "ring",
+            "marker_shape": self.combo_marker_shape.currentData() or "dot",
             "marker_size":  int(self.spin_marker_size.value()),
             "marker_tag":   self.chk_marker_tag.isChecked(),
             "ellipse":      self.chk_ellipse.isChecked(),
@@ -3750,11 +3916,13 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
     # ── Step 6 ────────────────────────────────────────────────────────────
 
     def _export(self):
-        output_folder = self.config.get("output_folder")
+        from core.app_paths import app_dir
+        start = self.config.get("output_folder") or ""
+        output_folder = QFileDialog.getExistingDirectory(
+            self, "Export to…", start if os.path.isdir(start) else app_dir())
         if not output_folder:
-            QMessageBox.warning(self, "No Output Folder",
-                                "Go to Settings → Set Output Folder first.")
             return
+        self.config["output_folder"] = output_folder
 
         px_per_cm = None
         if self.zone_drawer.calib_p1 and self.zone_drawer.calib_p2:
@@ -3953,7 +4121,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             frame, r, frame_idx=frame_idx,
             results=results_override if results_override is not None else self.tracking_results,
             style=body_style if body_style is not None else self.combo_body_style.currentData(),
-            shape=self.combo_marker_shape.currentData() or "ring",
+            shape=self.combo_marker_shape.currentData() or "dot",
             size=int(self.spin_marker_size.value()),
             do_ellipse=draw_ellipse if draw_ellipse is not None else self.chk_ellipse.isChecked(),
             do_trail=draw_trail if draw_trail is not None else self.chk_trail.isChecked(),
@@ -4216,20 +4384,30 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         except Exception:
             pass
 
+    def _arena_dims_cm(self, ppc=None):
+        """(width, height) of the arena in cm, or None when not calibrated.
+        Computed fresh (the graphs need it before the canvas label exists)."""
+        zd = self.zone_drawer
+        vw, vh = self.video_w or 0, self.video_h or 0
+        if ppc is None:
+            ppc = self._get_px_per_cm() if self.video_path else None
+        if not (zd.arena and len(zd.arena) == 4 and vw and vh and ppc):
+            return None
+        pts = [(x * vw, y * vh) for x, y in zd.arena]
+        TL, TR, BR, BL = zd._sorted_corners(pts)
+        wpx = ((TR[0] - TL[0]) ** 2 + (TR[1] - TL[1]) ** 2) ** 0.5
+        hpx = ((BL[0] - TL[0]) ** 2 + (BL[1] - TL[1]) ** 2) ** 0.5
+        return (round(wpx / ppc, 1), round(hpx / ppc, 1))
+
     def _refresh_canvas_extras(self):
         """Arena label / ruler dimensions / legend summary for the canvas."""
         zd = self.zone_drawer
-        vw, vh = self.video_w or 0, self.video_h or 0
         ppc = self._get_px_per_cm() if self.video_path else None
         label, dims = "", None
         if zd.arena:
             label = "ARENA"
-            if len(zd.arena) == 4 and vw and ppc:
-                pts = [(x * vw, y * vh) for x, y in zd.arena]
-                TL, TR, BR, BL = zd._sorted_corners(pts)
-                wpx = ((TR[0] - TL[0]) ** 2 + (TR[1] - TL[1]) ** 2) ** 0.5
-                hpx = ((BL[0] - TL[0]) ** 2 + (BL[1] - TL[1]) ** 2) ** 0.5
-                dims = (round(wpx / ppc, 1), round(hpx / ppc, 1))
+            dims = self._arena_dims_cm(ppc)
+            if dims:
                 label = f"ARENA · {dims[0]:.1f} × {dims[1]:.1f} cm"
         pct = self.spin_center_pct.value() if hasattr(self, "spin_center_pct") else None
         zd.set_arena_dims(label, dims, pct)

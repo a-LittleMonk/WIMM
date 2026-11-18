@@ -18,7 +18,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
 from gui.graph_style import (
     GRAPH_NAMES, GRAPH_FIELDS, BUILTIN_PRESETS, GraphStyleConfig,
-    ACCENT_COLORS, default_style_for, resolve_style, resolve_token, speed_axis,
+    ACCENT_COLORS, default_style_for, resolve_style, resolve_token, resolve_field, speed_axis,
     time_axis, distance_axis, axis_title_style,
 )
 
@@ -993,7 +993,7 @@ class GraphStyleDialog(QDialog):
                 pass
 
     def _add_color(self, form, field, label, style):
-        btn = _ColorButton(resolve_token(style.get(field, "#000000"), _fig_mode()),
+        btn = _ColorButton(resolve_field(field, style.get(field, "#000000"), _fig_mode()),
                            lambda hx, f=field: self._commit(f, hx), self)
         wrap = QHBoxLayout()
         wrap.setContentsMargins(0, 0, 0, 0)
@@ -1136,7 +1136,7 @@ class GraphStyleDialog(QDialog):
 
     def _add_bar_colors(self, form, style):
         """Editor for the 4 zone-bar colors."""
-        cols = list(resolve_token(style.get("bar_colors") or ["@ac", "@ink3", "@warn", "@err"], _fig_mode()))
+        cols = list(resolve_token(style.get("bar_colors") or ["@ac", "@ink3", "@warn", "@err"], "data"))
         baseline = default_style_for(self._current, self._current_plugin_key).get("bar_colors") or []
         labels = ["Center", "Periphery", "Undetected", "Outside"]
         for i, lbl in enumerate(labels):
@@ -2249,9 +2249,9 @@ class GraphStyleDialog(QDialog):
                     color=st["path_color"],
                     edgecolor=st.get("hist_edge_color", "#222222"))
             for v, lbl, c in (
-                (float(np.median(speeds)),       "median", resolve_token(ACCENT_COLORS["stat_median"], _fig_mode())),
-                (float(np.quantile(speeds, .9)), "P90",    resolve_token(ACCENT_COLORS["stat_p90"], _fig_mode())),
-                (p99,                            "P99",    resolve_token(ACCENT_COLORS["stat_p99"], _fig_mode())),
+                (float(np.median(speeds)),       "median", resolve_token(ACCENT_COLORS["stat_median"], "data")),
+                (float(np.quantile(speeds, .9)), "P90",    resolve_token(ACCENT_COLORS["stat_p90"], "data")),
+                (p99,                            "P99",    resolve_token(ACCENT_COLORS["stat_p99"], "data")),
             ):
                 ax.axvline(v, color=c, linewidth=1.5, linestyle="--",
                            label=f"{lbl}: {v:.3g} {sp_unit}")
@@ -2272,7 +2272,7 @@ class GraphStyleDialog(QDialog):
             if x_v.size >= 2:
                 slope, intercept = np.polyfit(x_v, y_v, 1)
                 ax.plot(x_v, slope * x_v + intercept,
-                        color=resolve_token(ACCENT_COLORS["linfit"], _fig_mode()),
+                        color=resolve_token(ACCENT_COLORS["linfit"], "data"),
                         linestyle=(0, (6, 3)), linewidth=1.2,
                         label=f"slope {slope:+.3g} {d_unit}/{t_unit}")
             if y_v.size and y_v.max() > 0:

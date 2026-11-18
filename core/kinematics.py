@@ -82,6 +82,20 @@ def compute_basic_kinematics(df: pd.DataFrame, fps, unit, movement_threshold=0.0
         "Total Frames":              total_frames,
         "Detection Rate (%)":        det_rate,
     }
+    # Corrections: how much of the track is not the tracker's own output.
+    def _flag(col):
+        if col not in df.columns:
+            return pd.Series(False, index=df.index)
+        return df[col].fillna(False).astype(bool)
+    interp = int(_flag("interpolated").sum())
+    corr = _flag("corrected")
+    hand = int((corr & df["x"].notna()).sum())
+    removed = int((corr & df["x"].isna()).sum())
+    out["Interpolated Frames"] = interp
+    out["Hand-fixed Frames"] = hand
+    out["Removed Frames"] = removed
+    out["Corrected Frames (%)"] = (round(100.0 * (interp + hand + removed) / total_frames, 2)
+                                   if total_frames > 0 else 0.0)
 
     speeds = df["speed"].dropna()
     if not speeds.empty:

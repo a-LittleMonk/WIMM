@@ -34,7 +34,7 @@ from matplotlib.transforms import ScaledTranslation
 
 from gui import theme
 from gui.graph_style import (DISTANCE_UNIT_CHOICES, SPEED_UNIT_CHOICES, TIME_UNIT_CHOICES, apply_layout_overrides, default_style_for,
-                             resolve_style, resolve_token)
+                             resolve_style, resolve_token, resolve_field)
 from gui.heatmap_grid import HM_BINS_RANGE, HM_HELP, HM_INTERP_CHOICES, HM_UNIT_CHOICES
 from gui.graph_style_dialog import (
     GRID_AXIS_CHOICES, LEGEND_LOC_CHOICES, LINESTYLE_CHOICES, MARKER_CHOICES,
@@ -814,7 +814,7 @@ class ChartEditor(GraphStyleDialog):
         return w, btn
 
     def _add_color(self, form, field, label, style):
-        w, btn = self._color_field(resolve_token(style.get(field, "#000000"), _fig_mode()),
+        w, btn = self._color_field(resolve_field(field, style.get(field, "#000000"), _fig_mode()),
                                    lambda hx, f=field: self._commit(f, hx))
         w.layout().addStretch(1)
         form.addRow(self._row_label_widget(field, label), w)

@@ -60,6 +60,8 @@ BATCH_SCHEMA = [
     ]),
     ("Recording / Tracking Quality", [
         "Duration (s)", "Total Frames", "Frames Detected", "Detection Rate (%)",
+        "Interpolated Frames", "Hand-fixed Frames", "Removed Frames",
+        "Corrected Frames (%)",
     ]),
     ("Global Locomotion", [
         "Total Distance (cm)",

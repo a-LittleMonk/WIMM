@@ -1005,6 +1005,11 @@ def export_multi_run(output_path: str, video_name: str,
                      all_units: bool = True):
     """Combined xlsx for a Multi-Run sweep.
 
+    `swept_key` / `swept_label` may be a single string or a list (one entry
+    per swept variable). With several variables, each variant also carries
+    `values` = {key: value_label} and the compare sheet gets one row per
+    swept variable above the metrics.
+
     Sheets:
       - Sweep Compare: rows = metric, cols = variant value
       - Settings:      locked common settings + the swept variable
@@ -1015,6 +1020,21 @@ def export_multi_run(output_path: str, video_name: str,
        result: {metrics, raw_df, bin_df, video_size, fps}}
     """
     from openpyxl import Workbook
+    swept_keys = [swept_key] if isinstance(swept_key, str) else list(swept_key or [])
+    swept_labels = ([swept_label] if isinstance(swept_label, str)
+                    else list(swept_label or []))
+    if len(swept_labels) < len(swept_keys):
+        swept_labels += swept_keys[len(swept_labels):]
+    multi = len(swept_keys) > 1
+    swept_title = " × ".join(swept_labels)
+
+    def _vals_of(v):
+        vals = v.get("values")
+        if vals:
+            return vals
+        # Single-variable variant from an older caller.
+        return {swept_keys[0]: v.get("label", v.get("value", ""))} if swept_keys else {}
+
     if all_units:
         variants = [dict(v, result=_expand_result(v.get("result")))
                     for v in variants]
@@ -1031,7 +1051,7 @@ def export_multi_run(output_path: str, video_name: str,
     # ── Compare sheet ────────────────────────────────────────────────────
     cmp_ws = wb.create_sheet("Sweep Compare")
     cmp_ws.merge_cells("A1:Z1")
-    cmp_ws["A1"] = f"Multi-Run — {video_name} — swept: {swept_label}"
+    cmp_ws["A1"] = f"Multi-Run — {video_name} — swept: {swept_title}"
     cmp_ws["A1"].font = title_font
     cmp_ws["A1"].fill = light_blue
     cmp_ws["A1"].alignment = Alignment(horizontal="left", vertical="center")
@@ -1046,7 +1066,10 @@ def export_multi_run(output_path: str, video_name: str,
                 seen_metrics.add(k)
                 metric_order.append(k)
 
-    headers = ["Metric"] + [str(v.get("label", v.get("value", ""))) for v in variants]
+    if multi:
+        headers = ["Metric"] + [f"Run {i}" for i in range(1, len(variants) + 1)]
+    else:
+        headers = ["Metric"] + [str(v.get("label", v.get("value", ""))) for v in variants]
     cmp_ws.append([])  # row 2 blank
     cmp_ws.append(headers)
     hdr_row = cmp_ws.max_row
@@ -1054,6 +1077,16 @@ def export_multi_run(output_path: str, video_name: str,
         cell.fill = blue
         cell.font = white_bold
         cell.alignment = Alignment(horizontal="left")
+
+    # With several swept variables, list each run's values first so the
+    # columns can be read (and filtered) without opening the run sheets.
+    if multi:
+        for key, lbl in zip(swept_keys, swept_labels):
+            row = [lbl] + [_vals_of(v).get(key, "baseline") for v in variants]
+            cmp_ws.append(row)
+            for cell in cmp_ws[cmp_ws.max_row]:
+                cell.fill = light_blue
+                cell.font = bold
 
     for mk in metric_order:
         row = [mk]
@@ -1183,7 +1216,8 @@ def export_multi_run(output_path: str, video_name: str,
         cmp_ws.column_dimensions[get_column_letter(col1)].width = 16
         cmp_ws.column_dimensions[get_column_letter(col2)].width = 16
 
-        label = str(v.get("label", v.get("value", "")))
+        label = (f"Run {i + 1}" if multi
+                 else str(v.get("label", v.get("value", ""))))
         hcell = cmp_ws.cell(row=graph_header_row, column=col1, value=label)
         hcell.fill = blue
         hcell.font = white_bold
@@ -1221,14 +1255,25 @@ def export_multi_run(output_path: str, video_name: str,
     for cell in set_ws[1]:
         cell.fill = blue
         cell.font = white_bold
-    set_ws.append([f"Swept variable", swept_label])
-    set_ws.append(["Swept values", ", ".join(str(v.get("label", v.get("value", ""))) for v in variants)])
+    if multi:
+        set_ws.append(["Swept variables", swept_title])
+        for key, lbl in zip(swept_keys, swept_labels):
+            seen, ordered = set(), []
+            for v in variants:
+                val = _vals_of(v).get(key)
+                if val is not None and str(val) not in seen:
+                    seen.add(str(val))
+                    ordered.append(str(val))
+            set_ws.append([f"  {lbl} values", ", ".join(ordered)])
+    else:
+        set_ws.append(["Swept variable", swept_title])
+        set_ws.append(["Swept values", ", ".join(str(v.get("label", v.get("value", ""))) for v in variants)])
     set_ws.append(["", ""])
     set_ws.append(["LOCKED COMMON SETTINGS", ""])
     for cell in set_ws[set_ws.max_row]:
         cell.font = Font(bold=True, color="1A4F72")
-    # Locked = base settings minus the swept key.
-    locked = {k: v for k, v in (base_settings or {}).items() if k != swept_key}
+    # Locked = base settings minus the swept keys.
+    locked = {k: v for k, v in (base_settings or {}).items() if k not in swept_keys}
     vs = (variants[0].get("result") or {}).get("video_size") if variants else None
     for label, value in _video_config_rows(locked, vs, all_units):
         set_ws.append([label, value])
@@ -1238,13 +1283,22 @@ def export_multi_run(output_path: str, video_name: str,
 
     # ── Per-variant sheets ───────────────────────────────────────────────
     used = {"Sweep Compare", "Settings"}
-    for v in variants:
+    for vi, v in enumerate(variants, start=1):
         label = str(v.get("label", v.get("value", "")))
-        sheet_name = _safe_sheet_name(f"{swept_key}={label}", used)
+        if multi:
+            vals = _vals_of(v)
+            short = ",".join(f"{k}={vals[k]}" for k in swept_keys if k in vals)
+            sheet_name = _safe_sheet_name(f"Run {vi} {short}", used)
+            title = ", ".join(f"{lbl} = {vals[k]}"
+                              for k, lbl in zip(swept_keys, swept_labels) if k in vals)
+            title = f"Run {vi}: {title}"
+        else:
+            sheet_name = _safe_sheet_name(f"{swept_keys[0]}={label}", used)
+            title = f"{swept_title} = {label}"
         ws = wb.create_sheet(sheet_name)
 
         ws.merge_cells("A1:D1")
-        ws["A1"] = f"{swept_label} = {label}"
+        ws["A1"] = title
         ws["A1"].font = title_font
         ws["A1"].fill = light_blue
         ws.row_dimensions[1].height = 22
