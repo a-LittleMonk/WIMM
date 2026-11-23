@@ -83,68 +83,106 @@ def empty_neutral_zone():
     }
 
 
-def build_template_arms(hub, endpoints, arm_width_norm,
-                         neutral_radius_norm=0.0, video_size=None):
-    """Given hub (cx, cy) normalized and 3 endpoint (x, y) normalized
-    points + arm_width as a fraction of min(vw, vh), return three
-    rectangular polygons (4 corners each) in normalized coords.
+def _y_layout_px(hub, endpoints, arm_width_norm, neutral_radius_norm, video_size):
+    """Y-maze built like the real apparatus, in pixel space:
 
-    Geometry runs in PIXEL space so perpendiculars are truly perpendicular
-    regardless of frame aspect ratio. Without video_size we fall back to
-    norm-space math, which is only correct for square frames — pass it
-    whenever vw and vh differ.
+    * centre = a triangle with one side per arm; its corners are where the
+      walls of neighbouring arms meet (pushed outwards when the Neutral
+      size asks for a bigger centre);
+    * each arm runs from its side of the triangle to its tip, so arms and
+      centre share their corners — no gaps, no overlaps.
 
-    neutral_radius_norm shrinks each arm from the hub end: arm starts at
-    hub + unit*neutral_radius (the neutral-triangle vertex along that
-    arm's spoke) instead of at the hub itself."""
+    Returns (arms in endpoint order, triangle) as pixel points, or None."""
     if not hub or len(endpoints) < 3 or arm_width_norm <= 0:
-        return []
-    if video_size and video_size[0] and video_size[1]:
-        vw, vh = float(video_size[0]), float(video_size[1])
-        base = min(vw, vh)
-        cx_px, cy_px = hub[0] * vw, hub[1] * vh
-        half_px = arm_width_norm * base / 2.0
-        r_px = max(0.0, float(neutral_radius_norm)) * base
-        arms = []
-        for ep in endpoints[:3]:
-            ex_px, ey_px = ep[0] * vw, ep[1] * vh
-            dx, dy = ex_px - cx_px, ey_px - cy_px
-            L = math.hypot(dx, dy)
-            if L <= 1e-6:
-                arms.append([])
-                continue
-            ux, uy = dx / L, dy / L
-            sx, sy = cx_px + ux * r_px, cy_px + uy * r_px
-            nx, ny = -uy, ux  # true perpendicular, pixel space
-            corners_px = [
-                (sx + nx * half_px, sy + ny * half_px),
-                (ex_px + nx * half_px, ey_px + ny * half_px),
-                (ex_px - nx * half_px, ey_px - ny * half_px),
-                (sx - nx * half_px, sy - ny * half_px),
-            ]
-            arms.append([(c[0] / vw, c[1] / vh) for c in corners_px])
-        return arms
-    # Legacy square-frame path (kept for callers without video_size).
-    cx, cy = hub
-    half = arm_width_norm / 2.0
-    r = max(0.0, float(neutral_radius_norm))
+        return None
+    vw, vh = (float(video_size[0]), float(video_size[1])) if (
+        video_size and video_size[0] and video_size[1]) else (1.0, 1.0)
+    base = min(vw, vh)
+    hx, hy = hub[0] * vw, hub[1] * vh
+    h = arm_width_norm * base / 2.0
     arms = []
     for ep in endpoints[:3]:
-        ex, ey = ep
-        dx, dy = ex - cx, ey - cy
-        L = math.hypot(dx, dy)
+        ex, ey = ep[0] * vw, ep[1] * vh
+        L = math.hypot(ex - hx, ey - hy)
         if L <= 1e-6:
-            arms.append([])
-            continue
-        ux, uy = dx / L, dy / L
-        sx, sy = cx + ux * r, cy + uy * r
-        nx, ny = -uy, ux
-        c1 = (sx + nx * half, sy + ny * half)
-        c2 = (ex + nx * half, ey + ny * half)
-        c3 = (ex - nx * half, ey - ny * half)
-        c4 = (sx - nx * half, sy - ny * half)
-        arms.append([c1, c2, c3, c4])
-    return arms
+            return None
+        u = ((ex - hx) / L, (ey - hy) / L)
+        arms.append({"u": u, "n": (-u[1], u[0]), "e": (ex, ey),
+                     "ang": math.atan2(u[1], u[0])})
+    order = sorted(range(3), key=lambda i: arms[i]["ang"])
+
+    def wall_meet(i, j):
+        """Corner where arm i's wall facing arm j meets arm j's wall facing i."""
+        ai, aj = arms[i], arms[j]
+        si = 1.0 if (aj["u"][0] * ai["n"][0] + aj["u"][1] * ai["n"][1]) >= 0 else -1.0
+        sj = 1.0 if (ai["u"][0] * aj["n"][0] + ai["u"][1] * aj["n"][1]) >= 0 else -1.0
+        a11, a12 = si * ai["n"][0], si * ai["n"][1]
+        a21, a22 = sj * aj["n"][0], sj * aj["n"][1]
+        det = a11 * a22 - a12 * a21
+        if abs(det) < 1e-9:
+            return None
+        x = (h * a22 - a12 * h) / det
+        y = (a11 * h - h * a21) / det
+        return (hx + x, hy + y)
+
+    corners = {}
+    for k in range(3):
+        i, j = order[k], order[(k + 1) % 3]
+        c = wall_meet(i, j)
+        if c is None:
+            return None
+        corners[(i, j)] = corners[(j, i)] = c
+
+    def side_of(i):
+        others = [j for j in range(3) if j != i]
+        return corners[(i, others[0])], corners[(i, others[1])]
+
+    def dist_to_line(p, a, b):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        L = math.hypot(dx, dy) or 1e-9
+        return abs(dx * (p[1] - a[1]) - dy * (p[0] - a[0])) / L
+
+    # Bigger centre on request: scale the corners out from the hub so the
+    # closest side sits at the Neutral-size distance.
+    r = max(0.0, float(neutral_radius_norm)) * base
+    near = min(dist_to_line((hx, hy), *side_of(i)) for i in range(3))
+    sc = max(1.0, r / near) if near > 1e-9 else 1.0
+    for key, (cx, cy) in list(corners.items()):
+        corners[key] = (hx + (cx - hx) * sc, hy + (cy - hy) * sc)
+
+    def meet_line(p, d, a, b):
+        """Point where the ray p + t·d crosses line a–b."""
+        ex, ey = b[0] - a[0], b[1] - a[1]
+        det = d[0] * ey - d[1] * ex
+        if abs(det) < 1e-12:
+            return p
+        t = ((a[0] - p[0]) * ey - (a[1] - p[1]) * ex) / det
+        return (p[0] + t * d[0], p[1] + t * d[1])
+
+    out_arms = []
+    for i, a in enumerate(arms):
+        (nx, ny), (ux, uy) = a["n"], a["u"]
+        s1, s2 = side_of(i)
+        plus = meet_line((hx + nx * h, hy + ny * h), (ux, uy), s1, s2)
+        minus = meet_line((hx - nx * h, hy - ny * h), (ux, uy), s1, s2)
+        ex, ey = a["e"]
+        out_arms.append([plus, (ex + nx * h, ey + ny * h),
+                         (ex - nx * h, ey - ny * h), minus])
+    tri = [corners[(order[k], order[(k + 1) % 3])] for k in range(3)]
+    return out_arms, tri, (vw, vh)
+
+
+def build_template_arms(hub, endpoints, arm_width_norm,
+                         neutral_radius_norm=0.0, video_size=None):
+    """Three arm outlines (4 corners each, normalized coords, endpoint
+    order). Each arm starts on its side of the centre triangle (see
+    _y_layout_px) and is arm_width wide (fraction of min(vw, vh)).
+    Computed in pixel space when video_size is given."""
+    lay = _y_layout_px(hub, endpoints, arm_width_norm, neutral_radius_norm, video_size)
+    if lay is None:
+        return []
+    arms, _tri, (vw, vh) = lay
+    return [[(x / vw, y / vh) for x, y in arm] for arm in arms]
 
 
 def canonical_y_geometry(video_size, margin_frac=0.08):
@@ -237,97 +275,16 @@ def convex_hull(points):
     return lower[:-1] + upper[:-1]
 
 
-def _line_intersect(p1, p2, p3, p4):
-    """Return intersection of infinite line (p1,p2) with infinite line
-    (p3,p4). None if parallel."""
-    x1, y1 = p1; x2, y2 = p2; x3, y3 = p3; x4, y4 = p4
-    denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
-    if abs(denom) < 1e-12:
-        return None
-    t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom
-    return (x1 + t * (x2 - x1), y1 + t * (y2 - y1))
-
-
 def build_neutral_zone_geom(hub, endpoints, radius_norm, arm_width_norm,
                               video_size=None):
-    """3-pronged Y polygon: union of 3 stub rectangles, each spanning
-    from the hub out to the arm's start point (arm_width wide). The
-    stubs overlap at the hub so the union has 3 prongs joined at narrow
-    waists where adjacent stub side-walls cross.
-
-    Geometry runs in PIXEL space when video_size is supplied so the stubs
-    stay rectangular regardless of frame aspect; falls back to norm-space
-    math (only correct for square frames) otherwise."""
-    if (not hub or not endpoints or len(endpoints) < 3
-            or radius_norm <= 0 or arm_width_norm <= 0):
+    """Centre (neutral) zone: a triangle with one side per arm, the arms
+    starting on its sides (see _y_layout_px). radius_norm makes it bigger
+    than the natural meeting point of the arm walls."""
+    lay = _y_layout_px(hub, endpoints, arm_width_norm, radius_norm, video_size)
+    if lay is None:
         return []
-    if video_size and video_size[0] and video_size[1]:
-        vw, vh = float(video_size[0]), float(video_size[1])
-        base = min(vw, vh)
-        cx_px, cy_px = hub[0] * vw, hub[1] * vh
-        half_px = arm_width_norm * base / 2.0
-        r_px = radius_norm * base
-        arms = []
-        for ep in endpoints[:3]:
-            ex_px, ey_px = ep[0] * vw, ep[1] * vh
-            dx, dy = ex_px - cx_px, ey_px - cy_px
-            L = math.hypot(dx, dy)
-            if L <= 1e-6:
-                return []
-            ux, uy = dx / L, dy / L
-            sx, sy = cx_px + ux * r_px, cy_px + uy * r_px
-            nx, ny = -uy, ux
-            arms.append({
-                "angle": math.atan2(uy, ux),
-                "s1": (cx_px + nx * half_px, cy_px + ny * half_px),
-                "s2": (sx + nx * half_px, sy + ny * half_px),
-                "s3": (sx - nx * half_px, sy - ny * half_px),
-                "s4": (cx_px - nx * half_px, cy_px - ny * half_px),
-            })
-        arms.sort(key=lambda a: a["angle"])
-        poly_px = []
-        n = len(arms)
-        for i in range(n):
-            arm = arms[i]
-            prev_arm = arms[(i - 1) % n]
-            kink = _line_intersect(arm["s4"], arm["s3"],
-                                   prev_arm["s1"], prev_arm["s2"])
-            poly_px.append(kink if kink is not None else arm["s4"])
-            poly_px.append(arm["s3"])
-            poly_px.append(arm["s2"])
-        return [(p[0] / vw, p[1] / vh) for p in poly_px]
-    # Legacy square-frame path.
-    cx, cy = hub
-    half = arm_width_norm / 2.0
-    arms = []
-    for ep in endpoints[:3]:
-        ex, ey = ep
-        dx, dy = ex - cx, ey - cy
-        L = math.hypot(dx, dy)
-        if L <= 1e-6:
-            return []
-        ux, uy = dx / L, dy / L
-        sx, sy = cx + ux * radius_norm, cy + uy * radius_norm
-        nx, ny = -uy, ux
-        arms.append({
-            "angle": math.atan2(uy, ux),
-            "s1": (cx + nx * half, cy + ny * half),
-            "s2": (sx + nx * half, sy + ny * half),
-            "s3": (sx - nx * half, sy - ny * half),
-            "s4": (cx - nx * half, cy - ny * half),
-        })
-    arms.sort(key=lambda a: a["angle"])
-    poly = []
-    n = len(arms)
-    for i in range(n):
-        arm = arms[i]
-        prev_arm = arms[(i - 1) % n]
-        kink = _line_intersect(arm["s4"], arm["s3"],
-                               prev_arm["s1"], prev_arm["s2"])
-        poly.append(kink if kink is not None else arm["s4"])
-        poly.append(arm["s3"])
-        poly.append(arm["s2"])
-    return poly
+    _arms, tri, (vw, vh) = lay
+    return [(x / vw, y / vh) for x, y in tri]
 
 
 NEUTRAL_DEFAULT_COLOR = "#A9B4C6"
@@ -348,7 +305,7 @@ def neutral_zone(hub, endpoints, radius_norm, arm_width_norm,
             "fill_alpha": 0,
             "dashed": False,
         },
-        "editable": False,
+        "editable": True,          # corners can be dragged like the arms'
     }
 
 

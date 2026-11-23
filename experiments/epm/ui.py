@@ -323,6 +323,8 @@ def _template_drag_handler(host):
 
 
 def _rebuild_template(host):
+    if getattr(host, "_epm_restoring", False):
+        return                     # restoring a video's saved shapes
     hub = getattr(host, "_epm_hub", None)
     endpoints = getattr(host, "_epm_endpoints", None)
     if not hub or not endpoints:

@@ -47,6 +47,9 @@ class ZoneDrawer(QLabel):
     point_clicked     = pyqtSignal(float, float)   # norm x, norm y — correction mode
     mode_changed      = pyqtSignal(object)         # active tool changed (None = idle)
     view_changed      = pyqtSignal()               # layer / cell-highlight look changed
+    # A shape drawn with start_shape(): (kind, [norm points]). Drag shapes
+    # give [press, release]; a polygon gives its corners.
+    shape_drawn       = pyqtSignal(str, list)
     # Perspective on: a corner of the (full-frame) warped arena was dragged
     # to (norm x, norm y) of the warped view. The host maps it back onto the
     # original arena and re-warps; see set_perspective_corner_handler.
@@ -58,6 +61,9 @@ class ZoneDrawer(QLabel):
     MODE_EXCLUDE = "exclude"
     MODE_CORRECT = "correct"
     MODE_POLY    = "poly"     # generic polygon-edit (extra zone)
+    MODE_SHAPE   = "shape"    # draw a new shape (start_shape)
+    SHAPE_NAMES  = {"circle": "circle", "square": "square", "rectangle": "rectangle",
+                    "line": "line", "polygon": "shape"}
 
     # Magnifier loupe — shown while the user is placing or dragging zone
     # points so corners can be hit accurately on detailed video frames.
@@ -85,8 +91,11 @@ class ZoneDrawer(QLabel):
         self.setText("Load a video to begin")
         self.setFont(QFont(theme.sans_family(), 13))
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.ClickFocus)      # Esc / Backspace while drawing
 
         self.mode      = self.MODE_IDLE
+        self._shape_kind = None
+        self._shape_pts = []
         self._base_pixmap = None
         self._video_w  = 1
         self._video_h  = 1
@@ -150,6 +159,10 @@ class ZoneDrawer(QLabel):
         self._poly_clicks = []           # in-progress clicks for polygon edit
         self._poly_n_corners = 4         # how many corners to collect
         self._dragging_extra = None      # (zone_name, vertex_idx) when dragging
+        self._moving_zone = None         # (zone_name, start_norm, start_geometry)
+        # True once the user dragged an extra zone (move or corner) — lets a
+        # host copy the new geometry back only after a real drag.
+        self.geometry_dragged = False
         # ── Redesign v2 canvas state ────────────────────────────────────
         # Layer switches driven by the canvas chips (Arena / Zones / Trail /
         # Marker / Heatmap). Trail + marker body drawing live in the cv2
@@ -487,6 +500,69 @@ class ZoneDrawer(QLabel):
     def list_zones(self):
         return list(self._extra_zones)
 
+    def start_shape(self, kind):
+        """Let the user draw a new `kind` shape on the video: drag for
+        circle (centre -> edge), square / rectangle (corner -> corner) and
+        line (start -> end); click corners + double-click for a polygon.
+        Emits shape_drawn(kind, norm_points). Esc cancels."""
+        self.set_mode(self.MODE_SHAPE)
+        self._shape_kind = kind
+        self._shape_pts = []
+        self.setCursor(Qt.CrossCursor)
+        self.setFocus()
+
+    def cancel_shape(self):
+        if self.mode == self.MODE_SHAPE:
+            self._shape_pts = []
+            self.set_mode(self.MODE_IDLE)
+
+    def _finish_shape(self, pts):
+        kind = self._shape_kind
+        self._shape_pts = []
+        self.set_mode(self.MODE_IDLE)
+        self.shape_drawn.emit(kind, [tuple(p) for p in pts])
+
+    def keyPressEvent(self, event):
+        if self.mode == self.MODE_SHAPE:
+            if event.key() == Qt.Key_Escape:
+                self.cancel_shape()
+                return
+            if event.key() == Qt.Key_Backspace and self._shape_kind == "polygon":
+                if self._shape_pts:
+                    self._shape_pts.pop()
+                    self.update()
+                return
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter) and self._shape_kind == "polygon":
+                if len(self._shape_pts) >= 3:
+                    self._finish_shape(self._shape_pts)
+                return
+        super().keyPressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if self.mode == self.MODE_SHAPE and self._shape_kind == "polygon":
+            # The double-click's first press already added this corner.
+            if len(self._shape_pts) >= 3:
+                self._finish_shape(self._shape_pts)
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def _handle_at(self, pos):
+        """True when `pos` is on a draggable handle: an arena corner or a
+        corner / end of an editable extra zone."""
+        if self.mode != self.MODE_IDLE:
+            return False
+        ox, oy, dw, dh = self._get_disp_rect()
+        r2 = self._corner_grab_px * self._corner_grab_px
+        pts = list(self.arena or []) if self._corners_draggable() else []
+        for z in self._extra_zones:
+            if z.get("type") == "polygon" and z.get("editable", True):
+                pts += list(z.get("geometry") or [])
+        for p in pts:
+            hx, hy = self._norm_to_disp(p, ox, oy, dw, dh)
+            if (pos.x() - hx) ** 2 + (pos.y() - hy) ** 2 <= r2:
+                return True
+        return False
+
     def start_edit(self, zone_name, n_corners=4):
         """Enter polygon-edit mode for a named extra zone. The user clicks
         n_corners points; the geometry is committed when done."""
@@ -510,6 +586,19 @@ class ZoneDrawer(QLabel):
     def mousePressEvent(self, event):
         if self._base_pixmap is None:
             return
+        if self.mode == self.MODE_SHAPE:
+            pt = self._widget_to_norm(event.pos())
+            if self._shape_kind == "polygon":
+                if event.button() == Qt.RightButton:
+                    if self._shape_pts:
+                        self._shape_pts.pop()
+                elif event.button() == Qt.LeftButton:
+                    if not self._shape_pts or self._shape_pts[-1] != pt:
+                        self._shape_pts.append(pt)
+            elif event.button() == Qt.LeftButton:
+                self._shape_pts = [pt, pt]
+            self.update()
+            return
         # Idle-mode corner drag (when no tool is active and arena exists)
         if (self.mode == self.MODE_IDLE and self.arena and
                 event.button() == Qt.LeftButton and self._corners_draggable()):
@@ -520,6 +609,7 @@ class ZoneDrawer(QLabel):
                 if (event.pos().x() - hx) ** 2 + (event.pos().y() - hy) ** 2 <= r2:
                     self._dragging_corner = i
                     self._drag_anchor_norm = tuple(p)
+                    self.setCursor(Qt.SizeAllCursor)
                     return
         # Idle-mode label drag (extra polygon zones with a paint-stamped
         # _label_rect). Checked BEFORE corner drag so a label sitting near
@@ -549,7 +639,14 @@ class ZoneDrawer(QLabel):
                     if (event.pos().x() - hx) ** 2 + (event.pos().y() - hy) ** 2 <= r2:
                         self._dragging_extra = (z["name"], i)
                         self._drag_anchor_norm = tuple(p)
+                        self.setCursor(Qt.SizeAllCursor)
                         return
+            z = self._movable_zone_at(event.pos())
+            if z is not None:
+                self._moving_zone = (z["name"], self._widget_to_norm(event.pos()),
+                                     list(z.get("geometry") or []))
+                self.setCursor(Qt.ClosedHandCursor)
+                return
         # Polygon-edit click collection (extra zone)
         if self.mode == self.MODE_POLY and self._editing_zone:
             pt = self._widget_to_norm(event.pos())
@@ -586,6 +683,34 @@ class ZoneDrawer(QLabel):
             norm = self._widget_to_norm(event.pos())
             self.point_clicked.emit(norm[0], norm[1])
 
+    def _movable_zone_at(self, pos):
+        """Topmost extra zone flagged "movable" under `pos`: inside its
+        outline, or on its outline / line (within the corner-grab radius)."""
+        if self.mode != self.MODE_IDLE:
+            return None
+        ox, oy, dw, dh = self._get_disp_rect()
+        px, py = pos.x(), pos.y()
+        grab = float(self._corner_grab_px)
+        for z in reversed(self._extra_zones):
+            if z.get("type") != "polygon" or not z.get("movable"):
+                continue
+            pts = [self._norm_to_disp(p, ox, oy, dw, dh) for p in (z.get("geometry") or [])]
+            if len(pts) < 2:
+                continue
+            if len(pts) >= 3:
+                poly = [QPointF(x, y) for x, y in pts]
+                from PyQt5.QtGui import QPolygonF
+                if QPolygonF(poly).containsPoint(QPointF(px, py), Qt.OddEvenFill):
+                    return z
+            segs = list(zip(pts, pts[1:] + (pts[:1] if len(pts) >= 3 else [])))
+            for (ax, ay), (bx, by) in segs:
+                vx, vy = bx - ax, by - ay
+                L2 = vx * vx + vy * vy
+                t = 0.0 if L2 == 0 else max(0.0, min(1.0, ((px - ax) * vx + (py - ay) * vy) / L2))
+                if (px - ax - t * vx) ** 2 + (py - ay - t * vy) ** 2 <= grab * grab:
+                    return z
+        return None
+
     def _drag_norm(self, event):
         """Norm point for the active handle drag. While Shift is held, snap
         the motion to the nearest horizontal / vertical / 45° line through the
@@ -608,6 +733,12 @@ class ZoneDrawer(QLabel):
 
     def mouseMoveEvent(self, event):
         self._mouse_pos = event.pos()
+        if self.mode == self.MODE_SHAPE:
+            if (self._shape_kind != "polygon" and len(self._shape_pts) == 2
+                    and event.buttons() & Qt.LeftButton):
+                self._shape_pts[1] = self._widget_to_norm(event.pos())
+            self.update()
+            return
         if self._dragging_corner is not None:
             arena_list = list(self.arena)
             arena_list[self._dragging_corner] = self._drag_norm(event)
@@ -622,6 +753,7 @@ class ZoneDrawer(QLabel):
                 if 0 <= vidx < len(geom):
                     geom[vidx] = self._drag_norm(event)
                     z["geometry"] = geom
+                    self.geometry_dragged = True
                     self.update()
                     # Lightweight signal so dependent geometry (Y-Maze arms
                     # tied to the y_template handles) rebuilds live during
@@ -635,15 +767,26 @@ class ZoneDrawer(QLabel):
                 z["style"]["label_pos_override"] = self._widget_to_norm(event.pos())
                 self.update()
             return
-        # Cursor hint: show pointing-hand near a corner in idle mode
-        if self.mode == self.MODE_IDLE and self.arena:
-            ox, oy, dw, dh = self._get_disp_rect()
-            r2 = self._corner_grab_px * self._corner_grab_px
-            near = any(
-                (event.pos().x() - hx) ** 2 + (event.pos().y() - hy) ** 2 <= r2
-                for hx, hy in (self._norm_to_disp(p, ox, oy, dw, dh) for p in self.arena)
-            )
-            self.setCursor(Qt.PointingHandCursor if near else Qt.ArrowCursor)
+        if self._moving_zone is not None:
+            name, start, geom0 = self._moving_zone
+            z = self.get_zone(name)
+            if z is not None:
+                cx, cy = self._widget_to_norm(event.pos())
+                dx, dy = cx - start[0], cy - start[1]
+                z["geometry"] = [(x + dx, y + dy) for x, y in geom0]
+                self.geometry_dragged = True
+                self.update()
+                self.zones_changing.emit()
+            return
+        # Cursor hint in idle mode: four arrows on a handle (corner / end
+        # to drag), open hand over a zone that can be moved.
+        if self.mode == self.MODE_IDLE and self._base_pixmap is not None:
+            if self._handle_at(event.pos()):
+                self.setCursor(Qt.SizeAllCursor)
+            elif self._movable_zone_at(event.pos()) is not None:
+                self.setCursor(Qt.OpenHandCursor)
+            else:
+                self.setCursor(Qt.ArrowCursor)
         if self.mode == self.MODE_ARENA:
             self.update()
         elif self.mode == self.MODE_CALIB and self._drag_start:
@@ -663,6 +806,18 @@ class ZoneDrawer(QLabel):
             self.update()
 
     def mouseReleaseEvent(self, event):
+        if self.mode == self.MODE_SHAPE:
+            if self._shape_kind != "polygon" and len(self._shape_pts) == 2:
+                ox, oy, dw, dh = self._get_disp_rect()
+                end = self._widget_to_norm(event.pos())
+                a = self._norm_to_disp(self._shape_pts[0], ox, oy, dw, dh)
+                b = self._norm_to_disp(end, ox, oy, dw, dh)
+                if abs(a[0] - b[0]) + abs(a[1] - b[1]) >= 6:     # a plain click draws nothing
+                    self._finish_shape([self._shape_pts[0], end])
+                else:
+                    self._shape_pts = []
+                    self.update()
+            return
         if self._dragging_corner is not None:
             idx, self._dragging_corner = self._dragging_corner, None
             self._drag_anchor_norm = None
@@ -679,12 +834,19 @@ class ZoneDrawer(QLabel):
         if self._dragging_extra is not None:
             self._dragging_extra = None
             self._drag_anchor_norm = None
+            self.setCursor(Qt.SizeAllCursor)
             self.emit_change("extra zone vertex dragged")
             self.update()
             return
         if self._dragging_label is not None:
             self._dragging_label = None
             self.emit_change("zone label moved")
+            self.update()
+            return
+        if self._moving_zone is not None:
+            self._moving_zone = None
+            self.setCursor(Qt.OpenHandCursor)
+            self.emit_change("zone moved")
             self.update()
             return
         if self.mode == self.MODE_CALIB and self._drag_start:
@@ -902,6 +1064,10 @@ class ZoneDrawer(QLabel):
                 if len(pts) >= 2:
                     painter.drawLine(mx, my, pts[0][0], pts[0][1])
 
+        # New-shape preview (start_shape)
+        if self.mode == self.MODE_SHAPE:
+            self._paint_shape_preview(painter, ox, oy, dw, dh)
+
         # Marker info tag (Marker layer)
         if self.layers.get("marker", True) and self.marker_info:
             self._paint_marker_tag(painter, ox, oy, dw, dh)
@@ -919,6 +1085,7 @@ class ZoneDrawer(QLabel):
             self.MODE_EXCLUDE:    "Paint to mark exclusion areas  |  right-click: erase",
             self.MODE_CORRECT:    "Click to set correct mouse position for this frame",
             self.MODE_POLY:       poly_msg,
+            self.MODE_SHAPE:      self._shape_message(),
         }
         msg = instructions.get(self.mode)
         if msg:
@@ -936,6 +1103,62 @@ class ZoneDrawer(QLabel):
         self._paint_loupe(painter, ox, oy, dw, dh)
 
         painter.end()
+
+    def _shape_message(self):
+        if self.mode != self.MODE_SHAPE:
+            return None
+        kind = self._shape_kind
+        if kind == "polygon":
+            n = len(self._shape_pts)
+            if n < 3:
+                return "Click each corner  ·  double-click to finish  ·  right-click: undo  ·  Esc: cancel"
+            return f"{n} corners  ·  double-click or Enter to finish  ·  Esc: cancel"
+        how = {"circle": "drag from the centre outwards",
+               "square": "drag from one corner to the opposite corner",
+               "rectangle": "drag from one corner to the opposite corner",
+               "line": "drag from the start of the line to its end"}.get(kind, "drag")
+        return f"Draw {self.SHAPE_NAMES.get(kind, kind)}: {how}  ·  Esc: cancel"
+
+    def _paint_shape_preview(self, painter, ox, oy, dw, dh):
+        import math
+        col = QColor("#E8C547")
+        pts = [self._norm_to_disp(p, ox, oy, dw, dh) for p in self._shape_pts]
+        painter.setPen(QPen(col, 1.8))
+        fill = QColor(col)
+        fill.setAlpha(40)
+        if self._shape_kind == "polygon":
+            painter.setBrush(col)
+            for px, py in pts:
+                painter.drawEllipse(QPointF(px, py), 3.5, 3.5)
+            for i in range(len(pts) - 1):
+                painter.drawLine(QPointF(*pts[i]), QPointF(*pts[i + 1]))
+            if pts and self._mouse_pos:
+                painter.setPen(QPen(col, 1.5, Qt.DashLine))
+                m = QPointF(self._mouse_pos)
+                painter.drawLine(QPointF(*pts[-1]), m)
+                if len(pts) >= 2:
+                    painter.drawLine(m, QPointF(*pts[0]))
+            return
+        if len(pts) != 2:
+            return
+        (ax, ay), (bx, by) = pts
+        painter.setBrush(fill)
+        if self._shape_kind == "circle":
+            r = math.hypot(bx - ax, by - ay)
+            painter.drawEllipse(QPointF(ax, ay), r, r)
+            painter.drawEllipse(QPointF(ax, ay), 2.5, 2.5)
+        elif self._shape_kind == "square":
+            side = max(abs(bx - ax), abs(by - ay))
+            sx = side if bx >= ax else -side
+            sy = side if by >= ay else -side
+            painter.drawRect(QRectF(QPointF(ax, ay), QPointF(ax + sx, ay + sy)).normalized())
+        elif self._shape_kind == "rectangle":
+            painter.drawRect(QRectF(QPointF(ax, ay), QPointF(bx, by)).normalized())
+        elif self._shape_kind == "line":
+            painter.drawLine(QPointF(ax, ay), QPointF(bx, by))
+            painter.setBrush(col)
+            for px, py in pts:
+                painter.drawEllipse(QPointF(px, py), 3.5, 3.5)
 
     # ── canvas helpers (redesign v2) ──────────────────────────────────────
 
@@ -1065,7 +1288,7 @@ class ZoneDrawer(QLabel):
         if self._base_pixmap is None or self._mouse_pos is None:
             return False
         if self.mode in (self.MODE_CALIB, self.MODE_ARENA,
-                          self.MODE_POLY, self.MODE_CORRECT):
+                          self.MODE_POLY, self.MODE_CORRECT, self.MODE_SHAPE):
             return True
         if (self._dragging_corner is not None
                 or self._dragging_extra is not None):

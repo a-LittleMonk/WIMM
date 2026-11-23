@@ -400,6 +400,28 @@ class EPMExperiment(Experiment):
     def apply_extras(self, host, extras):
         if not isinstance(extras, dict):
             return
+        host._epm_restoring = True
+        try:
+            self._apply_extras(host, extras)
+        finally:
+            host._epm_restoring = False
+        zd = host.zone_drawer
+        # Saved arm / centre shapes last, exactly as saved.
+        arm_names_norm = extras.get("arms_norm") or {}
+        for name in epm_zones.ARM_NAMES:
+            kind = (getattr(host, "_epm_arm_kinds", None) or
+                    epm_zones.DEFAULT_ARM_KINDS).get(name,
+                                                     epm_zones.DEFAULT_ARM_KINDS[name])
+            z = epm_zones.empty_arm_zone(name, kind)
+            z["geometry"] = list(arm_names_norm.get(name) or [])
+            zd.add_zone(z)
+        if extras.get("center_norm"):
+            cz = epm_zones.empty_center_zone()
+            cz["geometry"] = list(extras["center_norm"])
+            zd.add_zone(cz)
+        zd.emit_change("epm template restored")
+
+    def _apply_extras(self, host, extras):
         zd = host.zone_drawer
         arm_kinds = extras.get("arm_kinds") or {}
         if arm_kinds:
@@ -469,4 +491,7 @@ class EPMExperiment(Experiment):
             host._epm_endpoints = [tuple(p) for p in extras["epm_endpoints"]]
         else:
             host._epm_endpoints = None
-        zd.emit_change("epm template restored")
+        if (getattr(host, "rb_epm_template", None) is not None and host.rb_epm_template.isChecked()
+                and host._epm_hub and host._epm_endpoints):
+            from .ui import _start_template
+            _start_template(host)              # hub / tip handles (no rebuild now)

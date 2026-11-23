@@ -19,7 +19,7 @@ from gui.log_dialog import LogDialog
 from core import logger
 from gui import theme
 from gui.backdrop import AuroraBackdrop
-from gui.launcher import LOGO_OUTLINE, BrandColumn, TestGrid, tinted_svg_pixmap
+from gui.launcher import LOGO_OUTLINE, BrandColumn, ExperimentPicker, tinted_svg_pixmap
 from gui.redesign_widgets import SegmentedControl, StatusPill, ThemeToggle
 
 
@@ -225,6 +225,9 @@ class MainWindow(QMainWindow):
         self.epm_tab = None
         # Tests added through experiments.registry (built on first open).
         self._reg_tabs = {}
+        # Custom experiments: "__design__" (New / Edit design) and one tab per
+        # saved experiment in use (key = its file path).
+        self._custom_tabs = {}
 
         corner = QWidget()
         corner_lay = QHBoxLayout(corner)
@@ -460,16 +463,22 @@ class MainWindow(QMainWindow):
         self.brand_column = BrandColumn()
         h.addWidget(self.brand_column, 0)
 
-        tests = []
-        for i, (_menu, card, enabled, opener) in enumerate(self._TESTS, start=1):
-            if enabled and opener and opener.startswith("reg:"):
-                cb = (lambda _=False, k=opener[4:]: self._open_registered(k))
+        from experiments.custom import library
+        builtins = []
+        for _menu, card, enabled, opener in self._TESTS:
+            if not (enabled and opener):
+                continue
+            if opener.startswith("reg:"):
+                cb = (lambda k=opener[4:]: self._open_registered(k))
             else:
-                cb = getattr(self, opener) if (enabled and opener) else None
-            label = card if enabled else f"{card} (coming soon)"
-            tests.append((f"{i:02d}", label, enabled, cb))
-        self.test_grid = TestGrid(tests)
-        h.addWidget(self.test_grid, 1)
+                cb = getattr(self, opener)
+            builtins.append((card, cb))
+        self.experiment_picker = ExperimentPicker(
+            builtins, library.list_saved,
+            on_new=self._new_custom, on_open_saved=self._open_saved_custom,
+            on_edit=self._edit_saved_custom, on_delete=self._delete_saved_custom)
+        library.on_change(self._on_library_changed)
+        h.addWidget(self.experiment_picker, 1)
 
         self.brand_column.set_narrow(self.width() < BrandColumn.NARROW_BREAKPOINT)
         return w
@@ -523,10 +532,115 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(1)
         self._build_nor_menu()
 
+    # ── custom experiments ─────────────────────────────────────────────
+    def _custom_tab(self, key):
+        from experiments import registry
+        tab = self._custom_tabs.get(key)
+        if tab is None:
+            tab = registry.tab_class("custom")(self.config)
+            self._custom_tabs[key] = tab
+            self.tabs.addTab(tab, "Custom Experiment")
+            if hasattr(tab, "embedded_tab") and hasattr(tab.embedded_tab, "set_simple_mode"):
+                tab.embedded_tab.set_simple_mode(bool(self.config.get("simple_mode", True)))
+        return tab
+
+    def _show_custom(self, tab, title):
+        self.tabs.setTabText(self.tabs.indexOf(tab), title)
+        self.tabs.setCurrentWidget(tab)
+        self.stack.setCurrentIndex(1)
+        self._build_nor_menu()
+
+    def _design_tab_busy(self):
+        """True when the designer holds unsaved changes (asks first)."""
+        tab = self._custom_tabs.get("__design__")
+        if tab is None:
+            return False
+        et = tab.embedded_tab
+        if not getattr(et, "_cx_dirty", False):
+            return False
+        ans = QMessageBox.question(
+            self, "Custom experiment",
+            "The experiment you are designing has unsaved changes. Discard them?")
+        return ans != QMessageBox.Yes
+
+    def _new_custom(self):
+        if self._design_tab_busy():
+            return
+        from experiments.custom import ui as cui
+        tab = self._custom_tab("__design__")
+        et = tab.embedded_tab
+        cui.load_design(et, et.experiment, [], et.experiment.defaults()["measures"])
+        self._show_custom(tab, "New experiment")
+
+    def _edit_saved_custom(self, path):
+        from experiments.custom import library, ui as cui
+        try:
+            name, zones, measures = library.load(path)
+        except (OSError, ValueError) as e:
+            QMessageBox.warning(self, "Edit design", f"Could not open the experiment:\n{e}")
+            return
+        if self._design_tab_busy():
+            return
+        tab = self._custom_tab("__design__")
+        et = tab.embedded_tab
+        cui.load_design(et, et.experiment, zones, measures, name=name, path=path)
+        self._show_custom(tab, f"Edit: {name}")
+
+    def _open_saved_custom(self, path):
+        from experiments.custom import library, ui as cui
+        try:
+            name, zones, measures = library.load(path)
+        except (OSError, ValueError) as e:
+            QMessageBox.warning(self, "Open experiment", f"Could not open the experiment:\n{e}")
+            return
+        tab = self._custom_tab(path)
+        et = tab.embedded_tab
+        cui.load_design(et, et.experiment, zones, measures, name=name, path=path, locked=True)
+        self._show_custom(tab, name)
+
+    def _delete_saved_custom(self, path):
+        from experiments.custom import library
+        try:
+            name = library.load(path)[0]
+        except (OSError, ValueError):
+            name = os.path.basename(path)
+        ans = QMessageBox.question(
+            self, "Delete experiment",
+            f"Delete the experiment '{name}'?\n\nIts design is removed from the list. "
+            "Results you already exported are not touched. This cannot be undone.")
+        if ans != QMessageBox.Yes:
+            return
+        tab = self._custom_tabs.pop(path, None)
+        if tab is not None:
+            self.tabs.removeTab(self.tabs.indexOf(tab))
+            tab.deleteLater()
+        try:
+            library.delete(path)
+        except OSError as e:
+            QMessageBox.warning(self, "Delete experiment", f"Could not delete it:\n{e}")
+
+    def _on_library_changed(self):
+        """A custom experiment was saved / deleted: refresh the list and any
+        open copy of an edited experiment."""
+        from experiments.custom import library, ui as cui
+        self.experiment_picker.reload(library.last_saved)
+        for path, tab in list(self._custom_tabs.items()):
+            if path == "__design__" or not os.path.isfile(path):
+                continue
+            try:
+                name, zones, measures = library.load(path)
+            except (OSError, ValueError):
+                continue
+            et = tab.embedded_tab
+            cui.load_design(et, et.experiment, zones, measures, name=name, path=path,
+                            locked=True)
+            self.tabs.setTabText(self.tabs.indexOf(tab), name)
+
     def _all_experiment_tabs(self):
         """Every experiment tab that has been opened."""
         tabs = [getattr(self, a, None) for a in ("of_tab", "ym_tab", "nor_tab", "epm_tab")]
         tabs += list(self._reg_tabs.values())
+        tabs += list(self._custom_tabs.values())
         return [t for t in tabs if t is not None]
 
     def set_tracking_status(self, text):

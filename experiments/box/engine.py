@@ -38,6 +38,10 @@ class ZoneDef:
     # False: the min-dwell rule is off for this zone's layer (brief
     # crossings must count, e.g. water-maze platform crossings).
     dwell: bool = True
+    # True: corners can be dragged on the video (custom polygons).
+    editable: bool = False
+    # True: the whole zone can be dragged to a new place on the video.
+    movable: bool = False
 
     def contains(self, u, v):
         if self.test is not None:

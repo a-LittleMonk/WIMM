@@ -227,6 +227,7 @@ class YMazeExperiment(Experiment):
             "ym_mode":       ("template" if host.rb_ym_template.isChecked()
                               else "freehand"),
             "arm_width":     float(host.spin_ym_arm_width.value()),
+            "neutral_size":  float(host.spin_ym_neutral_size.value()),
         }
 
     def contribute_to_snapshot(self, host, snapshot):
@@ -375,6 +376,8 @@ class YMazeExperiment(Experiment):
             "min_dwell_s": state["min_dwell_s"],
             "ym_mode": state["ym_mode"],
             "arm_width": state["arm_width"],
+            "neutral_size": state["neutral_size"],
+            "neutral_norm": state["neutral_norm"],
             "ym_hub": state["ym_hub"],
             "ym_endpoints": state["ym_endpoints"],
         }
@@ -384,11 +387,9 @@ class YMazeExperiment(Experiment):
             return
         zd = host.zone_drawer
         arms_norm = extras.get("arms_norm") or {}
-        # Always seed all 3 arm zones (so handles render).
-        for name in ym_zones.ARM_NAMES:
-            z = ym_zones.empty_arm_zone(name)
-            z["geometry"] = list(arms_norm.get(name) or [])
-            zd.add_zone(z)
+        # Settings below would rebuild the arms from the template; hold that
+        # off so the saved (possibly hand-adjusted) shapes come back as saved.
+        host._ym_restoring = True
         if extras.get("entry_rule") and hasattr(host, "combo_ym_rule"):
             idx = host.combo_ym_rule.findData(extras["entry_rule"])
             if idx >= 0:
@@ -405,6 +406,11 @@ class YMazeExperiment(Experiment):
                 host.spin_ym_arm_width.setValue(float(extras["arm_width"]))
             except Exception:
                 pass
+        if extras.get("neutral_size") is not None and hasattr(host, "spin_ym_neutral_size"):
+            try:
+                host.spin_ym_neutral_size.setValue(float(extras["neutral_size"]))
+            except Exception:
+                pass
         if extras.get("ym_hub"):
             host._ym_hub = tuple(extras["ym_hub"])
         else:
@@ -413,4 +419,25 @@ class YMazeExperiment(Experiment):
             host._ym_endpoints = [tuple(p) for p in extras["ym_endpoints"]]
         else:
             host._ym_endpoints = None
+        try:
+            if (getattr(host, "rb_ym_template", None) is not None
+                    and host.rb_ym_template.isChecked() and host._ym_hub
+                    and host._ym_endpoints):
+                from .ui import _start_template
+                _start_template(host)          # A/B/C + hub handles (no rebuild now)
+        finally:
+            host._ym_restoring = False
+        # The saved shapes, exactly (arms always seeded so handles render).
+        colors = getattr(host, "_ym_colors", {}) or {}
+        for name in ym_zones.ARM_NAMES:
+            z = ym_zones.empty_arm_zone(name)
+            z["geometry"] = list(arms_norm.get(name) or [])
+            z["style"]["color"] = colors.get(name, z["style"]["color"])
+            zd.add_zone(z)
+        neutral = extras.get("neutral_norm") or []
+        if len(neutral) >= 3:
+            nz = ym_zones.empty_neutral_zone()
+            nz["geometry"] = [tuple(p) for p in neutral]
+            nz["style"]["color"] = colors.get("neutral_zone", nz["style"]["color"])
+            zd.add_zone(nz)
         zd.emit_change("y-maze template restored")

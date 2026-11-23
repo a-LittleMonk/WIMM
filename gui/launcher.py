@@ -2,24 +2,28 @@
 (section "Turn 4", variant 4a).
 
 Two-column body: a brand column (logo, big WIMM logo, a technical
-backdrop centred on the logo) on the left, a dense grid of test cards on the
-right. Colours always come from `gui.theme` tokens (never hard-coded), so the
+backdrop centred on the logo) on the left; on the right a "New experiment"
+card (text + Create on the left, an arena sketch on the right) and one icon
+dropdown — search, sections, arena icons — to open any experiment (built-in
+or saved). Colours always come from `gui.theme` tokens (never hard-coded), so the
 screen follows the user's palette and light/dark switch.
 """
 import os
+import time
 
-from PyQt5.QtCore import QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import (
     QBrush, QColor, QFont, QFontMetrics, QFontMetricsF, QImage, QLinearGradient, QPainter,
-    QPen, QPixmap, QRadialGradient,
+    QPainterPath, QPen, QPixmap, QRadialGradient,
 )
 from PyQt5.QtSvg import QSvgRenderer
 from PyQt5.QtWidgets import (
-    QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout,
-    QWidget,
+    QApplication, QFrame, QGraphicsDropShadowEffect, QGridLayout, QHBoxLayout, QLabel,
+    QLineEdit, QListWidget, QListWidgetItem, QPushButton, QSizePolicy, QStyledItemDelegate,
+    QStyleOptionViewItem, QVBoxLayout, QWidget,
 )
 
-from gui import theme
+from gui import icons, theme
 
 ASSETS_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets"
@@ -343,103 +347,22 @@ class BrandColumn(QWidget):
         p.end()
 
 
-class TestCard(QFrame):
-    """One launcher card — enabled (clickable, index over name) or disabled
-    ("coming soon": dashed border, index + label in a row)."""
+class _Card(QFrame):
+    """Launcher pane in the start-page card look (theme glass tokens)."""
 
     clicked = pyqtSignal()
 
-    def __init__(self, index_text, name_text, enabled=True, parent=None):
+    def __init__(self, clickable=False, parent=None):
         super().__init__(parent)
-        self._enabled_card = enabled
+        self._clickable = clickable
         self._hover = False
-        self._name_px = 17      # preferred name size (GRID_LAYOUT)
-        self._fit_px = 17       # size actually used — shrinks to fit the card
-        self._name_text = name_text
-        # Cards share the grid columns equally; the name never forces width.
-        self.setMinimumSize(0, 0)
-        self.setCursor(Qt.PointingHandCursor if enabled else Qt.ArrowCursor)
-
-        if enabled:
-            lay = QVBoxLayout(self)
-            lay.setContentsMargins(20, 18, 20, 18)
-            lay.setSpacing(0)
-            self.idx = QLabel(index_text)
-            lay.addWidget(self.idx, 0, Qt.AlignLeft | Qt.AlignTop)
-            lay.addStretch(1)
-            self.name = QLabel(name_text)
-            self.name.setWordWrap(True)
-            self.name.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-            self.idx.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-            lay.addWidget(self.name, 0, Qt.AlignBottom)
-        else:
-            lay = QHBoxLayout(self)
-            lay.setContentsMargins(20, 0, 20, 0)
-            lay.setSpacing(14)
-            self.idx = QLabel(index_text)
-            lay.addWidget(self.idx, 0, Qt.AlignVCenter)
-            self.name = QLabel(name_text)
-            self.name.setWordWrap(True)
-            self.name.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-            lay.addWidget(self.name, 1, Qt.AlignVCenter)
-
+        if clickable:
+            self.setCursor(Qt.PointingHandCursor)
         self._retint()
         theme.notifier.changed.connect(self._retint)
 
-    def set_name_size(self, px):
-        self._name_px = px
-        self._fit_px = px
-        self._retint()
-
-    MIN_NAME_PX = 11
-    resized = pyqtSignal()
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._set_padding()
-        self.resized.emit()
-
-    def _set_padding(self):
-        """Tighter padding on small cards (window not maximised)."""
-        if not self._enabled_card:
-            return
-        small = self.height() < 90 or self.width() < 150
-        mx, my = (12, 9) if small else (20, 18)
-        m = self.layout().contentsMargins()
-        if m.left() != mx or m.top() != my:
-            self.layout().setContentsMargins(mx, my, mx, my)
-
-    def best_px(self):
-        """Largest name size (up to the preferred one) whose wrapped text
-        fits inside the card: no line wider than the card, not taller than
-        the room left under the index number."""
-        m = self.layout().contentsMargins()
-        avail_w = max(10, self.width() - m.left() - m.right())
-        avail_h = max(10, self.height() - m.top() - m.bottom()
-                      - (16 if self._enabled_card else 0))   # 16 = index line
-        if not self._enabled_card:
-            avail_w -= 40                                      # index + gap
-        base = self._name_px if self._enabled_card else 13
-        px = base
-        while px > self.MIN_NAME_PX:
-            f = QFont(theme.sans_family())
-            f.setPixelSize(px)
-            if self._enabled_card:
-                f.setWeight(QFont.DemiBold)
-            r = QFontMetrics(f).boundingRect(
-                0, 0, avail_w, 10000, Qt.TextWordWrap, self._name_text)
-            if r.width() <= avail_w and r.height() <= avail_h:
-                break
-            px -= 1
-        return px
-
-    def apply_px(self, px):
-        if px != self._fit_px:
-            self._fit_px = px
-            self._retint()
-
     def enterEvent(self, event):
-        if self._enabled_card:
+        if self._clickable:
             self._hover = True
             self._retint()
         super().enterEvent(event)
@@ -451,96 +374,800 @@ class TestCard(QFrame):
         super().leaveEvent(event)
 
     def mousePressEvent(self, event):
-        if self._enabled_card and event.button() == Qt.LeftButton:
+        if self._clickable and event.button() == Qt.LeftButton:
             self.clicked.emit()
         super().mousePressEvent(event)
 
     def _retint(self, *_):
-        self.idx.setStyleSheet(
-            f"font-family:'{theme.mono_family()}'; font-size:11px; "
-            f"color:{theme.FAINT}; background:transparent;"
-        )
-        if self._enabled_card:
-            self.name.setStyleSheet(
-                f"font-family:'{theme.sans_family()}'; font-weight:600; "
-                f"font-size:{self._fit_px}px; "
-                f"line-height:1.2; color:{theme.TEXT}; background:transparent;"
-            )
-            bg = theme.G_HOVER if self._hover else theme.G_PANEL
-            border = theme.G_ACC_LINE if self._hover else theme.G_RIM
-            top = "" if self._hover else f"border-top-color:{theme.G_HI};"
-            self.setStyleSheet(
-                f"TestCard {{ background:{bg}; border:1px solid {border}; "
-                f"{top} border-radius:12px; }}"
-            )
-        else:
-            self.name.setStyleSheet(
-                f"font-family:'{theme.sans_family()}'; font-size:{self._fit_px}px; "
-                f"color:{theme.FAINT}; background:transparent;"
-            )
-            self.setStyleSheet(
-                f"TestCard {{ background:{theme.G_SOFT}; "
-                f"border:1px dashed {theme.G_RIM}; border-radius:12px; }}"
-            )
+        bg = theme.G_HOVER if self._hover else theme.G_PANEL
+        border = theme.G_ACC_LINE if self._hover else theme.G_RIM
+        top = "" if self._hover else f"border-top-color:{theme.G_HI};"
+        self.setStyleSheet(
+            f"_Card {{ background:{bg}; border:1px solid {border}; {top} border-radius:12px; }}"
+            f"_Card QLabel {{ background:transparent; }}")
 
 
-# (row, col, colspan, name font size) for the cards, in launcher order:
-# two large cards, then rows of three.
-GRID_LAYOUT = [
-    (0, 0, 3, 22), (0, 3, 3, 22),
-    (1, 0, 2, 17), (1, 2, 2, 17), (1, 4, 2, 17),
-    (2, 0, 2, 15), (2, 2, 2, 15), (2, 4, 2, 15),
-    (3, 0, 2, 15), (3, 2, 2, 15), (3, 4, 2, 15),
-    (4, 0, 2, 15), (4, 2, 2, 15), (4, 4, 2, 15),
-]
+# ── Experiment picker (design "A") ──────────────────────────────────────
+# Built-in test title → (arena icon in gui.icons, one-line description).
+TEST_META = {
+    "Open Field": ("t_open_field", "Locomotion · anxiety"),
+    "Y-Maze": ("t_y_maze", "Spontaneous alternation"),
+    "Novel Object": ("t_novel_object", "Recognition memory"),
+    "Elevated Plus": ("t_elevated_plus", "Anxiety-like behavior"),
+    "Object Location": ("t_object_location", "Spatial memory"),
+    "Three Chamber": ("t_three_chamber", "Sociability"),
+    "Place Preference": ("t_place_pref", "Reward · conditioning"),
+    "Light–Dark Box": ("t_light_dark", "Anxiety-like behavior"),
+    "Zero Maze": ("t_zero_maze", "Anxiety-like behavior"),
+    "T-Maze": ("t_t_maze", "Working memory"),
+    "Radial Arm Maze": ("t_radial_maze", "Spatial working memory"),
+    "Water Maze": ("t_water_maze", "Spatial learning"),
+}
+SAVED_ICON = "t_custom"
 
 
-class TestGrid(QWidget):
-    """Right column: 6-column grid of test cards."""
+def _qc(token, alpha=None):
+    """QColor from a theme token — '#RRGGBB' or the CSS 'rgba(r,g,b,a)'
+    strings theme.py builds (a = 0–255). `alpha` (0–1) overrides."""
+    s = (token or "").strip()
+    if s.startswith("rgb"):
+        nums = [float(n) for n in s[s.index("(") + 1: s.index(")")].split(",")]
+        c = QColor(int(nums[0]), int(nums[1]), int(nums[2]))
+        if len(nums) > 3:
+            c.setAlpha(max(0, min(255, int(round(nums[3])))))
+    else:
+        c = QColor(s)
+    if alpha is not None:
+        c.setAlphaF(max(0.0, min(1.0, alpha)))
+    return c
 
-    def __init__(self, tests, parent=None):
-        """tests: [(index_text, name_text, enabled, callback_or_None), ...],
-        one entry per GRID_LAYOUT slot, in order."""
+
+def _saved_color():
+    """Hue that marks the user's own experiments (vs. the built-in tests)."""
+    return "#9FC3FF" if theme.mode() == "dark" else "#3566B8"
+
+
+def _font(px, weight=QFont.Normal, mono=False, spacing=0.0):
+    f = QFont(theme.mono_family() if mono else theme.sans_family())
+    f.setPixelSize(px)
+    f.setWeight(weight)
+    if spacing:
+        f.setLetterSpacing(QFont.AbsoluteSpacing, spacing)
+    return f
+
+
+def _draw_icon(p, name, rect, color):
+    pm = icons.pixmap(name, int(round(rect.width())), color)
+    p.drawPixmap(rect, pm, QRectF(pm.rect()))
+
+
+def _paint_tile(p, rect, icon_name, active=False, icon_color=None):
+    """The rounded square behind each experiment icon (accent when active)."""
+    if active:
+        bg, edge, ic = _qc(theme.ACCENT, 0.13), _qc(theme.ACCENT, 0.35), theme.ACCENT
+    else:
+        bg, edge, ic = _qc(theme.TEXT, 0.05), _qc(theme.TEXT, 0.09), icon_color or theme.TEXT_2
+    p.setPen(QPen(edge, 1))
+    p.setBrush(bg)
+    p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 9, 9)
+    s = round(rect.height() * 0.56)
+    _draw_icon(p, icon_name, QRectF(rect.center().x() - s / 2, rect.center().y() - s / 2, s, s), ic)
+
+
+class ArenaSketch(QWidget):
+    """Right half of the New-experiment card: a drafting grid with an arena
+    outline, a dashed zone with corner handles, a dashed line and a pen —
+    "draw your own"."""
+
+    RADIUS = 12   # matches _Card's border-radius
+
+    def __init__(self, parent=None):
         super().__init__(parent)
-        grid = QGridLayout(self)
-        grid.setContentsMargins(48, 64, 56, 48)
-        grid.setSpacing(12)
-        for c in range(6):
-            grid.setColumnStretch(c, 1)
-        rows = 1 + max(r for r, _c, _s, _p in GRID_LAYOUT[:len(tests)])
-        for r in range(rows):
-            grid.setRowStretch(r, 13 if r == 0 else (10 if r == 1 else 8))
-            if r >= 2:
-                grid.setRowMinimumHeight(r, 54)
+        self.setFixedWidth(240)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        theme.notifier.changed.connect(self.update)
 
-        self.cards = []
-        self._rows = {}
-        self._fit_pending = False
-        for (idx_text, name_text, enabled, cb), (row, col, span, px) in zip(tests, GRID_LAYOUT):
-            card = TestCard(idx_text, name_text, enabled)
-            card.set_name_size(px)
-            if enabled and cb is not None:
-                card.clicked.connect(cb)
-            grid.addWidget(card, row, col, 1, span)
-            card.resized.connect(self._schedule_fit)
-            self.cards.append(card)
-            self._rows.setdefault(row, []).append(card)
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        r = self.RADIUS - 1
+        clip = QPainterPath()
+        clip.moveTo(0, 0)
+        clip.lineTo(w - r, 0)
+        clip.arcTo(QRectF(w - 2 * r, 0, 2 * r, 2 * r), 90, -90)
+        clip.lineTo(w, h - r)
+        clip.arcTo(QRectF(w - 2 * r, h - 2 * r, 2 * r, 2 * r), 0, -90)
+        clip.lineTo(0, h)
+        clip.closeSubpath()
+        p.setClipPath(clip)
+        p.setPen(QPen(_qc(theme.TEXT, 0.05), 1))
+        for x in range(20, w, 20):
+            p.drawLine(QPointF(x + 0.5, 0), QPointF(x + 0.5, h))
+        for y in range(20, h, 20):
+            p.drawLine(QPointF(0, y + 0.5), QPointF(w, y + 0.5))
+        p.setClipping(False)
+        p.setPen(QPen(_qc(theme.TEXT, 0.08), 1))
+        p.drawLine(QPointF(0.5, 0), QPointF(0.5, h))
 
-    def _schedule_fit(self):
-        if not self._fit_pending:
-            self._fit_pending = True
-            QTimer.singleShot(0, self._fit_rows)
+        # The sketch is laid out on a 200×160 board, centred and scaled.
+        s = min((w - 40) / 200.0, (h - 24) / 160.0, 1.2)
+        p.translate(w / 2 - 100 * s, h / 2 - 80 * s)
+        p.scale(s, s)
+        acc = theme.ACCENT
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(_qc(theme.TEXT_2, 0.9), 1.5))
+        p.drawRoundedRect(QRectF(30, 20, 140, 120), 4, 4)
+        pen = QPen(QColor(acc), 1.5)
+        pen.setDashPattern([3.3, 2.7])
+        p.setPen(pen)
+        p.setBrush(_qc(acc, 0.12))
+        p.drawRoundedRect(QRectF(65, 50, 70, 60), 2, 2)
+        pen = QPen(QColor(_saved_color()), 1.5)
+        pen.setDashPattern([2, 2])
+        p.setPen(pen)
+        p.drawLine(QPointF(30, 80), QPointF(65, 80))
+        p.setPen(QPen(QColor(acc), 1.5))
+        p.setBrush(QColor(theme.SURFACE))
+        for cx, cy in ((65, 50), (135, 50), (135, 110), (65, 110)):
+            p.drawEllipse(QPointF(cx, cy), 3.5, 3.5)
+        p.setPen(QPen(QColor(theme.TEXT), 1.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush)
+        pencil = QPainterPath(QPointF(150, 128))
+        for x, y in ((164, 114), (170, 120), (156, 134), (150, 134)):
+            pencil.lineTo(x, y)
+        pencil.closeSubpath()
+        p.drawPath(pencil)
+        p.end()
 
-    def _fit_rows(self):
-        """Shrink card names to fit, using one size per row so a row never
-        mixes big and small names."""
-        self._fit_pending = False
-        for cards in self._rows.values():
-            live = [c for c in cards if c._enabled_card]
-            if live:
-                px = min(c.best_px() for c in live)
-                for c in live:
-                    c.apply_px(px)
-            for c in cards:
-                if not c._enabled_card:
-                    c.apply_px(c.best_px())
+
+class _ExperimentField(QWidget):
+    """The closed dropdown: icon tile, name, description and a chevron."""
+
+    clicked = pyqtSignal()
+    RING = 3
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._entry = None
+        self._open = False
+        self._hover = False
+        self.setFixedHeight(56 + 2 * self.RING)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setAccessibleName("Experiment")
+        theme.notifier.changed.connect(self.update)
+
+    def set_entry(self, entry):
+        self._entry = entry
+        self.setAccessibleDescription(entry["name"] if entry else "")
+        self.update()
+
+    def set_open(self, on):
+        self._open = bool(on)
+        self.update()
+
+    def enterEvent(self, event):
+        self._hover = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hover = False
+        self.update()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        k = event.key()
+        if k in (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter, Qt.Key_Down, Qt.Key_F4):
+            self.clicked.emit()
+            return
+        super().keyPressEvent(event)
+
+    def focusInEvent(self, event):
+        self.update()
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event):
+        self.update()
+        super().focusOutEvent(event)
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        g = self.RING
+        box = QRectF(self.rect()).adjusted(g + 0.5, g + 0.5, -g - 0.5, -g - 0.5)
+        active = self._open or self.hasFocus()
+        if active:
+            p.setPen(QPen(_qc(theme.ACCENT, 0.18), g))
+            p.setBrush(Qt.NoBrush)
+            p.drawRoundedRect(box.adjusted(-g / 2, -g / 2, g / 2, g / 2), 11.5, 11.5)
+        edge = QColor(theme.ACCENT) if active else (
+            _qc(theme.TEXT, 0.22) if self._hover else _qc(theme.G_LINE_2))
+        p.setPen(QPen(edge, 1))
+        p.setBrush(_qc(theme.G_INPUT))
+        p.drawRoundedRect(box, 10, 10)
+        e = self._entry
+        if e:
+            tile = QRectF(box.left() + 10, box.center().y() - 18, 36, 36)
+            _paint_tile(p, tile, e["icon"], active=not e["saved"],
+                        icon_color=_saved_color() if e["saved"] else None)
+            x = tile.right() + 12
+            tw = box.right() - 40 - x
+            p.setPen(QColor(theme.TEXT))
+            f = _font(14, QFont.Medium)
+            p.setFont(f)
+            p.drawText(QRectF(x, box.center().y() - 19, tw, 19), Qt.AlignLeft | Qt.AlignBottom,
+                       QFontMetrics(f).elidedText(e["name"], Qt.ElideRight, int(tw)))
+            p.setPen(QColor(theme.FAINT))
+            f = _font(12)
+            p.setFont(f)
+            sub = ("Your experiment · " if e["saved"] else "Built-in · ") + e["sub"]
+            p.drawText(QRectF(x, box.center().y() + 1, tw, 17), Qt.AlignLeft | Qt.AlignTop,
+                       QFontMetrics(f).elidedText(sub, Qt.ElideRight, int(tw)))
+        s = 16
+        _draw_icon(p, "chevron_u" if self._open else "chevron_d",
+                   QRectF(box.right() - 14 - s, box.center().y() - s / 2, s, s), theme.FAINT)
+        p.end()
+
+
+ROLE_KIND = Qt.UserRole + 1
+ROLE_ENTRY = Qt.UserRole + 2
+
+
+class _RowDelegate(QStyledItemDelegate):
+    """Paints the popup's rows: section headers, experiment rows (icon tile,
+    name, description, check / edit + delete) and the empty state."""
+
+    ROW_H, HEAD_H, EMPTY_H = 52, 34, 44
+
+    def __init__(self, popup):
+        super().__init__(popup)
+        self.popup = popup
+
+    def sizeHint(self, option, index):
+        kind = index.data(ROLE_KIND)
+        h = {"header": self.HEAD_H, "empty": self.EMPTY_H}.get(kind, self.ROW_H)
+        e = index.data(ROLE_ENTRY) or {}
+        if kind == "header" and e.get("divider"):
+            h += 9
+        return QSize(option.rect.width(), h)
+
+    @staticmethod
+    def action_rects(row_rect):
+        """(edit, delete) hit areas at the right of a saved-experiment row."""
+        r = QRectF(row_rect)
+        dele = QRectF(r.right() - 10 - 30, r.center().y() - 15, 30, 30)
+        edit = dele.translated(-34, 0)
+        return edit, dele
+
+    def paint(self, p, option, index):
+        kind = index.data(ROLE_KIND)
+        e = index.data(ROLE_ENTRY) or {}
+        r = QRectF(option.rect)
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing)
+        if kind == "header":
+            if e.get("divider"):
+                p.setPen(QPen(_qc(theme.TEXT, 0.08), 1))
+                p.drawLine(QPointF(r.left() + 8, r.top() + 4.5), QPointF(r.right() - 8, r.top() + 4.5))
+                r = r.adjusted(0, 9, 0, 0)
+            p.setPen(QColor(theme.FAINT))
+            p.setFont(_font(11, mono=True, spacing=2))
+            tr = r.adjusted(12, 0, -12, -6)
+            p.drawText(tr, Qt.AlignLeft | Qt.AlignBottom, e.get("text", ""))
+            p.drawText(tr, Qt.AlignRight | Qt.AlignBottom, str(e.get("count", "")))
+        elif kind == "empty":
+            p.setPen(QColor(theme.FAINT))
+            p.setFont(_font(13))
+            p.drawText(r.adjusted(14, 0, -12, 0), Qt.AlignLeft | Qt.AlignVCenter, e.get("text", ""))
+        else:
+            row = r.adjusted(2, 2, -2, -2)
+            current = e.get("key") == self.popup.current_key
+            hovered = index.row() == self.popup.hover_row
+            if current:
+                p.setPen(Qt.NoPen)
+                p.setBrush(_qc(theme.ACCENT, 0.10))
+                p.drawRoundedRect(row, 9, 9)
+            elif hovered:
+                p.setPen(Qt.NoPen)
+                p.setBrush(_qc(theme.TEXT, 0.05))
+                p.drawRoundedRect(row, 9, 9)
+            saved = e.get("saved")
+            tile = QRectF(row.left() + 8, row.center().y() - 18, 36, 36)
+            _paint_tile(p, tile, e["icon"], active=current and not saved,
+                        icon_color=_saved_color() if saved else None)
+            show_actions = saved and (hovered or current)
+            right = row.right() - 12
+            if show_actions:
+                edit_r, del_r = self.action_rects(row)
+                right = edit_r.left() - 8
+                for rect, name, color, which in ((edit_r, "edit", theme.TEXT_2, "edit"),
+                                                 (del_r, "trash", theme.ERR, "delete")):
+                    if hovered and self.popup.hover_action == which:
+                        p.setPen(Qt.NoPen)
+                        p.setBrush(_qc(theme.TEXT, 0.09))
+                        p.drawRoundedRect(rect, 7, 7)
+                    _draw_icon(p, name, QRectF(rect.center().x() - 8, rect.center().y() - 8, 16, 16), color)
+            elif current:
+                _draw_icon(p, "check", QRectF(row.right() - 12 - 16, row.center().y() - 8, 16, 16),
+                           theme.ACCENT)
+                right = row.right() - 36
+            x = tile.right() + 12
+            tw = max(10.0, right - x)
+            f = _font(14, QFont.Medium)
+            p.setFont(f)
+            p.setPen(QColor(theme.TEXT))
+            p.drawText(QRectF(x, row.center().y() - 18, tw, 18), Qt.AlignLeft | Qt.AlignBottom,
+                       QFontMetrics(f).elidedText(e["name"], Qt.ElideRight, int(tw)))
+            f = _font(12)
+            p.setFont(f)
+            p.setPen(QColor(theme.FAINT))
+            p.drawText(QRectF(x, row.center().y() + 1, tw, 16), Qt.AlignLeft | Qt.AlignTop,
+                       QFontMetrics(f).elidedText(e["sub"], Qt.ElideRight, int(tw)))
+        p.restore()
+
+
+class _ExperimentPopup(QFrame):
+    """The open dropdown: a search box over a sectioned, icon list of every
+    experiment. Type to filter; ↑/↓ + Enter to pick; Esc to close. Saved
+    experiments get edit / delete buttons on hover."""
+
+    picked = pyqtSignal(object)          # entry key
+    closed = pyqtSignal()
+    action = pyqtSignal(str, object)     # ("edit" | "delete", path)
+    MARGIN = 14                          # room for the drop shadow
+    MAX_LIST_H = 440
+
+    def __init__(self, entries, current_key, parent=None):
+        super().__init__(parent, Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_DeleteOnClose)
+        self.current_key = current_key
+        self.hover_row = -1
+        self.hover_action = None
+
+        outer = QVBoxLayout(self)
+        m = self.MARGIN
+        outer.setContentsMargins(m, m - 6, m, m + 6)
+        self.panel = QFrame()
+        self.panel.setObjectName("ExpPopupPanel")
+        shadow = QGraphicsDropShadowEffect(self.panel)
+        shadow.setBlurRadius(36)
+        shadow.setOffset(0, 10)
+        shadow.setColor(QColor(0, 0, 0, 120 if theme.mode() == "dark" else 50))
+        self.panel.setGraphicsEffect(shadow)
+        outer.addWidget(self.panel)
+
+        v = QVBoxLayout(self.panel)
+        v.setContentsMargins(8, 10, 8, 8)
+        v.setSpacing(4)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search experiments…")
+        self.search.setClearButtonEnabled(True)
+        self.search.setMinimumHeight(38)
+        self.search.addAction(icons.icon("search", 14, theme.FAINT), QLineEdit.LeadingPosition)
+        self.search.textChanged.connect(self._filter)
+        self.search.installEventFilter(self)
+        v.addWidget(self.search)
+
+        self.list = QListWidget()
+        self.list.setFrameShape(QFrame.NoFrame)
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.list.setVerticalScrollMode(QListWidget.ScrollPerPixel)
+        self.list.setMouseTracking(True)
+        self.list.viewport().setMouseTracking(True)
+        self.list.setUniformItemSizes(False)
+        self.list.setFocusPolicy(Qt.NoFocus)
+        self.list.setItemDelegate(_RowDelegate(self))
+        self.list.viewport().installEventFilter(self)
+        self.list.viewport().setCursor(Qt.PointingHandCursor)
+        v.addWidget(self.list)
+
+        for e in entries:
+            it = QListWidgetItem()
+            it.setData(ROLE_KIND, e["kind"])
+            it.setData(ROLE_ENTRY, e)
+            if e["kind"] != "item":
+                it.setFlags(Qt.NoItemFlags)
+            self.list.addItem(it)
+        self._no_match = QListWidgetItem()
+        self._no_match.setData(ROLE_KIND, "empty")
+        self._no_match.setData(ROLE_ENTRY, {"text": ""})
+        self._no_match.setFlags(Qt.NoItemFlags)
+        self.list.addItem(self._no_match)
+
+        self._retint()
+        self._filter("")
+        row = self._row_of(current_key)
+        if row is not None:
+            self.list.scrollToItem(self.list.item(row), QListWidget.PositionAtCenter)
+
+    # ── helpers
+    def _entry(self, row):
+        it = self.list.item(row)
+        return it.data(ROLE_ENTRY) if it is not None else None
+
+    def _row_of(self, key):
+        for r in range(self.list.count()):
+            e = self._entry(r)
+            if e and e.get("key") == key and not self.list.isRowHidden(r):
+                return r
+        return None
+
+    def _selectable_rows(self):
+        return [r for r in range(self.list.count())
+                if not self.list.isRowHidden(r) and self.list.item(r).data(ROLE_KIND) == "item"]
+
+    def _filter(self, text):
+        q = text.strip().lower()
+        section, shown_in = None, {}
+        for r in range(self.list.count()):
+            it = self.list.item(r)
+            if it is self._no_match:
+                continue
+            kind, e = it.data(ROLE_KIND), it.data(ROLE_ENTRY)
+            if kind == "header":
+                section = r
+                shown_in[r] = 0
+                continue
+            if kind == "empty":   # "none yet" placeholder: only when not searching
+                hide = bool(q)
+            else:
+                hide = bool(q) and q not in (e["name"] + " " + e["sub"]).lower()
+            self.list.setRowHidden(r, hide)
+            if not hide and section is not None:
+                shown_in[section] += 1
+        for r, n in shown_in.items():
+            self.list.setRowHidden(r, bool(q) and n == 0)
+        any_hit = bool(self._selectable_rows())
+        self._no_match.setData(ROLE_ENTRY, {"text": f"No experiments match “{text.strip()}”"})
+        self.list.setRowHidden(self.list.row(self._no_match), any_hit or not q)
+        first_header = next((r for r in range(self.list.count())
+                             if not self.list.isRowHidden(r)
+                             and self.list.item(r).data(ROLE_KIND) == "header"), None)
+        for r in range(self.list.count()):   # no divider above the first visible section
+            it = self.list.item(r)
+            if it.data(ROLE_KIND) == "header":
+                e = dict(it.data(ROLE_ENTRY))
+                e["divider"] = r != first_header
+                it.setData(ROLE_ENTRY, e)
+        rows = self._selectable_rows()
+        if q and rows and self._row_of(self.current_key) is None:
+            self.current_key = self._entry(rows[0])["key"]
+        self._fit()
+        self.list.viewport().update()
+
+    def _fit(self):
+        d = self.list.itemDelegate()
+        opt = QStyleOptionViewItem()
+        total = sum(d.sizeHint(opt, self.list.model().index(r, 0)).height()
+                    for r in range(self.list.count()) if not self.list.isRowHidden(r))
+        self.list.setFixedHeight(min(total + 2, self.MAX_LIST_H))
+        self.adjustSize()
+
+    def _move(self, step):
+        rows = self._selectable_rows()
+        if not rows:
+            return
+        cur = self._row_of(self.current_key)
+        if cur not in rows:
+            nxt = rows[0] if step > 0 else rows[-1]
+        else:
+            nxt = rows[max(0, min(len(rows) - 1, rows.index(cur) + step))]
+        self.current_key = self._entry(nxt)["key"]
+        self.list.scrollToItem(self.list.item(nxt))
+        self.list.viewport().update()
+
+    # ── events
+    def eventFilter(self, obj, ev):
+        t = ev.type()
+        if obj is self.search and t == QEvent.KeyPress:
+            k = ev.key()
+            if k in (Qt.Key_Down, Qt.Key_Up):
+                self._move(1 if k == Qt.Key_Down else -1)
+                return True
+            if k in (Qt.Key_PageDown, Qt.Key_PageUp):
+                self._move(6 if k == Qt.Key_PageDown else -6)
+                return True
+            if k in (Qt.Key_Return, Qt.Key_Enter):
+                if self._row_of(self.current_key) is not None:
+                    self.picked.emit(self.current_key)
+                return True
+            if k == Qt.Key_Escape:
+                self.close()
+                return True
+        elif getattr(self, "list", None) is not None and obj is self.list.viewport():
+            if t == QEvent.MouseMove:
+                self._hover_at(ev.pos())
+            elif t == QEvent.Leave:
+                self.hover_row, self.hover_action = -1, None
+                obj.update()
+            elif t == QEvent.MouseButtonRelease and ev.button() == Qt.LeftButton:
+                self._click_at(ev.pos())
+                return True
+        return super().eventFilter(obj, ev)
+
+    def _hit(self, pos):
+        it = self.list.itemAt(pos)
+        if it is None or it.data(ROLE_KIND) != "item":
+            return -1, None, None
+        row = self.list.row(it)
+        e = it.data(ROLE_ENTRY)
+        act = None
+        if e.get("saved"):
+            edit_r, del_r = _RowDelegate.action_rects(QRectF(self.list.visualItemRect(it)).adjusted(2, 2, -2, -2))
+            if edit_r.contains(QPointF(pos)):
+                act = "edit"
+            elif del_r.contains(QPointF(pos)):
+                act = "delete"
+        return row, e, act
+
+    def _hover_at(self, pos):
+        row, _e, act = self._hit(pos)
+        if (row, act) != (self.hover_row, self.hover_action):
+            self.hover_row, self.hover_action = row, act
+            self.list.viewport().update()
+
+    def _click_at(self, pos):
+        row, e, act = self._hit(pos)
+        if row < 0:
+            return
+        if act:
+            self.action.emit(act, e["key"][1])
+        else:
+            self.picked.emit(e["key"])
+
+    def hideEvent(self, event):
+        self.closed.emit()
+        super().hideEvent(event)
+
+    def popup_below(self, field):
+        """Show under `field` (or above it when the screen runs out)."""
+        m = self.MARGIN
+        self.setFixedWidth(field.width() - 2 * _ExperimentField.RING + 2 * m)
+        self._fit()
+        g = _ExperimentField.RING
+        # panel top sits 4 px under the field's box; the window adds the
+        # shadow margins (top m-6, bottom m+6) around the panel.
+        top_left = field.mapToGlobal(QPoint(g - m, field.height() - g + 4 - (m - 6)))
+        screen = QApplication.screenAt(field.mapToGlobal(QPoint(0, 0))) or QApplication.primaryScreen()
+        avail = screen.availableGeometry()
+        y = top_left.y()
+        if y + self.height() - (m + 6) > avail.bottom():
+            field_top = field.mapToGlobal(QPoint(0, g)).y()
+            y = max(avail.top(), field_top - 4 - (self.height() - 2 * m) - (m - 6))
+        self.move(top_left.x(), y)
+        self.show()
+        self.search.setFocus()
+
+    def _retint(self, *_):
+        self.panel.setStyleSheet(
+            f"#ExpPopupPanel {{ background:{theme.POPUP}; border:1px solid {theme.POPUP_EDGE};"
+            f" border-radius:12px; }}"
+            f"#ExpPopupPanel QLineEdit {{ background:{theme.G_INPUT}; color:{theme.TEXT};"
+            f" border:1px solid {theme.G_LINE}; border-radius:8px; padding:0 8px;"
+            f" font-family:'{theme.sans_family()}'; font-size:13px; }}"
+            f"#ExpPopupPanel QLineEdit:focus {{ border-color:{theme.G_ACC_LINE}; }}"
+            f"#ExpPopupPanel QListWidget {{ background:transparent; border:0; outline:0; }}")
+
+
+class ExperimentPicker(QWidget):
+    """Right column of the start page: a "New experiment" card (opens the
+    custom-experiment designer) and an "Open an experiment" card with one
+    icon dropdown of every experiment — built-in tests and the ones saved by
+    the user (those can also be edited or deleted, from the buttons below
+    it or straight from the list).
+
+    builtins: [(title, open_fn)]; saved_fn() -> [(name, path)];
+    on_new(); on_open_saved(path); on_edit(path); on_delete(path)."""
+
+    def __init__(self, builtins, saved_fn, on_new, on_open_saved, on_edit, on_delete,
+                 parent=None):
+        super().__init__(parent)
+        self._builtins = list(builtins)
+        self._saved_fn = saved_fn
+        self._on_open_saved, self._on_edit, self._on_delete = on_open_saved, on_edit, on_delete
+        self._entries = []
+        self._current = None
+        self._popup = None
+        self._popup_closed_at = 0.0
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(48, 64, 56, 48)
+        v.setSpacing(16)
+
+        # ── New experiment: text + Create on the left, arena sketch on the right
+        self.new_card = _Card(clickable=True)
+        self.new_card.setFixedHeight(200)
+        self.new_card.setToolTip("Design your own experiment")
+        nh = QHBoxLayout(self.new_card)
+        nh.setContentsMargins(0, 1, 1, 1)
+        nh.setSpacing(0)
+        left = QVBoxLayout()
+        left.setContentsMargins(26, 24, 26, 24)
+        left.setSpacing(8)
+        self.new_kicker = QLabel("CUSTOM DESIGN")
+        self.new_title = QLabel("New experiment")
+        self.new_hint = QLabel("Draw your zones and lines, choose what to measure, "
+                               "and save it under a name.")
+        self.new_hint.setWordWrap(True)
+        self.new_hint.setMaximumWidth(320)
+        self.btn_create = QPushButton("Create")
+        self.btn_create.setProperty("primary", True)
+        self.btn_create.setMinimumHeight(36)
+        self.btn_create.setCursor(Qt.PointingHandCursor)
+        self.btn_create.clicked.connect(on_new)
+        left.addWidget(self.new_kicker)
+        left.addWidget(self.new_title)
+        left.addWidget(self.new_hint)
+        left.addStretch(1)
+        left.addWidget(self.btn_create, 0, Qt.AlignLeft)
+        nh.addLayout(left, 1)
+        self.sketch = ArenaSketch()
+        nh.addWidget(self.sketch)
+        self.new_card.clicked.connect(on_new)
+        v.addWidget(self.new_card)
+
+        # ── Open an experiment
+        self.open_card = _Card()
+        ol = QVBoxLayout(self.open_card)
+        ol.setContentsMargins(26 - _ExperimentField.RING, 22, 26 - _ExperimentField.RING, 20)
+        ol.setSpacing(10)
+        self.open_title = QLabel("Open an experiment")
+        self.open_title.setContentsMargins(_ExperimentField.RING, 0, 0, 0)
+        ol.addWidget(self.open_title)
+        self.field = _ExperimentField()
+        self.field.clicked.connect(self._show_popup)
+        self.open_title.setBuddy(self.field)
+        ol.addWidget(self.field)
+        row = QHBoxLayout()
+        row.setContentsMargins(_ExperimentField.RING, 0, _ExperimentField.RING, 0)
+        row.setSpacing(8)
+        self.btn_open = QPushButton("Open")
+        self.btn_open.setProperty("primary", True)
+        self.btn_open.setMinimumHeight(36)
+        self.btn_open.clicked.connect(self._open)
+        self.btn_edit = QPushButton("Edit design")
+        self.btn_edit.setToolTip("Change this experiment's zones and measures")
+        self.btn_edit.setMinimumHeight(36)
+        self.btn_edit.clicked.connect(lambda: self._act(self._on_edit))
+        self.btn_delete = QPushButton("Delete")
+        self.btn_delete.setToolTip("Remove this saved experiment")
+        self.btn_delete.setMinimumHeight(36)
+        self.btn_delete.clicked.connect(lambda: self._act(self._on_delete))
+        row.addWidget(self.btn_open)
+        row.addStretch(1)
+        row.addWidget(self.btn_edit)
+        row.addWidget(self.btn_delete)
+        ol.addLayout(row)
+        self.open_hint = QLabel("")
+        self.open_hint.setWordWrap(True)
+        self.open_hint.setContentsMargins(_ExperimentField.RING, 0, 0, 0)
+        ol.addWidget(self.open_hint)
+        v.addWidget(self.open_card)
+        v.addStretch(1)
+
+        self._retint()
+        theme.notifier.changed.connect(self._retint)
+        self.reload()
+
+    # ── data
+    def reload(self, select_path=None):
+        """Rebuild the list (after a save / delete)."""
+        entries = [{"kind": "header", "text": "BUILT-IN TESTS", "count": len(self._builtins)}]
+        for i, (title, _fn) in enumerate(self._builtins):
+            ic, sub = TEST_META.get(title, ("arena", "Built-in test"))
+            entries.append({"kind": "item", "key": ("builtin", i), "name": title,
+                            "sub": sub, "icon": ic, "saved": False})
+        saved = list(self._saved_fn())
+        entries.append({"kind": "header", "text": "YOUR EXPERIMENTS", "count": len(saved),
+                        "divider": True})
+        if saved:
+            for name, path in saved:
+                entries.append({"kind": "item", "key": ("saved", path), "name": name,
+                                "sub": "Your design", "icon": SAVED_ICON, "saved": True})
+        else:
+            entries.append({"kind": "empty", "text": "None yet — use New experiment"})
+        self._entries = entries
+        keys = [e["key"] for e in entries if e["kind"] == "item"]
+        want = ("saved", select_path) if select_path else self._current
+        self._current = want if want in keys else (keys[0] if keys else None)
+        if self._popup is not None:
+            self._popup.close()
+        self._sync()
+
+    def currentData(self):
+        """The selected entry's key: ("builtin", index) or ("saved", path)."""
+        return self._current
+
+    def _entry(self, key):
+        return next((e for e in self._entries if e.get("key") == key), None)
+
+    def _sync(self):
+        e = self._entry(self._current)
+        self.field.set_entry(e)
+        saved = bool(e) and e["saved"]
+        self.btn_edit.setEnabled(saved)
+        self.btn_delete.setEnabled(saved)
+        self.btn_open.setEnabled(bool(e))
+        self.open_hint.setText(
+            "Your own experiment: its zones and measures are fixed; you only "
+            "draw the arena for each video." if saved else
+            "A built-in test with its own settings.")
+
+    # ── popup
+    def _show_popup(self):
+        if self._popup is not None:
+            self._popup.close()
+            return
+        # A click on the field while the list is open first closes the popup
+        # (Qt.Popup) and then lands here — treat that click as "close".
+        if time.monotonic() - self._popup_closed_at < 0.25:
+            return
+        pop = _ExperimentPopup(self._entries, self._current, self)
+        pop.picked.connect(self._picked)
+        pop.action.connect(self._popup_action)
+        pop.closed.connect(self._popup_gone)
+        self._popup = pop
+        self.field.set_open(True)
+        pop.popup_below(self.field)
+
+    def _popup_gone(self, *_):
+        self._popup = None
+        self._popup_closed_at = time.monotonic()
+        self.field.set_open(False)
+
+    def _picked(self, key):
+        self._current = key
+        self._sync()
+        if self._popup is not None:
+            self._popup.close()
+        self.field.setFocus()
+
+    def _popup_action(self, which, path):
+        self._current = ("saved", path)
+        self._sync()
+        if self._popup is not None:
+            self._popup.close()
+        fn = self._on_edit if which == "edit" else self._on_delete
+        QTimer.singleShot(0, lambda: fn(path))
+
+    # ── actions
+    def _open(self):
+        data = self._current
+        if not data:
+            return
+        if data[0] == "builtin":
+            self._builtins[data[1]][1]()
+        else:
+            self._on_open_saved(data[1])
+
+    def _act(self, fn):
+        data = self._current
+        if data and data[0] == "saved":
+            fn(data[1])
+
+    def _retint(self, *_):
+        sans = theme.sans_family()
+        self.new_kicker.setFont(_font(11, mono=True, spacing=2))
+        self.new_kicker.setStyleSheet(f"color:{theme.ACCENT}; background:transparent;")
+        self.new_title.setStyleSheet(
+            f"font-family:'{sans}'; font-weight:600; font-size:26px; color:{theme.TEXT};")
+        self.open_title.setStyleSheet(
+            f"font-family:'{sans}'; font-weight:600; font-size:17px; color:{theme.TEXT};")
+        self.new_hint.setStyleSheet(
+            f"font-family:'{sans}'; font-size:13px; color:{theme.TEXT_2};")
+        self.open_hint.setStyleSheet(f"font-family:'{sans}'; font-size:12px; color:{theme.FAINT};")
+        self.btn_create.setIcon(icons.icon("plus", 14, theme.ON_ACCENT))
+        self.btn_edit.setIcon(icons.icon("edit", 14, theme.TEXT_2))
+        self.btn_delete.setIcon(icons.icon("trash", 14, theme.TEXT_2))
+        self.field.update()
+        self.sketch.update()

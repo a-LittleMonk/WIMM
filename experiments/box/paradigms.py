@@ -522,6 +522,7 @@ class RadialMaze(BoxExperiment):
     ]
     COLORS = {"arm": ("Arms", "#7FA6D9"), "baited": ("Baited", "#E8A87C"),
               "centre": ("Centre", "#A9B4C6")}
+    EDITABLE_ZONES = True
 
     def zones(self, p, dims, c):
         n = int(p["n_arms"])
@@ -529,14 +530,18 @@ class RadialMaze(BoxExperiment):
         hw = float(p["arm_pct"]) / 100.0 / 2.0
         rot = float(p["rotation"])
         baited = set(int(x) for x in (p.get("baited") or []))
-        zs = [ZoneDef("centre", "Centre", geo.regular_polygon(0.5, 0.5, r_hub, max(n, 8), 90 - rot),
-                      "arm", color=c["centre"], test=geo.radial(0.5, 0.5, 0, r_hub),
-                      fill_alpha=20, label_pos=(0.5, 0.5))]
+        # Centre: a regular polygon with one side per arm (corners between
+        # the arms); each arm starts at the middle of its side.
+        half = 180.0 / n
+        start = r_hub * math.cos(math.radians(half))
+        zs = [ZoneDef("centre", "Centre",
+                      geo.regular_polygon(0.5, 0.5, r_hub, n, 90 - rot - half),
+                      "arm", color=c["centre"], fill_alpha=20, label_pos=(0.5, 0.5))]
         for k in range(1, n + 1):
             ang = 90 - rot - (k - 1) * 360.0 / n
             ck = "baited" if k in baited else "arm"
             tip = 0.5 * 0.86
-            zs.append(ZoneDef(f"arm{k}", f"Arm {k}", geo.bar(0.5, 0.5, ang, r_hub, 0.5, hw),
+            zs.append(ZoneDef(f"arm{k}", f"Arm {k}", geo.bar(0.5, 0.5, ang, start, 0.5, hw),
                               "arm", color=c[ck],
                               label_pos=(0.5 + tip * math.cos(math.radians(ang)),
                                          0.5 - tip * math.sin(math.radians(ang)))))

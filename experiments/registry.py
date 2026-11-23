@@ -17,6 +17,7 @@ EXPERIMENTS = (
     ("t_maze",        "T-Maze",               "gui.box_tab",             "TMazeBatchTab",          "TMazeTab"),
     ("radial_maze",   "Radial Arm Maze",      "gui.box_tab",             "RadialMazeBatchTab",     "RadialMazeTab"),
     ("water_maze",    "Water Maze",           "gui.box_tab",             "WaterMazeBatchTab",      "WaterMazeTab"),
+    ("custom",        "Custom Experiment",    "gui.box_tab",             "CustomExperimentBatchTab", "CustomExperimentTab"),
 )
 
 KEYS = tuple(e[0] for e in EXPERIMENTS)

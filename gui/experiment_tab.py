@@ -363,6 +363,15 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         # arena_auto_movement=False so tracking uses the user-defined arms
         # instead of the OF auto-from-movement default.
         exp = getattr(self, "experiment", None)
+        # The test's own per-video state (arm shapes, objects, template
+        # handles …) so switching videos can put it back (apply_settings).
+        if exp is not None and hasattr(exp, "snapshot_extras"):
+            try:
+                for k, v in (exp.snapshot_extras(self) or {}).items():
+                    out.setdefault(k, v)
+            except Exception as e:
+                logger.warn(f"snapshot_extras failed ({getattr(exp, 'key', '?')}): {e}",
+                            source="plugin")
         if exp is not None and hasattr(exp, "contribute_to_snapshot"):
             try:
                 exp.contribute_to_snapshot(self, out)
@@ -405,6 +414,16 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         # slider, since blockSignals suppressed the valueChanged → preview
         # cascade during the apply.
         self._apply_view_prefs()
+        # The test's own state for this video (Y-Maze / EPM arms, NOR
+        # objects, box zones …) — before, switching videos kept showing the
+        # previous video's shapes and then saved them over this one's.
+        exp = getattr(self, "experiment", None)
+        if exp is not None and hasattr(exp, "apply_extras"):
+            try:
+                exp.apply_extras(self, s)
+            except Exception as e:
+                logger.warn(f"apply_extras failed ({getattr(exp, 'key', '?')}): {e}",
+                            source="plugin")
         self._update_calib_status()
         if hasattr(self, "_refresh_zones_label"):
             self._refresh_zones_label()
@@ -3883,7 +3902,9 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
                 self.tracking_results, plugin_settings, self.fps, px_per_cm,
             )
             video_name = os.path.splitext(os.path.basename(self.video_path))[0]
-            out_path = os.path.join(output_folder, f"{video_name}_{getattr(self.experiment, 'key', 'open_field')}.xlsx")
+            fkey = (getattr(self.experiment, "file_key", None)
+                    or getattr(self.experiment, "key", "open_field"))
+            out_path = os.path.join(output_folder, f"{video_name}_{fkey}.xlsx")
             export_results(
                 metrics=metrics,
                 raw_df=raw_df,
@@ -3895,7 +3916,8 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
                 bin_df=bin_df,
                 metadata=self._metadata(),
                 write_csv=True,
-                test_name=getattr(self.experiment, 'name', 'Open Field'),
+                test_name=(getattr(self.experiment, "report_title", None)
+                           or f"{getattr(self.experiment, 'name', 'Open Field')} Test"),
                 video_config=(self.experiment.filter_video_config(self.snapshot_settings())
                               if self.experiment is not None
                               else self.snapshot_settings()),

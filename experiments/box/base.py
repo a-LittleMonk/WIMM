@@ -56,6 +56,10 @@ class BoxExperiment(Experiment):
     scale = ("rect", 60.0, 40.0)
     uses_nose = False
     PARAMS: List[ParamSpec] = []
+    # True: every zone gets corner handles on the video; dragged outlines
+    # are kept per zone in params["zone_edits"] (box space) and cleared when
+    # a setting that rebuilds the layout changes.
+    EDITABLE_ZONES = False
     # Zone colours: key -> (label, default hex). Zones pick a colour key.
     COLORS = {}
 
@@ -76,7 +80,49 @@ class BoxExperiment(Experiment):
 
     # ── helpers ───────────────────────────────────────────────────────
     def defaults(self):
-        return {s.key: s.default for s in self.PARAMS}
+        d = {s.key: s.default for s in self.PARAMS}
+        if self.EDITABLE_ZONES:
+            d["zone_edits"] = {}
+        return d
+
+    def all_zones(self, p, dims, colors):
+        """self.zones() with the user's hand-adjusted outlines applied."""
+        zs = self.zones(p, dims, colors)
+        if not self.EDITABLE_ZONES:
+            return zs
+        edits = p.get("zone_edits") or {}
+        for z in zs:
+            z.editable = True
+            e = edits.get(z.name)
+            if e and len(e) >= 3:
+                z.poly = [tuple(q) for q in e]
+                z.test = None                     # measure with the adjusted outline
+        return zs
+
+    def _sync_zone_edits(self, host):
+        """Corners dragged on the video → params["zone_edits"]."""
+        zd = getattr(host, "zone_drawer", None)
+        params = getattr(host, "_box_params", None)
+        if (zd is None or not zd.arena or not isinstance(params, dict)
+                or not getattr(zd, "geometry_dragged", False)):
+            return
+        if zd._moving_zone is None and zd._dragging_extra is None:
+            zd.geometry_dragged = False          # drag finished: last sync
+        H = geo.box_homography(zd.arena)
+        if H is None:
+            return
+        from .ui import ZONE_PREFIX
+        import numpy as np
+        edits = dict(params.get("zone_edits") or {})
+        for z in self.all_zones(self.params_of(host), self.dims_of(host), self.colors_of(host)):
+            geom = (zd.get_zone(ZONE_PREFIX + z.name) or {}).get("geometry") or []
+            if len(geom) != len(z.poly):
+                continue
+            u, v = geo.to_box(H, [q[0] for q in geom], [q[1] for q in geom])
+            pts = [[round(float(a), 5), round(float(b), 5)] for a, b in zip(u, v)]
+            if np.abs(np.subtract(pts, np.asarray(z.poly, float))).max() > 1e-4:
+                edits[z.name] = pts
+        params["zone_edits"] = edits
 
     def params_of(self, host_or_settings):
         p = self.defaults()
@@ -88,6 +134,9 @@ class BoxExperiment(Experiment):
         for src in srcs:
             if isinstance(src, dict):
                 p.update({k: v for k, v in src.items() if k in p})
+        if "zone_edits" in p:
+            p["zone_edits"] = {k: [list(q) for q in v]
+                               for k, v in (p["zone_edits"] or {}).items()}
         return p
 
     def split_params(self, p):
@@ -123,7 +172,9 @@ class BoxExperiment(Experiment):
         return (w or float(self.scale[1]), h or float(self.scale[2]))
 
     def zone_defs_for_host(self, host):
-        return self.zones(self.params_of(host), self.dims_of(host),
+        if self.EDITABLE_ZONES:
+            self._sync_zone_edits(host)
+        return self.all_zones(self.params_of(host), self.dims_of(host),
                           self.colors_of(host))
 
     # ── Experiment contract ───────────────────────────────────────────
@@ -234,7 +285,7 @@ class BoxExperiment(Experiment):
         p = self.params_of(settings)
         self._current_params = dict(p)
         dims = self.dims_of(settings)
-        zones = self.zones(p, dims, self.colors_of(settings))
+        zones = self.all_zones(p, dims, self.colors_of(settings))
         s = dict(settings)
         s.update(self.engine_settings(p))
         ctx, metrics, raw_df, bin_df = engine.compute(
@@ -250,7 +301,7 @@ class BoxExperiment(Experiment):
 
     def zone_metric_keys(self, p):
         keys = []
-        for z in self.zones(p, self.dims_of({}), self.default_colors()):
+        for z in self.all_zones(p, self.dims_of({}), self.default_colors()):
             for fmt in ("Time in {} (s)", "% Time in {}", "Entries into {} (#)",
                         "Latency to {} (s)", "Mean Visit in {} (s)"):
                 keys.append(fmt.format(z.label))

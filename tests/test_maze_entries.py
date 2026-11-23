@@ -125,3 +125,23 @@ def test_nor_arena_time_uses_the_pixel_arena():
     m, _, _ = NORExperiment().compute_metrics(res, s, 30.0, 10.0)
     assert m["arena_entries"] == 1
     assert abs(m["arena_total_time_s"] - 10.0) < 0.05
+
+
+def test_y_maze_centre_is_a_triangle_the_arms_start_on():
+    """Like the radial maze: centre = one side per arm; each arm's inner
+    corners lie on its side of the triangle (no gap, no overlap)."""
+    import math
+    from experiments.y_maze.zones import build_neutral_zone_geom, build_template_arms
+    hub = (0.5, 0.45)
+    tips = [(0.5, 0.05), (0.15, 0.85), (0.85, 0.85)]
+    for neutral in (0.02, 0.12):                       # natural size, and enlarged
+        tri = build_neutral_zone_geom(hub, tips, neutral, 0.10, video_size=(1000, 1000))
+        arms = build_template_arms(hub, tips, 0.10, neutral, video_size=(1000, 1000))
+        assert len(tri) == 3 and len(arms) == 3
+        for arm in arms:
+            for p in (arm[0], arm[3]):                 # inner corners
+                on_side = min(
+                    abs((b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]))
+                    / math.hypot(b[0] - a[0], b[1] - a[1])
+                    for a, b in ((tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])))
+                assert on_side < 1e-9

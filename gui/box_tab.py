@@ -37,13 +37,6 @@ class BoxTab(OpenFieldTab):
             if i >= 0:
                 self.combo_body_style.setCurrentIndex(i)
 
-    def apply_settings(self, s):
-        """Shared restore, then this test's own settings (box_params /
-        box_colors) and its zones."""
-        super().apply_settings(s)
-        if isinstance(s, dict):
-            self.experiment.apply_extras(self, s)
-
     # ── Scale card ────────────────────────────────────────────────────
     def _cfg_key(self, dim):
         return f"{self.experiment.key}_cage_{dim}_cm"
@@ -321,4 +314,6 @@ def _make(exp_cls):
 
 from experiments.box.paradigms import ALL as _ALL  # noqa: E402
 
-BOX_TABS = {cls.key: _make(cls) for cls in _ALL}
+from experiments.custom.experiment import CustomExperiment  # noqa: E402
+
+BOX_TABS = {cls.key: _make(cls) for cls in (*_ALL, CustomExperiment)}

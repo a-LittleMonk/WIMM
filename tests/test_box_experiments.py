@@ -187,3 +187,40 @@ def test_nor_di_when_only_novel_explored():
     objs["object_b"]["role"] = "none"          # roles not both set → blank
     m, _, _ = NM.compute(rows, {"objects": objs, "min_dwell_s": 0.2}, 30, 5)
     assert m["discrimination_index"] is None
+
+
+def test_pct_slider_drives_a_whole_number_spin_box():
+    """Box tests (radial arm width…) hold % in a QSpinBox: moving the slider
+    must not pass it a decimal (TypeError in PyQt)."""
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt5.QtWidgets import QApplication, QDoubleSpinBox, QSlider, QSpinBox
+    from experiments import common_ui as cu
+    app = QApplication.instance() or QApplication([])
+    host = object()
+    whole = QSpinBox(); whole.setRange(5, 40); whole.setValue(20)
+    row = cu.pct_slider(host, "Arm width", whole, 5, 40)
+    row.findChild(QSlider).setValue(33)
+    assert whole.value() == 33
+    frac = QDoubleSpinBox(); frac.setRange(0.0, 1.0); frac.setDecimals(3); frac.setValue(0.1)
+    row2 = cu.pct_slider(host, "Neutral", frac, 2, 30, scale=100)
+    row2.findChild(QSlider).setValue(15)
+    assert abs(frac.value() - 0.15) < 1e-9
+    del app
+
+
+def test_radial_maze_centre_follows_arm_count_and_corners_can_be_adjusted():
+    from experiments.box.paradigms import RadialMaze
+    exp = RadialMaze()
+    c = exp.default_colors()
+    for n in (4, 6, 8, 12):
+        p = dict(exp.defaults(), n_arms=n)
+        zs = exp.all_zones(p, (100, 100), c)
+        assert len(zs[0].poly) == n and len(zs) == n + 1         # centre has one side per arm
+        assert all(z.editable for z in zs)                       # corners get handles
+    p = dict(exp.defaults(), n_arms=4)
+    moved = [list(q) for q in exp.all_zones(p, (100, 100), c)[1].poly]
+    moved[1] = [0.62, 0.0]
+    p["zone_edits"] = {"arm1": moved}
+    z1 = exp.all_zones(p, (100, 100), c)[1]
+    assert z1.poly[1] == (0.62, 0.0) and z1.test is None         # measured with the adjusted outline

@@ -63,7 +63,7 @@ def export_results(
     write_csv: bool = True,
     video_config: Optional[dict] = None,
     all_units: bool = True,
-    test_name: str = "Open Field",
+    test_name: str = "Open Field Test",
 ):
     # Every distance / speed / time value is written in all scales side
     # by side (cm, mm, m · cm/s … km/h · s, min) so the examiner can pick.
@@ -166,14 +166,14 @@ def _style_meta(ws):
         ws.column_dimensions[get_column_letter(col[0].column)].width = min(length + 4, 40)
 
 
-def _style_summary(ws, video_name: str, test_name: str = "Open Field"):
+def _style_summary(ws, video_name: str, test_name: str = "Open Field Test"):
     blue = PatternFill("solid", fgColor="1A6EA8")
     white_bold = Font(color="FFFFFF", bold=True, size=11)
     dark_bold = Font(bold=True, size=13)
 
     ws.insert_rows(1)
     ws.insert_rows(1)
-    ws["A1"] = f"{test_name} Test — {video_name}"
+    ws["A1"] = f"{test_name} — {video_name}"
     ws["A1"].font = dark_bold
     ws["A1"].alignment = Alignment(horizontal="left")
 

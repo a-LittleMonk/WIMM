@@ -233,6 +233,9 @@ class NORExperiment(Experiment):
                 host.chk_nor_angle.setChecked(host._nor_angle_enabled)
             if hasattr(host, "spin_nor_angle"):
                 host.spin_nor_angle.setValue(host._nor_angle_max_deg)
+        if getattr(host, "zone_drawer", None) is not None:
+            from . import ui as nor_ui
+            nor_ui._refresh_zones(host)              # draw this video's objects
         # Push the freshly restored geometry into the zone_drawer.
         nor_ui._refresh_zones(host)
         nor_ui._refresh_status(host)

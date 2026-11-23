@@ -3319,15 +3319,16 @@ class ExperimentBatchTab(QWidget):
         from core.app_paths import backup_dir
         backup_folder = backup_dir(self.config)
         if backup_folder and os.path.isdir(backup_folder):
-            backup_path = os.path.join(backup_folder, f"{name}_{exp_key or 'open_field'}.xlsx")
             exp = getattr(self.embedded_tab, "experiment", None)
+            fkey = getattr(exp, "file_key", None) or exp_key or "open_field"
+            backup_path = os.path.join(backup_folder, f"{name}_{fkey}.xlsx")
             vc = exp.filter_video_config(s) if exp is not None else s
             export_results(
                 metrics=metrics, raw_df=raw_df, output_path=backup_path,
                 video_name=name, arena=arena_px, video_size=(vw, vh),
                 graph_images=graph_images, bin_df=bin_df, metadata=meta,
                 write_csv=False, video_config=vc,
-                test_name=getattr(exp, "name", "Open Field"),
+                test_name=getattr(exp, "report_title", None) or f"{getattr(exp, 'name', 'Open Field')} Test",
             )
             logger.info(
                 f"Backup saved: {os.path.basename(backup_path)} | "
@@ -3622,6 +3623,16 @@ class ExperimentBatchTab(QWidget):
     def _load_into_embedded(self, path, read_only=False):
         if not path:
             return False
+        # While the next video's settings go in, the panel's change signals
+        # must not autosave them under the video being left.
+        was_loading = self._loading
+        self._loading = True
+        try:
+            return self._load_into_embedded_impl(path, read_only)
+        finally:
+            self._loading = was_loading
+
+    def _load_into_embedded_impl(self, path, read_only=False):
         # Snapshot the previously-loaded video's panel state before switching
         # (no-op in read-only mode).
         if self._embedded_loaded_path and self._embedded_loaded_path != path:

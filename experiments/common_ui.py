@@ -14,7 +14,7 @@ handlers; the card titles, control types and layout come from here.
 """
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenu, QSlider,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenu, QSlider, QSpinBox,
 )
 
 from gui import theme
@@ -134,7 +134,13 @@ def pct_slider(host, label, spin, lo, hi, scale=1.0, off_at_zero=False,
         slider.blockSignals(False)
         pill.show_value(pct)
 
-    slider.valueChanged.connect(lambda v: spin.setValue(v / float(scale)))
+    def to_spin(v):
+        val = v / float(scale)
+        # QSpinBox (box tests) takes whole numbers only; QDoubleSpinBox
+        # (Y-Maze / EPM fractions) keeps the decimal.
+        spin.setValue(int(round(val)) if isinstance(spin, QSpinBox) else val)
+
+    slider.valueChanged.connect(to_spin)
     spin.valueChanged.connect(show)
     show(spin.value())
     row = QHBoxLayout()

@@ -108,6 +108,14 @@ def build_geometry_step(host, exp):
 
     host.lbl_box_zones = cu.status_label("Define the arena first")
     zl.addWidget(host.lbl_box_zones)
+    if exp.EDITABLE_ZONES:
+        from gui.widgets_v2 import link_button
+        host.btn_box_reset_shape = link_button(
+            "Reset shape", "Undo the corners you dragged on the video")
+        host.btn_box_reset_shape.clicked.connect(lambda: _set(host, exp, "zone_edits", {}))
+        hint = cu.status_label("Drag any corner on the video to fit the real maze.")
+        zl.addWidget(hint)
+        zl.addWidget(host.btn_box_reset_shape, 0, Qt.AlignLeft)
 
     attach_info_box(grp, [
         ("Define arena", exp.arena_hint),
@@ -235,6 +243,11 @@ def _set(host, exp, key, value):
     host._box_params[key] = value
     if getattr(host, "_box_syncing", False):
         return
+    # A setting that rebuilds the layout (arm count, width, rotation …)
+    # replaces hand-adjusted corners; per-animal choices (baited arms) don't.
+    spec = next((s for s in exp.PARAMS if s.key == key), None)
+    if spec is not None and not spec.per_video and host._box_params.get("zone_edits"):
+        host._box_params["zone_edits"] = {}
     # Dependent multi-selectors (e.g. baited arms follow the arm count).
     for spec in exp.PARAMS:
         if spec.kind == "multi" and spec.options == key:
@@ -324,7 +337,8 @@ def refresh_zones(host, exp):
             "name": name,
             "type": "polygon",
             "geometry": geom,
-            "editable": False,
+            "editable": bool(z.editable),
+            "movable": bool(z.movable),
             "style": {
                 "color": z.color, "thickness": 2,
                 "fill_alpha": int(z.fill_alpha), "dashed": bool(z.dashed),

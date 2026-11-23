@@ -129,11 +129,21 @@ def build_geometry_step(host):
     host.spin_ym_neutral_size.setSingleStep(0.01)
     host.spin_ym_neutral_size.setValue(0.06)
     host.spin_ym_neutral_size.valueChanged.connect(lambda _: _rebuild_template(host))
+    host._ym_reset_row = QWidget()
+    rr = QHBoxLayout(host._ym_reset_row)
+    rr.setContentsMargins(0, 0, 0, 0)
+    from gui.widgets_v2 import link_button
+    btn_reset = link_button("Reset shape", "Undo dragged corners: rebuild the arms and "
+                                           "centre from the A / B / C tips")
+    btn_reset.clicked.connect(lambda: _rebuild_template(host))
+    rr.addWidget(cu.status_label("Drag any corner on the video to fit the real maze."), 1)
+    rr.addWidget(btn_reset)
     tmpl.addWidget(cu.pct_slider(
         host, "Neutral zone", host.spin_ym_neutral_size, 2, 30, scale=100,
         tip="Radius of the hub where the arms meet, as % of the video "
             "width. An arm entry counts when the mouse goes from here into "
             "an arm."))
+    tmpl.addWidget(host._ym_reset_row)
     zl.addWidget(host._ym_template_widget)
 
     # Zone colours — Full view only.
@@ -294,6 +304,8 @@ def _template_drag_handler(host):
 
 
 def _rebuild_template(host):
+    if getattr(host, "_ym_restoring", False):
+        return                     # restoring a video's saved shapes
     hub = getattr(host, "_ym_hub", None)
     endpoints = getattr(host, "_ym_endpoints", None)
     if not hub or not endpoints:
