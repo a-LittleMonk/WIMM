@@ -15,7 +15,6 @@ from gui.openfield_batch_tab import OpenFieldBatchTab
 from gui.y_maze_tab import YMazeBatchTab
 from gui.nor_tab import NORBatchTab
 from gui.epm_tab import EPMBatchTab
-from gui.realtime_scoring_tab import RealtimeScoringTab
 from gui.log_dialog import LogDialog
 from core import logger
 from gui import theme
@@ -43,20 +42,6 @@ class _NoScrollFilter(QObject):
                     return True
                 w = w.parent() if hasattr(w, "parent") else None
         return super().eventFilter(obj, event)
-
-
-class _StayOpenMenuFilter(QObject):
-    """Toggling a checkable entry (e.g. a panel in View ▸ Panels) keeps the
-    menu open, so several panels can be shown / hidden in one go."""
-
-    def eventFilter(self, menu, event):
-        if (event.type() == QEvent.MouseButtonRelease
-                and event.button() == Qt.LeftButton and isinstance(menu, QMenu)):
-            act = menu.actionAt(event.pos())
-            if act is not None and act.isCheckable() and act.isEnabled():
-                act.trigger()
-                return True
-        return False
 
 
 # Settings live inside the app folder (settings/mice_tracker.json), never in
@@ -217,11 +202,6 @@ class MainWindow(QMainWindow):
         act_customize.triggered.connect(self._open_graph_style_for_active_tab)
         self.view_menu.addAction(act_customize)
         self.view_menu.addSeparator()
-        # Panels ▸ — show / hide the current test's movable panels.
-        self.panels_menu = self.view_menu.addMenu("Panels")
-        self.panels_menu.aboutToShow.connect(self._fill_panels_menu)
-        self._stay_open_filter = _StayOpenMenuFilter(self)
-        self.panels_menu.installEventFilter(self._stay_open_filter)
         act_appearance = QAction("Appearance…", self)
         act_appearance.setToolTip("Background palette for light and dark mode")
         act_appearance.triggered.connect(self._open_appearance)
@@ -243,8 +223,8 @@ class MainWindow(QMainWindow):
         self.nor_tab = None
         # EPM (Elevated Plus Maze) — lazy too.
         self.epm_tab = None
-        self.scoring_tab = RealtimeScoringTab(self.config)
-        self.tabs.addTab(self.scoring_tab, "Real-time Scoring")
+        # Tests added through experiments.registry (built on first open).
+        self._reg_tabs = {}
 
         corner = QWidget()
         corner_lay = QHBoxLayout(corner)
@@ -297,12 +277,18 @@ class MainWindow(QMainWindow):
     # (menu name, launcher-card name, enabled, opener attribute)
     _TESTS = [
         ("Open Field",           "Open Field",                True,  "_open_open_field"),
-        ("Real-time Scoring",    "Real-time\nManual Scoring", True,  "_open_scoring"),
         ("Y-Maze",               "Y-Maze",                    True,  "_open_y_maze"),
         ("Novel Object",         "Novel Object",              True,  "_open_nor"),
         ("Elevated Plus",        "Elevated Plus",             True,  "_open_epm"),
-        ("Forced Swim",          "Forced Swim",               False, None),
-        ("Three Chamber",        "Three Chamber",             False, None),
+        # Added tests — opened through experiments.registry.
+        ("Object Location",      "Object Location",           True,  "reg:nol"),
+        ("Three Chamber",        "Three Chamber",             True,  "reg:three_chamber"),
+        ("Place Preference",     "Place Preference",          True,  "reg:cpp"),
+        ("Light–Dark Box",       "Light–Dark Box",            True,  "reg:light_dark"),
+        ("Zero Maze",            "Zero Maze",                 True,  "reg:zero_maze"),
+        ("T-Maze",               "T-Maze",                    True,  "reg:t_maze"),
+        ("Radial Arm Maze",      "Radial Arm Maze",           True,  "reg:radial_maze"),
+        ("Water Maze",           "Water Maze",                True,  "reg:water_maze"),
     ]
 
     def _build_header(self):
@@ -391,12 +377,14 @@ class MainWindow(QMainWindow):
     def _open_help(self):
         """Help window, opened on the tab of the experiment being used."""
         from gui.help_dialog import HelpDialog
+        from experiments.registry import TITLES as REG_TITLES
         current = self.tabs.currentWidget() if self.stack.currentIndex() == 1 else None
         title = {
             id(self.of_tab): "Open Field",
             id(self.ym_tab): "Y-Maze",
             id(self.nor_tab): "Novel Object",
             id(self.epm_tab): "Elevated Plus",
+            **{id(t): REG_TITLES[k] for k, t in self._reg_tabs.items()},
         }.get(id(current), "Open Field") if current is not None else "Open Field"
         if getattr(self, "_help_dialog", None) is None:
             self._help_dialog = HelpDialog(self.config, self)
@@ -404,26 +392,6 @@ class MainWindow(QMainWindow):
 
     def _refresh_brand(self, *_):
         self.brand_mark.setPixmap(tinted_svg_pixmap(LOGO_OUTLINE, 26, theme.TEXT))
-
-    def _current_panel_host(self):
-        if self.stack.currentIndex() != 1:
-            return None
-        return getattr(self.tabs.currentWidget(), "panel_host", None)
-
-    def _fill_panels_menu(self):
-        m = self.panels_menu
-        m.clear()
-        host = self._current_panel_host()
-        if host is None:
-            on_tool = self.stack.currentIndex() == 1
-            a = m.addAction("This screen has no movable panels" if on_tool
-                            else "Open a test to arrange its panels")
-            a.setEnabled(False)
-            return
-        for p in host.panels:
-            m.addAction(p.toggleViewAction())
-        m.addSeparator()
-        m.addAction("Reset panel layout", host.reset_layout)
 
     def _open_appearance(self):
         from gui.appearance_dialog import AppearanceDialog
@@ -494,7 +462,10 @@ class MainWindow(QMainWindow):
 
         tests = []
         for i, (_menu, card, enabled, opener) in enumerate(self._TESTS, start=1):
-            cb = getattr(self, opener) if (enabled and opener) else None
+            if enabled and opener and opener.startswith("reg:"):
+                cb = (lambda _=False, k=opener[4:]: self._open_registered(k))
+            else:
+                cb = getattr(self, opener) if (enabled and opener) else None
             label = card if enabled else f"{card} (coming soon)"
             tests.append((f"{i:02d}", label, enabled, cb))
         self.test_grid = TestGrid(tests)
@@ -538,10 +509,25 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(1)
         self._build_epm_menu()
 
-    def _open_scoring(self):
-        self.tabs.setCurrentWidget(self.scoring_tab)
+    def _open_registered(self, key):
+        """Open a test listed in experiments.registry (built lazily)."""
+        from experiments import registry
+        tab = self._reg_tabs.get(key)
+        if tab is None:
+            tab = registry.tab_class(key)(self.config)
+            self._reg_tabs[key] = tab
+            self.tabs.addTab(tab, registry.TITLES[key])
+            if hasattr(tab, "embedded_tab") and hasattr(tab.embedded_tab, "set_simple_mode"):
+                tab.embedded_tab.set_simple_mode(bool(self.config.get("simple_mode", True)))
+        self.tabs.setCurrentWidget(tab)
         self.stack.setCurrentIndex(1)
-        self._build_scoring_menu()
+        self._build_nor_menu()
+
+    def _all_experiment_tabs(self):
+        """Every experiment tab that has been opened."""
+        tabs = [getattr(self, a, None) for a in ("of_tab", "ym_tab", "nor_tab", "epm_tab")]
+        tabs += list(self._reg_tabs.values())
+        return [t for t in tabs if t is not None]
 
     def set_tracking_status(self, text):
         self.pill.show_text(text)
@@ -584,10 +570,7 @@ class MainWindow(QMainWindow):
 
     def _on_simple_mode_toggled(self, checked):
         self.config["simple_mode"] = bool(checked)
-        for attr in ("of_tab", "ym_tab", "nor_tab", "epm_tab"):
-            tab = getattr(self, attr, None)
-            if tab is None:
-                continue
+        for tab in self._all_experiment_tabs():
             embedded = getattr(tab, "embedded_tab", None)
             if embedded is not None and hasattr(embedded, "set_simple_mode"):
                 embedded.set_simple_mode(bool(checked))
@@ -751,10 +734,7 @@ class MainWindow(QMainWindow):
         self.config["body_style"] = str(style)
         self._save_config()
         # Push into any already-loaded experiment tabs so the change is live.
-        for attr in ("of_tab", "ym_tab", "nor_tab", "epm_tab"):
-            tab = getattr(self, attr, None)
-            if tab is None:
-                continue
+        for tab in self._all_experiment_tabs():
             target = getattr(tab, "embedded_tab", None) or tab
             cmb = getattr(target, "combo_body_style", None)
             if cmb is None:
@@ -765,9 +745,9 @@ class MainWindow(QMainWindow):
 
     def _open_tracking_models_dialog(self):
         pretty = {
-            "mog2": "MOG2 (Adaptive)", "knn": "KNN", "cnt": "CNT (Fast)",
+            "mog2": "MOG2 (experimental)", "knn": "KNN (experimental)", "cnt": "CNT (Fast)",
             "gsoc": "GSOC", "lsbp": "LSBP",
-            "framediff": "Frame Diff", "hsv": "HSV Threshold",
+            "framediff": "Frame Diff (experimental)", "hsv": "HSV Threshold",
         }
         dlg = QDialog(self)
         dlg.setWindowTitle("Tracking models (preview)")
@@ -833,41 +813,6 @@ class MainWindow(QMainWindow):
         dlg.resize(380, 320)
         dlg.exec_()
 
-    def _build_scoring_menu(self):
-        self.settings_menu.clear()
-        self.settings_menu.setEnabled(True)
-        self._add_nav_actions()
-
-        act_dir = QAction("Set Scoring Output Folder…", self)
-        act_dir.triggered.connect(self.scoring_tab._change_output_dir)
-        self.settings_menu.addAction(act_dir)
-
-        act_clear = QAction("Clear all scoring presets…", self)
-        act_clear.triggered.connect(self._clear_scoring_presets)
-        self.settings_menu.addAction(act_clear)
-
-    def _clear_scoring_presets(self):
-        if QMessageBox.question(
-            self, "Clear presets",
-            "Delete all saved scoring presets?",
-            QMessageBox.Yes | QMessageBox.No
-        ) != QMessageBox.Yes:
-            return
-        self.config["scoring_presets"] = {}
-        self._save_config()
-        if hasattr(self.scoring_tab, "_populate_preset_combo"):
-            self.scoring_tab._populate_preset_combo()
-
-    def _check_output_folder(self):
-        if not self.config.get("output_folder"):
-            QMessageBox.information(
-                None, "Welcome",
-                "Please choose a folder where results (Excel files, plots) will be saved."
-            )
-            folder = QFileDialog.getExistingDirectory(None, "Choose Output Folder")
-            if folder:
-                self.config["output_folder"] = folder
-                self._save_config()
 
     def _pick_output_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Output Folder")
@@ -886,9 +831,8 @@ class MainWindow(QMainWindow):
             self.config["backup_folder"] = folder
             self._save_config()
             self._refresh_status()
-            for attr in ("of_tab", "ym_tab", "nor_tab", "epm_tab"):
-                tab = getattr(self, attr, None)
-                if tab is not None and hasattr(tab, "_refresh_output_label"):
+            for tab in self._all_experiment_tabs():
+                if hasattr(tab, "_refresh_output_label"):
                     tab._refresh_output_label()
 
     def _open_corrections_for_active_tab(self):

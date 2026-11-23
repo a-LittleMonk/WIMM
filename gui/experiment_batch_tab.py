@@ -68,14 +68,11 @@ STATUS_ICONS = {
 }
 
 
-
-
-
 # Maps a user-facing field-group label → list of snapshot_settings() keys.
 # Order matters — listed top-down in the Apply-To dialog.
 APPLY_FIELD_GROUPS = [
     ("Detection (sliders / threshold / model)",
-        ["threshold", "brightness", "contrast", "blur", "gamma", "sharpen",
+        ["threshold", "low_contrast", "brightness", "contrast", "blur", "gamma", "sharpen",
          "clahe", "max_blob", "proc_scale", "model", "model_params", "post_params"]),
     ("Visualization (overlays / colors)",
         ["body_style", "ellipse", "trail", "trail_len",
@@ -104,6 +101,38 @@ APPLY_DEFAULTS_ON = {"Detection (sliders / threshold / model)"}
 # Batch rule: every setting that changes the data is shared by the whole
 # batch (taken from the video the user set up). Only what is drawn on /
 # tied to one particular video stays per video.
+def _warp_size_for(s, exp, vw, vh):
+    """Straightened-arena size for a batch / Multi-Run video — the same
+    rule as ExperimentTab._warp_target_size."""
+    from experiments.open_field.experiment import warp_target_size
+    shape = "square" if getattr(exp, "fam", None) == "nor" else s.get("cage_shape")
+    return warp_target_size(vw, vh, shape, float(s.get("cage_w_cm") or 0),
+                            float(s.get("cage_h_cm") or 0))
+
+
+def _px_per_cm_for(s, exp, size):
+    """px/cm for a batch / Multi-Run video — the same rules as the screen
+    (ExperimentTab._get_px_per_cm): honour the calibration mode, and read
+    the line / arena in the frame they were drawn in (`size`: the warped
+    frame when perspective is on, else the video)."""
+    mode = s.get("calib_mode")
+    if mode == "none":
+        return None
+    vw, vh = size
+    cp1, cp2, cm = s.get("calib_p1"), s.get("calib_p2"), float(s.get("calib_cm") or 0)
+    if mode in ("manual", None) and cp1 and cp2 and cm > 0:
+        d = ((cp2[0] - cp1[0]) * vw) ** 2 + ((cp2[1] - cp1[1]) * vh) ** 2
+        if d > 0:
+            return d ** 0.5 / cm
+    if mode == "manual" or exp is None:
+        return None
+    try:
+        return exp.compute_auto_px_per_cm(s, size)
+    except Exception as e:
+        logger.warn(f"auto px/cm failed: {e}", source="batch")
+        return None
+
+
 PER_VIDEO_KEYS = frozenset({
     # Arena / area detection
     "arena", "original_arena", "perspective",
@@ -123,6 +152,9 @@ PER_VIDEO_KEYS = frozenset({
     "ym_original_endpoints", "ym_original_hub", "ym_perspective",
     # NOR object placement / roles
     "objects_norm",
+    # Box-family per-animal assignments (paired side, stranger side,
+    # platform quadrant, trial type, baited arms)
+    "box_assign",
 })
 
 
@@ -330,18 +362,6 @@ class _CropFrameLabel(QLabel):
         self._pixmap = QPixmap.fromImage(img)
         self.update()
 
-    def set_crop_enabled(self, on):
-        self.crop_enabled = bool(on)
-        if self.crop_enabled and self.crop_rect is None:
-            # Default crop = inset 10% from each side.
-            inset_x = int(self._frame_w * 0.1)
-            inset_y = int(self._frame_h * 0.1)
-            self.crop_rect = (
-                inset_x, inset_y,
-                self._frame_w - 2 * inset_x,
-                self._frame_h - 2 * inset_y,
-            )
-        self.update()
 
     def set_crop_rect(self, rect):
         """Set crop in frame pixel coords (x, y, w, h) or None."""
@@ -502,9 +522,9 @@ class TrimCropDialog(QDialog):
         self.path = path
 
         # Probe video
+        from core.video import probe
         cap = cv2.VideoCapture(path)
-        self.fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        self.n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        self.fps, self.n_frames = probe(cap)
         cap.release()
         self.duration = self.n_frames / self.fps if self.fps > 0 else 0.0
 
@@ -609,7 +629,8 @@ class TrimCropDialog(QDialog):
     def _show_frame_at(self, frame_idx, which):
         if self._cap is None or not self._cap.isOpened():
             return
-        self._cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        from core.video import cached_frame_times, seek_exact
+        seek_exact(self._cap, frame_idx, cached_frame_times(self.path))
         ret, frame = self._cap.read()
         if ret:
             self.frame_lbl.set_frame(frame)
@@ -802,9 +823,6 @@ class _Spinner(QLabel):
     def _tick(self):
         self._i = (self._i + 1) % len(self._FRAMES)
         self.setText(self._FRAMES[self._i])
-
-
-
 
 
 class ResultCard(QFrame):
@@ -2089,12 +2107,6 @@ class ExperimentBatchTab(QWidget):
             from gui.notify import show_done
             show_done(self, "Combined export failed", str(e), kind="err")
 
-    def _pane_header(self, text):
-        """Small bold header label used at the top of each splitter pane."""
-        lbl = QLabel(text.upper())
-        lbl.setProperty("role", "pane-header")
-        lbl.setFixedHeight(36)
-        return lbl
 
     def _build_ui(self):
         root = QVBoxLayout(self)
@@ -2118,7 +2130,7 @@ class ExperimentBatchTab(QWidget):
         b_clear.clicked.connect(self._clear_videos)
         qh.add_right(b_add)
         qh.add_right(b_clear)
-        # qh becomes the Queue panel's title bar (drag handle) below.
+        # qh sits on top of the Queue pane (see the splitter below).
 
         self.queue_stats = QueueStats()
         stats_row = QHBoxLayout()
@@ -2232,7 +2244,7 @@ class ExperimentBatchTab(QWidget):
             "Copy selected fields from this video's panel to other videos."
         )
         self.btn_apply_to.clicked.connect(self._open_apply_to_dialog)
-        # ch becomes the Configuration panel's title bar below.
+        # ch sits on top of the Configuration pane (see the splitter below).
         if self._config_scroll is not None:
             # Let the scroll fill the middle pane; inner panel now has a
             # min width but no fixed width so it stretches with the scroll.
@@ -2259,95 +2271,48 @@ class ExperimentBatchTab(QWidget):
         self._embedded_loaded_path = None
 
 
-        # ── Panels: preview is the fixed centre; Queue / Configuration /
-        # Measurements are movable, closable panels (gui/panels.py).
-        from gui.panels import PanelHost
-        self.panel_host = PanelHost(right, self.config, type(self).__name__, self._save_config)
-        root.addWidget(self.panel_host, 1)
-        ph = self.panel_host
-        p_queue = ph.add_panel("queue", "Queue", left, qh, Qt.LeftDockWidgetArea, 236, 260)
-        p_config = ph.add_panel("config", "Configuration", middle, ch, Qt.LeftDockWidgetArea, 270, 100)
-        ph.splitDockWidget(p_queue, p_config, Qt.Horizontal)
-        sizes = [(p_queue, 290), (p_config, 305)]
-        p_meas = None
+        # ── Main screen: three fixed panes side by side —
+        # Queue | Configuration | Preview (no movable / extra panels).
         mp = getattr(self.embedded_tab, "measure_panel", None)
         if mp is not None:
-            mp.setParent(None)              # lift it out of the preview row
-            mp.setMinimumWidth(200)
-            mp.setMaximumWidth(16777215)
-            mh = PaneHeader("analysis", "Measurements")
-            p_meas = ph.add_panel("measure", "Measurements", mp, mh, Qt.RightDockWidgetArea, 200, 62)
-            sizes.append((p_meas, 240))
-        heights = self._add_timeline_panels(ph, sizes, p_meas)
-        ph.finish(sizes, heights)
-        ph.narrow_hooks.append(self.embedded_tab.set_transport_compact)
-        # Output folder + export buttons live in the Export sub-tab now.
+            mp.hide()   # Measurements sidebar is not shown on this screen
 
-    def _add_timeline_panels(self, ph, sizes, p_meas=None):
-        """Frame corrections · Speed · Center / periphery · Missed frames
-        panels. Default arrangement: one right-hand column, top to bottom
-        Measurements · Frame corrections · Speed · Center / periphery ·
-        Missed frames (Queue | Configuration on the left, preview in the
-        middle). Returns default heights."""
-        et = self.embedded_tab
-        tl = getattr(et, "speed_timeline", None)
-        if tl is None or not hasattr(tl, "speed"):
-            return []
-        # Side panels run full height; the bottom area sits under the video.
-        ph.setCorner(Qt.BottomLeftCorner, Qt.LeftDockWidgetArea)
-        ph.setCorner(Qt.BottomRightCorner, Qt.RightDockWidgetArea)
-
-        def body(*widgets, margins=(10, 2, 10, 10)):
+        def card(header, body):
+            """Pane card: header strip on top of the pane body."""
+            header.setProperty("panel", True)
+            body.setProperty("panel", True)
+            holder = QWidget()
+            holder.setObjectName("PanelBody")
+            holder.setAttribute(Qt.WA_StyledBackground, True)
+            hl = QVBoxLayout(holder)
+            hl.setContentsMargins(0, 10, 0, 0)
+            hl.setSpacing(0)
+            hl.addWidget(body)
             w = QWidget()
-            w.setObjectName("Pane")
             v = QVBoxLayout(w)
-            v.setContentsMargins(*margins)
-            v.setSpacing(6)
-            for x in widgets:
-                if isinstance(x, QWidget):
-                    v.addWidget(x, 1 if isinstance(x, type(tl.speed)) else 0)
-                else:
-                    v.addLayout(x)
+            v.setContentsMargins(0, 0, 0, 0)
+            v.setSpacing(0)
+            v.addWidget(header)
+            v.addWidget(holder, 1)
             return w
 
-        def header(icon, title):
-            h = PaneHeader(icon, title)
-            h.setFixedHeight(38)
-            return h
-
-        area = Qt.RightDockWidgetArea
-        p_speed = ph.add_panel("speed", "Speed", body(tl.speed), header("analysis", "Speed"), area, 150, 70)
-        p_zone = ph.add_panel("zone", "Center / periphery", body(tl.zone),
-                              header("zones", "Center / periphery"), area, 150, 60)
-        miss_row = QHBoxLayout()
-        miss_row.setSpacing(10)
-        miss_row.addWidget(et.btn_miss_card)
-        miss_row.addWidget(et.lbl_missed_count)
-        miss_row.addStretch(1)
-        p_miss = ph.add_panel("missed", "Missed frames", body(tl.missed, miss_row),
-                              header("detection", "Missed frames"), area, 150, 80)
-        hint = QLabel("Scrub to a frame, turn on Fix position, then click the "
-                      "animal on the video to override the tracked point.")
-        hint.setWordWrap(True)
-        theme.set_tone(hint, "faint", "font-size: 11px;")
-        for b in (et.btn_fix, et.btn_interpolate, et.btn_clear_fixes):
-            b.setMinimumHeight(28)
-        corr = body(hint, et.btn_fix, et.btn_interpolate, et.btn_clear_fixes,
-                    margins=(12, 2, 12, 12))
-        corr.layout().addStretch(1)
-        p_corr = ph.add_panel("corrections", "Frame corrections", corr,
-                              header("edit", "Frame corrections"), area, 210, 125)
-        # One column under Measurements, in this order.
-        if p_meas is not None:
-            ph.splitDockWidget(p_meas, p_corr, Qt.Vertical)
-        ph.splitDockWidget(p_corr, p_speed, Qt.Vertical)
-        ph.splitDockWidget(p_speed, p_zone, Qt.Vertical)
-        ph.splitDockWidget(p_zone, p_miss, Qt.Vertical)
-        et._show_corrections_panel = lambda: (p_corr.show(), p_corr.raise_())
-        heights = [(p_corr, 180), (p_speed, 140), (p_zone, 125), (p_miss, 140)]
-        if p_meas is not None:
-            heights.insert(0, (p_meas, 125))
-        return heights
+        split = QSplitter(Qt.Horizontal)
+        split.setObjectName("MainSplit")
+        split.addWidget(card(qh, left))
+        split.addWidget(card(ch, middle))
+        split.addWidget(right)
+        left.setMinimumWidth(200)
+        middle.setMinimumWidth(260)
+        right.setMinimumWidth(420)
+        split.setStretchFactor(0, 0)
+        split.setStretchFactor(1, 0)
+        split.setStretchFactor(2, 1)
+        for i in range(3):
+            split.setCollapsible(i, False)
+        split.setHandleWidth(10)
+        split.setSizes([290, 305, 900])
+        root.addWidget(split, 1)
+        # Output folder + export buttons live in the Export sub-tab now.
 
     # ── Drag-and-drop ─────────────────────────────────────────────────────
 
@@ -2751,6 +2716,10 @@ class ExperimentBatchTab(QWidget):
         # Arena (blocking).
         if not self._has_arena(path):
             reasons.append(("blocked", "no arena drawn"))
+        exp = getattr(self.embedded_tab, "experiment", None)
+        problem = exp.preflight_zone_problem(s) if exp is not None else None
+        if problem:
+            reasons.append(("blocked", problem))
         # Scale. The auto-cal check is plugin-specific: OF needs cage W/H,
         # Y-Maze needs arm-length + hub + endpoints. Delegate to the
         # experiment plugin so this stays generic.
@@ -2859,8 +2828,9 @@ class ExperimentBatchTab(QWidget):
         note = None
         if len(self.videos) > 1:
             note = (f"All videos will use the settings of <b>{os.path.basename(src)}</b>. "
-                    "Only the arena, zones, calibration line, exclusion mask, crop "
-                    "and animal info stay per video.")
+                    "Only the arena, zones, calibration line, exclusion mask, crop, "
+                    "animal info and per-animal assignments (e.g. paired side, "
+                    "object roles, platform quadrant) stay per video.")
         if not self._show_preflight_dialog(report, note=note):
             return
         for p in self.videos:
@@ -2995,7 +2965,8 @@ class ExperimentBatchTab(QWidget):
             raise RuntimeError("Cannot open video")
         full_vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         full_vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        auto_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        from core.video import probe
+        auto_fps = probe(cap)[0]
         cap.release()
 
         # When crop is set, the frame the tracker / panel sees is the cropped
@@ -3089,13 +3060,9 @@ class ExperimentBatchTab(QWidget):
             original = s.get("original_arena") or arena_norm
             if original and len(original) >= 4:
                 import numpy as _np
-                # Target size matches the in-app _warp_target_size: square
-                # for "square" cage, else native (vw, vh).
-                if s.get("cage_shape") == "square":
-                    side = min(vw, vh)
-                    warp_size = (side, side)
-                else:
-                    warp_size = (vw, vh)
+                # Target size matches the in-app _warp_target_size.
+                warp_size = _warp_size_for(
+                    s, getattr(self.embedded_tab, "experiment", None), vw, vh)
                 pts_px = [(nx * vw, ny * vh) for nx, ny in original]
                 # Sort to TL/TR/BR/BL (screen coords, y-down).
                 TL = min(pts_px, key=lambda p: p[0] + p[1])
@@ -3130,24 +3097,9 @@ class ExperimentBatchTab(QWidget):
         else:
             arena_px  = [(int(nx * vw), int(ny * vh)) for nx, ny in arena_norm] if arena_norm else None
             center_px = [(int(nx * vw), int(ny * vh)) for nx, ny in center_norm] if center_norm else None
-        # px_per_cm
-        px_per_cm = None
-        cp1, cp2 = s.get("calib_p1"), s.get("calib_p2")
-        cm = s.get("calib_cm", 0)
-        if cp1 and cp2 and cm and cm > 0:
-            p1 = (cp1[0] * vw, cp1[1] * vh)
-            p2 = (cp2[0] * vw, cp2[1] * vh)
-            d = ((p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2) ** 0.5
-            px_per_cm = d / cm if d > 0 else None
-        # Plugin-supplied auto-cal: each experiment owns its own px/cm
-        # formula (OF: arena + cage dims; Y-Maze: spoke length / arm cm).
-        if px_per_cm is None:
-            exp = getattr(self.embedded_tab, "experiment", None)
-            if exp is not None:
-                try:
-                    px_per_cm = exp.compute_auto_px_per_cm(s, (vw, vh))
-                except Exception:
-                    px_per_cm = None
+        px_per_cm = _px_per_cm_for(
+            s, getattr(self.embedded_tab, "experiment", None),
+            warp_size if homography is not None else (vw, vh))
 
         from gui.open_field_tab import DEFAULT_COLORS as DC, _hex_to_bgr
         colors = s.get("colors", DC)
@@ -3191,6 +3143,7 @@ class ExperimentBatchTab(QWidget):
             video_path=path,
             arena=arena_px,
             threshold=s.get("threshold", 25),
+            low_contrast=bool(s.get("low_contrast", False)),
             brightness=s.get("brightness", 0),
             contrast=s.get("contrast", 100) / 100.0,
             blur=s.get("blur", 0),
@@ -3328,7 +3281,9 @@ class ExperimentBatchTab(QWidget):
 
         # Quality flag: detection rate below 90% means the tracker missed a
         # lot of frames — accumulate so the batch summary can surface them.
-        det_rate = float(metrics.get("Detection Rate (%)", 100) or 0)
+        # EPM / Y-Maze / NOR / NOL name it detection_rate_pct.
+        det_rate = float(metrics.get("Detection Rate (%)",
+                                     metrics.get("detection_rate_pct", 100)) or 0)
         if det_rate < 90.0:
             if not hasattr(self, "_low_detection"):
                 self._low_detection = []
@@ -3405,7 +3360,8 @@ class ExperimentBatchTab(QWidget):
             raise RuntimeError("Cannot open video")
         full_vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         full_vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        auto_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        from core.video import probe
+        auto_fps = probe(cap)[0]
         cap.release()
 
         crop = s.get("crop")
@@ -3418,21 +3374,27 @@ class ExperimentBatchTab(QWidget):
         s = derive_center_zone(dict(s), self._experiment_key())
         arena_norm = s.get("arena")
         center_norm = s.get("center_zone", s.get("center"))  # legacy fallback
-        if not arena_norm:
+        exp = getattr(self.embedded_tab, "experiment", None)
+        # EPM / Y-Maze have no arena rectangle — their arms are the zones.
+        if not arena_norm and getattr(exp, "fam", "open_field") in ("open_field", "nor", "box"):
             raise RuntimeError("No arena defined for this video")
 
-        # Homography for perspective correction (mirrors _do_track_and_export).
+        # Homography for perspective correction (mirrors _do_track_and_export):
+        # plugin first (EPM / Y-Maze from hub + arm tips), then the arena.
         homography = None
         warp_size = None
-        if s.get("perspective"):
+        if exp is not None:
+            try:
+                res = exp.build_tracking_homography(s, (vw, vh))
+            except Exception:
+                res = None
+            if res is not None:
+                homography, warp_size = res
+        if homography is None and s.get("perspective"):
             import numpy as _np
             original = s.get("original_arena") or arena_norm
             if original and len(original) >= 4:
-                if s.get("cage_shape") == "square":
-                    side = min(vw, vh)
-                    warp_size = (side, side)
-                else:
-                    warp_size = (vw, vh)
+                warp_size = _warp_size_for(s, exp, vw, vh)
                 pts_px = [(nx * vw, ny * vh) for nx, ny in original]
                 TL = min(pts_px, key=lambda p: p[0] + p[1])
                 BR = max(pts_px, key=lambda p: p[0] + p[1])
@@ -3450,7 +3412,7 @@ class ExperimentBatchTab(QWidget):
 
         if homography is not None:
             TW, TH = warp_size
-            arena_px = [(0, 0), (TW, 0), (TW, TH), (0, TH)]
+            arena_px = [(0, 0), (TW, 0), (TW, TH), (0, TH)] if arena_norm else None
             if center_norm:
                 import numpy as _np
                 pts = _np.array(
@@ -3462,39 +3424,13 @@ class ExperimentBatchTab(QWidget):
             else:
                 center_px = None
         else:
-            arena_px = [(int(nx * vw), int(ny * vh)) for nx, ny in arena_norm]
+            arena_px = ([(int(nx * vw), int(ny * vh)) for nx, ny in arena_norm]
+                        if arena_norm else None)
             center_px = ([(int(nx * vw), int(ny * vh)) for nx, ny in center_norm]
                          if center_norm else None)
 
-        # px_per_cm — manual calib line first, then cage-dim fallback.
-        px_per_cm = None
-        cp1, cp2 = s.get("calib_p1"), s.get("calib_p2")
-        cm = s.get("calib_cm", 0)
-        if cp1 and cp2 and cm and cm > 0:
-            p1 = (cp1[0] * vw, cp1[1] * vh)
-            p2 = (cp2[0] * vw, cp2[1] * vh)
-            d = ((p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2) ** 0.5
-            px_per_cm = d / cm if d > 0 else None
-        if px_per_cm is None and arena_px and len(arena_px) >= 4:
-            cage_shape = s.get("cage_shape", "rectangle")
-            if cage_shape != "custom":
-                w_cm = float(s.get("cage_w_cm") or 0)
-                h_cm = float(s.get("cage_h_cm") or w_cm)
-                if cage_shape == "square":
-                    h_cm = w_cm
-                if w_cm > 0 and h_cm > 0:
-                    def _sorted_corners(pts):
-                        TL = min(pts, key=lambda p: p[0] + p[1])
-                        BR = max(pts, key=lambda p: p[0] + p[1])
-                        TR = max(pts, key=lambda p: p[0] - p[1])
-                        BL = min(pts, key=lambda p: p[0] - p[1])
-                        return TL, TR, BR, BL
-                    TL, TR, BR, BL = _sorted_corners(arena_px)
-                    width_px  = (math.hypot(TR[0]-TL[0], TR[1]-TL[1])
-                                 + math.hypot(BR[0]-BL[0], BR[1]-BL[1])) / 2.0
-                    height_px = (math.hypot(BL[0]-TL[0], BL[1]-TL[1])
-                                 + math.hypot(BR[0]-TR[0], BR[1]-TR[1])) / 2.0
-                    px_per_cm = (width_px / w_cm + height_px / h_cm) / 2.0
+        px_per_cm = _px_per_cm_for(
+            s, exp, warp_size if homography is not None else (vw, vh))
 
         from gui.open_field_tab import DEFAULT_COLORS as DC, _hex_to_bgr
         colors = s.get("colors", DC)
@@ -3535,6 +3471,7 @@ class ExperimentBatchTab(QWidget):
             video_path=path,
             arena=arena_px,
             threshold=s.get("threshold", 25),
+            low_contrast=bool(s.get("low_contrast", False)),
             brightness=s.get("brightness", 0),
             contrast=s.get("contrast", 100) / 100.0,
             blur=s.get("blur", 0),
@@ -3680,13 +3617,6 @@ class ExperimentBatchTab(QWidget):
         # Combo removed — left for callers; nothing to update.
         pass
 
-    def _refresh_export_btn(self):
-        # Export Excel button removed.
-        pass
-
-    def _on_video_selected(self):
-        # Combo removed — selection now happens only via row clicks.
-        pass
 
     def _load_into_embedded(self, path, read_only=False):
         if not path:
@@ -3757,7 +3687,8 @@ class ExperimentBatchTab(QWidget):
         # their own geometry. Auto-from-movement is still available behind
         # the Extra features toggle and overrides the square.
         if zd is not None and zd.arena is None and no_saved_arena:
-            if (exp_key in ("open_field", "nor")
+            _fam = getattr(getattr(et, "experiment", None), "fam", exp_key)
+            if (_fam in ("open_field", "nor", "box")
                     and not self.config.get("enable_auto_movement_arena", False)):
                 try:
                     et._apply_premade_square_arena()
@@ -3831,13 +3762,6 @@ class ExperimentBatchTab(QWidget):
                 et.zone_drawer.set_frame(et._first_frame_bgr)
         # Force immediate repaint so the new frame shows before a slider is touched.
         et.zone_drawer.repaint()
-        # The Configuration panel's rows just went from placeholder to real
-        # values (resolution, fps, arena/zone summaries, …), which can change
-        # its natural width — nudge the dock layout so it reflows instead of
-        # leaving stale/overlapping panel geometry (see PanelHost.refresh_layout).
-        ph = getattr(self, "panel_host", None)
-        if ph is not None:
-            ph.refresh_layout()
         return True
 
     def _open_apply_to_dialog(self):
@@ -4029,28 +3953,11 @@ class ExperimentBatchTab(QWidget):
         self.video_settings[self._embedded_loaded_path] = snap
 
     # Legacy no-ops — kept so existing callers don't break.
-    def _sync_overlays_from_settings(self, path):
-        pass
 
-    def _on_overlay_changed(self, *_):
-        pass
-
-    def _set_scrub_enabled(self, on):
-        pass
-
-    def _refresh_scrub(self, *_):
-        pass
 
     def _on_scrub(self, idx):
         pass
 
-    def _render_scrub_frame(self, idx):
-        pass
-
-    def _draw_overlays(self, frame, df, idx):
-        # Overlays are drawn by the embedded OpenFieldTab; this stub stays
-        # for legacy callers that haven't been wired up.
-        return frame
 
     # ── Output folder ─────────────────────────────────────────────────────
 

@@ -224,7 +224,8 @@ def compute_metrics(
 
     bin_df = None
     if bin_size_s and bin_size_s > 0 and duration_s > 0:
-        bin_df = _bin_metrics(df, bin_size_s, frame_dur, unit, movement_threshold)
+        bin_df = _bin_metrics(df, bin_size_s, frame_dur, unit, movement_threshold,
+                              [s for s, _e in center_run_ranges])
 
     # ── Habituation slope (linear regression of bin distance vs time)
     if bin_df is not None and len(bin_df) >= 2:
@@ -245,7 +246,11 @@ def compute_metrics(
     return metrics, raw_df, bin_df
 
 
-def _bin_metrics(df, bin_size_s, frame_dur, unit, movement_threshold):
+def _bin_metrics(df, bin_size_s, frame_dur, unit, movement_threshold,
+                 entry_starts=()):
+    """entry_starts: frame index where each confirmed center visit starts
+    (same list as the main Center Zone Entries), so a visit that crosses
+    a bin edge is one entry, in the bin where it started."""
     df = df.copy()
     df["bin"] = (df["timestamp"] // bin_size_s).astype(int)
     rows = []
@@ -255,22 +260,19 @@ def _bin_metrics(df, bin_size_s, frame_dur, unit, movement_threshold):
         dist  = float(sub["step_dist"].sum())
         n     = len(sub)
         dur   = n * frame_dur
-        # Avg speed uses detected-frame time as the denominator so a bin
-        # with low detection rate doesn't look artificially slow.
-        n_detected = int(sub["x"].notna().sum())
-        dur_detected = n_detected * frame_dur
-        avg_v = dist / dur_detected if dur_detected > 0 else 0.0
+        # Same base as the session Average Speed: distance bridges tracking
+        # gaps, so it covers the whole bin time.
+        avg_v = dist / dur if dur > 0 else 0.0
         max_v = float(sub["speed"].max()) if sub["speed"].notna().any() else 0.0
         # Debounced zone classification (sub-threshold center → periphery)
         # so per-bin totals add up to the main metrics.
         zone_col = "zone_confirmed" if "zone_confirmed" in sub.columns else "zone"
         t_c   = float((sub[zone_col] == "center_zone").sum() * frame_dur)
         t_p   = float((sub[zone_col] == "periphery").sum() * frame_dur)
-        is_c  = sub[zone_col] == "center_zone"
-        ent   = int(((is_c) & (~is_c.shift(1, fill_value=False))).sum())
+        ent   = int(sub.index.isin(entry_starts).sum())
         if movement_threshold and movement_threshold > 0:
-            mob = float((sub["speed"].fillna(0) > movement_threshold).sum() * frame_dur)
-            immob = dur - mob
+            mob = float((sub["speed"] > movement_threshold).sum() * frame_dur)
+            immob = float((sub["speed"] <= movement_threshold).sum() * frame_dur)
         else:
             mob = immob = None
         row = {

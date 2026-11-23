@@ -127,6 +127,9 @@ def tick_labels(vmax, st):
 def colorbar_label(st):
     """User label, except the stock 'seconds' follows the chosen unit."""
     lbl = (st or {}).get("colorbar_label") or ""
-    if lbl.strip().lower() == "seconds" and units(st) != "seconds":
-        return _UNIT_LABELS[units(st)]
+    if lbl.strip().lower() == "seconds":
+        # Values are per grid square, smoothed — a 4 s dwell spread over
+        # nearby squares peaks well below 4, so say "per square".
+        u = units(st)
+        return _UNIT_LABELS[u] if u == "relative" else f"{_UNIT_LABELS[u]} per square"
     return lbl

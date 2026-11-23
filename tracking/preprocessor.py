@@ -37,6 +37,51 @@ def get_morph_kernel(h: int, w: int) -> np.ndarray:
     return _kernel_cache[key]
 
 
+def floor_level(gray, region=None):
+    """Median brightness of the arena floor (every 4th pixel). The mouse
+    is a small part of the floor, so it barely moves this value."""
+    g = gray[::4, ::4]
+    if region is not None:
+        v = g[region[::4, ::4] > 0]
+        if v.size:
+            return float(np.median(v))
+    return float(np.median(g))
+
+
+def match_level(gray, ref, region=None):
+    """Scale a frame so its floor brightness equals `ref` — cancels light
+    flicker and camera auto-exposure before comparing to the background."""
+    lvl = floor_level(gray, region)
+    if lvl <= 1 or abs(lvl - ref) < 1:
+        return gray
+    return cv2.convertScaleAbs(gray, alpha=ref / lvl)
+
+
+def build_background(frames, threshold=25, region=None):
+    """Empty-arena image from sample frames. Returns (background, floor ref).
+
+    A plain median keeps a mouse that sits in one spot for more than half
+    the samples (freezing) — it becomes background and turns invisible.
+    Instead: brightness-match the samples, find whether the mouse is
+    lighter or darker than the floor, and take the 20th percentile (light
+    mouse) or 80th (dark mouse): the mouse is removed unless it stays put
+    for more than ~80 % of the video."""
+    ref = float(np.median([floor_level(f, region) for f in frames]))
+    stack = np.stack([match_level(f, ref, region) for f in frames])
+    med = np.median(stack, axis=0)
+    sub = stack[:, ::2, ::2].astype(np.float32)
+    big = np.abs(sub - med[::2, ::2]) > threshold        # pixels that change
+    # Mouse colour: compare changing pixels with the LOCAL floor (median
+    # blurred wider than a mouse). The real mouse differs strongly from
+    # it; the "ghost" a frozen mouse leaves in the median is empty floor
+    # and barely differs — so the sum follows the real mouse.
+    k = max(3, int(min(med.shape) / 6)) | 1
+    local = cv2.blur(med.astype(np.float32), (k, k))[::2, ::2]
+    light_mouse = float((sub - local)[big].sum()) >= 0 if big.any() else True
+    bg = np.percentile(stack, 20 if light_mouse else 80, axis=0)
+    return bg.astype(np.uint8), ref
+
+
 def apply_preprocessing(gray: np.ndarray, brightness: int, contrast: float, blur: int,
                         gamma: float = 1.0, sharpen: int = 0, clahe_clip: int = 0) -> np.ndarray:
     if (brightness == 0 and contrast == 1.0 and blur == 0
@@ -143,8 +188,7 @@ class BgBuilderThread(QThread):
                     frames.append(cv2.cvtColor(f, cv2.COLOR_BGR2GRAY))
             cap.release()
             if frames:
-                bg = np.median(frames, axis=0).astype(np.uint8)
-                self.done.emit(bg)
+                self.done.emit(build_background(frames)[0])
             else:
                 self.done.emit(None)
         except Exception:

@@ -8,14 +8,15 @@ screen follows the user's palette and light/dark switch.
 """
 import os
 
-from PyQt5.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QPointF, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import (
     QBrush, QColor, QFont, QFontMetrics, QFontMetricsF, QImage, QLinearGradient, QPainter,
     QPen, QPixmap, QRadialGradient,
 )
 from PyQt5.QtSvg import QSvgRenderer
 from PyQt5.QtWidgets import (
-    QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
+    QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout,
+    QWidget,
 )
 
 from gui import theme
@@ -352,7 +353,11 @@ class TestCard(QFrame):
         super().__init__(parent)
         self._enabled_card = enabled
         self._hover = False
-        self._name_px = 17
+        self._name_px = 17      # preferred name size (GRID_LAYOUT)
+        self._fit_px = 17       # size actually used — shrinks to fit the card
+        self._name_text = name_text
+        # Cards share the grid columns equally; the name never forces width.
+        self.setMinimumSize(0, 0)
         self.setCursor(Qt.PointingHandCursor if enabled else Qt.ArrowCursor)
 
         if enabled:
@@ -364,7 +369,9 @@ class TestCard(QFrame):
             lay.addStretch(1)
             self.name = QLabel(name_text)
             self.name.setWordWrap(True)
-            lay.addWidget(self.name, 0, Qt.AlignLeft | Qt.AlignBottom)
+            self.name.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            self.idx.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            lay.addWidget(self.name, 0, Qt.AlignBottom)
         else:
             lay = QHBoxLayout(self)
             lay.setContentsMargins(20, 0, 20, 0)
@@ -372,15 +379,64 @@ class TestCard(QFrame):
             self.idx = QLabel(index_text)
             lay.addWidget(self.idx, 0, Qt.AlignVCenter)
             self.name = QLabel(name_text)
-            lay.addWidget(self.name, 0, Qt.AlignVCenter)
-            lay.addStretch(1)
+            self.name.setWordWrap(True)
+            self.name.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            lay.addWidget(self.name, 1, Qt.AlignVCenter)
 
         self._retint()
         theme.notifier.changed.connect(self._retint)
 
     def set_name_size(self, px):
         self._name_px = px
+        self._fit_px = px
         self._retint()
+
+    MIN_NAME_PX = 11
+    resized = pyqtSignal()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._set_padding()
+        self.resized.emit()
+
+    def _set_padding(self):
+        """Tighter padding on small cards (window not maximised)."""
+        if not self._enabled_card:
+            return
+        small = self.height() < 90 or self.width() < 150
+        mx, my = (12, 9) if small else (20, 18)
+        m = self.layout().contentsMargins()
+        if m.left() != mx or m.top() != my:
+            self.layout().setContentsMargins(mx, my, mx, my)
+
+    def best_px(self):
+        """Largest name size (up to the preferred one) whose wrapped text
+        fits inside the card: no line wider than the card, not taller than
+        the room left under the index number."""
+        m = self.layout().contentsMargins()
+        avail_w = max(10, self.width() - m.left() - m.right())
+        avail_h = max(10, self.height() - m.top() - m.bottom()
+                      - (16 if self._enabled_card else 0))   # 16 = index line
+        if not self._enabled_card:
+            avail_w -= 40                                      # index + gap
+        base = self._name_px if self._enabled_card else 13
+        px = base
+        while px > self.MIN_NAME_PX:
+            f = QFont(theme.sans_family())
+            f.setPixelSize(px)
+            if self._enabled_card:
+                f.setWeight(QFont.DemiBold)
+            r = QFontMetrics(f).boundingRect(
+                0, 0, avail_w, 10000, Qt.TextWordWrap, self._name_text)
+            if r.width() <= avail_w and r.height() <= avail_h:
+                break
+            px -= 1
+        return px
+
+    def apply_px(self, px):
+        if px != self._fit_px:
+            self._fit_px = px
+            self._retint()
 
     def enterEvent(self, event):
         if self._enabled_card:
@@ -407,7 +463,7 @@ class TestCard(QFrame):
         if self._enabled_card:
             self.name.setStyleSheet(
                 f"font-family:'{theme.sans_family()}'; font-weight:600; "
-                f"font-size:{self._name_px}px; letter-spacing:-0.3px; "
+                f"font-size:{self._fit_px}px; letter-spacing:-0.3px; "
                 f"line-height:1.2; color:{theme.TEXT}; background:transparent;"
             )
             bg = theme.G_HOVER if self._hover else theme.G_PANEL
@@ -419,7 +475,7 @@ class TestCard(QFrame):
             )
         else:
             self.name.setStyleSheet(
-                f"font-family:'{theme.sans_family()}'; font-size:13px; "
+                f"font-family:'{theme.sans_family()}'; font-size:{self._fit_px}px; "
                 f"color:{theme.FAINT}; background:transparent;"
             )
             self.setStyleSheet(
@@ -428,11 +484,14 @@ class TestCard(QFrame):
             )
 
 
-# (row, col, colspan, name font size) for the 7 cards, in launcher order.
+# (row, col, colspan, name font size) for the cards, in launcher order:
+# two large cards, then rows of three.
 GRID_LAYOUT = [
     (0, 0, 3, 22), (0, 3, 3, 22),
     (1, 0, 2, 17), (1, 2, 2, 17), (1, 4, 2, 17),
-    (2, 0, 3, 13), (2, 3, 3, 13),
+    (2, 0, 2, 15), (2, 2, 2, 15), (2, 4, 2, 15),
+    (3, 0, 2, 15), (3, 2, 2, 15), (3, 4, 2, 15),
+    (4, 0, 2, 15), (4, 2, 2, 15), (4, 4, 2, 15),
 ]
 
 
@@ -448,16 +507,40 @@ class TestGrid(QWidget):
         grid.setSpacing(12)
         for c in range(6):
             grid.setColumnStretch(c, 1)
-        grid.setRowStretch(0, 13)
-        grid.setRowStretch(1, 10)
-        grid.setRowStretch(2, 0)
-        grid.setRowMinimumHeight(2, 60)
+        rows = 1 + max(r for r, _c, _s, _p in GRID_LAYOUT[:len(tests)])
+        for r in range(rows):
+            grid.setRowStretch(r, 13 if r == 0 else (10 if r == 1 else 8))
+            if r >= 2:
+                grid.setRowMinimumHeight(r, 54)
 
         self.cards = []
+        self._rows = {}
+        self._fit_pending = False
         for (idx_text, name_text, enabled, cb), (row, col, span, px) in zip(tests, GRID_LAYOUT):
             card = TestCard(idx_text, name_text, enabled)
             card.set_name_size(px)
             if enabled and cb is not None:
                 card.clicked.connect(cb)
             grid.addWidget(card, row, col, 1, span)
+            card.resized.connect(self._schedule_fit)
             self.cards.append(card)
+            self._rows.setdefault(row, []).append(card)
+
+    def _schedule_fit(self):
+        if not self._fit_pending:
+            self._fit_pending = True
+            QTimer.singleShot(0, self._fit_rows)
+
+    def _fit_rows(self):
+        """Shrink card names to fit, using one size per row so a row never
+        mixes big and small names."""
+        self._fit_pending = False
+        for cards in self._rows.values():
+            live = [c for c in cards if c._enabled_card]
+            if live:
+                px = min(c.best_px() for c in live)
+                for c in live:
+                    c.apply_px(px)
+            for c in cards:
+                if not c._enabled_card:
+                    c.apply_px(c.best_px())

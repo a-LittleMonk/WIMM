@@ -411,6 +411,11 @@ class GraphsMixin:
     def _plugin_key(self):
         return getattr(self.experiment, "key", None) or "open_field"
 
+    def _plugin_family(self):
+        exp = getattr(self, "experiment", None)
+        return (getattr(exp, "fam", None) or getattr(exp, "key", None)
+                or "open_field")
+
     # Canonical maze size the remapped output is built in (arbitrary units;
     # scaled to fit the graph frame). Matches the preview's arena_half feel.
     _CANON_L = 100.0
@@ -717,10 +722,21 @@ class GraphsMixin:
         → the entered H / W. Otherwise the arena as drawn (mean of opposite
         edges). Only for Open Field / NOR (EPM and Y-Maze draw a canonical
         maze)."""
-        if self._plugin_key() not in ("open_field", "nor"):
+        if self._plugin_family() not in ("open_field", "nor", "box"):
             return None
-        if self._plugin_key() == "nor":
+        if self._plugin_family() == "nor":
             return 1.0                  # the NOR cage is always square
+        if self._plugin_family() == "box":
+            # Apparatus size from the Scale card (square tests: W == H).
+            try:
+                w = float(self.spin_cage_w.value())
+                h = float(self.spin_cage_h.value())
+                if self.experiment.scale[0] == "square":
+                    return 1.0
+                if w > 0 and h > 0:
+                    return h / w
+            except Exception:
+                pass
         combo = getattr(self, "combo_cage_shape", None)
         shape = (combo.currentData() if combo is not None
                  else self.config.get("cage_shape", "rectangle"))
@@ -860,7 +876,7 @@ class GraphsMixin:
         """Spatial graphs get cm rulers when the arena is calibrated (Open
         Field / NOR — EPM and Y-Maze plot in canonical maze units)."""
         return (name in self._GRIDLESS_GRAPHS
-                and self._plugin_key() in ("open_field", "nor"))
+                and self._plugin_family() in ("open_field", "nor", "box"))
 
     def _apply_cm_ticks(self, ax, st):
         """X / Y ticks in cm measured from the arena's top-left corner.
@@ -995,12 +1011,18 @@ class GraphsMixin:
 
         active_key = self._plugin_key()
         entries = []
+        exps = []
         for plugin_cls in (OpenFieldExperiment, NORExperiment,
                            EPMExperiment, YMazeExperiment):
             try:
-                exp = plugin_cls()
+                exps.append(plugin_cls())
             except Exception:
                 continue
+        # Registry tests (NOL, box tests) list themselves when active, so
+        # edits are saved under their own key instead of Open Field's.
+        if active_key not in {e.key for e in exps} and getattr(self, "experiment", None):
+            exps.append(self.experiment)
+        for exp in exps:
             if exp.key == active_key:
                 caps_fn = self._graph_style_caps
             else:
@@ -1012,6 +1034,7 @@ class GraphsMixin:
                 names = list(GRAPH_NAMES)
             entries.append({
                 "key": exp.key,
+                "family": exp.fam,
                 "label": exp.name,
                 "graph_names": names,
                 "caps_provider": caps_fn,
@@ -1773,9 +1796,11 @@ class GraphsMixin:
         if len(x_vals) >= 2:
             slope, intercept = np.polyfit(x_vals, y_vals, 1)
             fit = slope * x_vals + intercept
+            # Per minute, as in the Excel "Habituation Slope (…/min)".
+            per_min = slope * tfac * 60.0
             ax.plot(x_vals, fit, color=resolve_token(GRAPH_ACCENTS["linfit"], "data"),
                     linestyle=(0, (6, 3)), linewidth=1.2,
-                    label=f"slope {slope:+.3g} {unit}/{t_unit}")
+                    label=f"slope {per_min:+.3g} {unit}/min")
         ax.set_ylim(0, max(y_vals) * 1.18 if len(y_vals) and max(y_vals) > 0 else 1)
         self._apply_style_axes(ax, "Habituation", st)
         self._apply_style_text(ax, "Habituation", st)
@@ -1783,17 +1808,6 @@ class GraphsMixin:
         fig.tight_layout()
         return fig
 
-    @staticmethod
-    def _fig_to_pixmap(fig):
-        import matplotlib.pyplot as plt
-        buf = BytesIO()
-        fig.savefig(buf, format="png", dpi=120, bbox_inches="tight",
-                    facecolor=fig.get_facecolor())
-        buf.seek(0)
-        pix = QPixmap()
-        pix.loadFromData(buf.read())
-        plt.close(fig)
-        return pix
 
     @staticmethod
     def _fig_to_pixmap_and_bytes(fig):

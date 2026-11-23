@@ -91,3 +91,39 @@ def test_labels():
     spec = variant_specs(PLAN, _MODE_GRID)[1]
     assert variant_label(2, spec, True) == "Run 2: threshold=20, blur=3"
     assert variant_label(1, [PLAN[0][2] and ("threshold", "Threshold", 20, "20")], False) == "20"
+
+
+def test_box_assignments_stay_per_video():
+    """Counterbalanced choices (paired side, stranger side …) are kept with
+    each video; the test's other settings come from the settings video."""
+    src = {"box_params": {"n_comp": 2, "layout": "h"}, "box_assign": {"paired": "A"},
+           "threshold": 30}
+    own = {"box_params": {"n_comp": 3, "layout": "h"}, "box_assign": {"paired": "B"},
+           "arena": ARENA_B}
+    m = merge_batch_settings(src, own)
+    assert m["box_params"]["n_comp"] == 2
+    assert m["box_assign"] == {"paired": "B"}
+    from experiments.box.paradigms import PlacePreference
+    p = PlacePreference().params_of(m)
+    assert p["n_comp"] == 2 and p["paired"] == "B"
+
+
+def test_warp_keeps_cage_shape_so_one_px_per_cm_fits_both_axes():
+    from experiments.open_field.experiment import warp_target_size
+    assert warp_target_size(1280, 720, "square") == (720, 720)
+    assert warp_target_size(1280, 720, "rectangle", 40, 40) == (720, 720)
+    tw, th = warp_target_size(1280, 720, "rectangle", 60, 30)
+    assert abs(tw / 60 - th / 30) < 0.05
+
+
+def test_batch_px_per_cm_follows_mode_and_frame():
+    from gui.experiment_batch_tab import _px_per_cm_for
+    from experiments.open_field.experiment import OpenFieldExperiment
+    exp = OpenFieldExperiment()
+    line = {"calib_p1": (0.0, 0.0), "calib_p2": (0.5, 0.0), "calib_cm": 20.0}
+    # Line drawn on the 720 × 720 warped view: half its width = 20 cm → 18 px/cm.
+    assert _px_per_cm_for(dict(line, calib_mode="manual"), exp, (720, 720)) == 18.0
+    assert _px_per_cm_for(dict(line, calib_mode="none"), exp, (720, 720)) is None
+    auto = {"calib_mode": "auto", "cage_shape": "square", "cage_w_cm": 40, "cage_h_cm": 40,
+            "arena": [(0, 0), (1, 0), (1, 1), (0, 1)]}
+    assert _px_per_cm_for(auto, exp, (720, 720)) == 18.0

@@ -19,16 +19,20 @@ from tracking.tracker import DEFAULT_MODEL_PARAMS, DEFAULT_POST_PARAMS
 # (key, label, tooltip) — keys match tracking.tracker's model names.
 _MODELS = [
     ("median", "Median BG",
-     "Static background from the median of sampled frames. Best default "
-     "for a fixed camera and steady lighting."),
-    ("mog2", "MOG2 (adaptive)",
-     "Gaussian-mixture background that can adapt to slow lighting changes. "
-     "Can lose a mouse that rests in one spot for long."),
-    ("knn", "KNN",
-     "Nearest-neighbour background model; robust to small background noise."),
-    ("framediff", "Frame difference",
-     "Detects what moved between frames. Fast, but loses a mouse that moves "
-     "slowly or stays still — turn on the running average in its settings."),
+     "Static background built from sampled frames. Recommended: validated "
+     "against an independent detector; handles a mouse that freezes for most "
+     "of the video, light or dark mice, and light flicker."),
+    # Validation (real open-field video): MOG2 +51 % distance, KNN +17 %,
+    # Frame difference found the mouse in 31 % of frames. Kept, but labelled.
+    ("mog2", "MOG2 (experimental)",
+     "Experimental — in validation it overestimated distance by about 50 %. "
+     "Use Median BG for results."),
+    ("knn", "KNN (experimental)",
+     "Experimental — in validation it put the mouse in the wrong place in "
+     "about a third of frames. Use Median BG for results."),
+    ("framediff", "Frame difference (experimental)",
+     "Experimental — misses a mouse that walks slowly or stays still (found it "
+     "in 31 % of frames in validation). Use Median BG for results."),
     ("hsv", "HSV threshold",
      "Colour / brightness threshold — for a dark mouse on a light floor (or "
      "the reverse, with Invert off)."),

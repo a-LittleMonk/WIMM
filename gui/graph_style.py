@@ -297,7 +297,6 @@ _LEGACY_LIGHT = {
 }
 
 
-
 # Colour tokens: strings starting with "@" resolve against the active UI theme
 # (or forced light for exports) via resolve_token / resolve_style. Literal
 # colours a user picks in Customize Graphs are kept verbatim.
@@ -708,7 +707,8 @@ BUILTIN_PRESETS = {}
 # Presets hold every graph of every test. "Default" is built in (the
 # LIGHT_PRESET look) and can't be overwritten or deleted.
 DEFAULT_PRESET = "Default"
-ALL_PLUGIN_KEYS = ("open_field", "nor", "epm", "y_maze")
+from experiments.registry import KEYS as _REG_KEYS
+ALL_PLUGIN_KEYS = tuple(_REG_KEYS)
 
 
 # Per-plugin baseline overrides layered on top of the shared Light-preset
@@ -789,8 +789,6 @@ class GraphStyleConfig:
             self.plugins[key] = bucket
         return bucket
 
-    def known_plugins(self):
-        return list(self.plugins.keys())
 
     # ── style access ─────────────────────────────────────────────────────
     def get_for(self, plugin_key: str, graph_name: str) -> dict:

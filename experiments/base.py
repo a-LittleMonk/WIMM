@@ -10,6 +10,14 @@ from typing import List, Tuple
 class Experiment:
     name: str = "Experiment"
     key: str  = "experiment"
+    # Shared-behaviour group. Tests built on another test's code report
+    # that test's family (Novel Object Location → "nor"; place preference,
+    # zero maze, … → "box") so arena / graph logic treats them alike.
+    family: str = ""
+
+    @property
+    def fam(self):
+        return self.family or self.key
 
     # ── Zones ────────────────────────────────────────────────────────────
     def zones_schema(self, host) -> List[dict]:
@@ -100,6 +108,10 @@ class Experiment:
         return None
 
     # ── Preflight ──────────────────────────────────────────────────────
+    def preflight_zone_problem(self, snapshot):
+        """A zone the test cannot run without (blocks the run), or None."""
+        return None
+
     def preflight_auto_scale_warning(self, snapshot):
         """Plugin-supplied warning for the batch pre-flight dialog when
         the user has picked auto-calibration. Return a string explaining
@@ -186,6 +198,16 @@ class Experiment:
                             center_size_pct
         Default: no extras."""
         return set()
+
+    # ── Setup-card summaries ───────────────────────────────────────────
+    def summary_geometry(self, host):
+        """One-line summary for the Arena card header. None = use the
+        shared Open Field summary."""
+        return None
+
+    def summary_zones(self, host):
+        """One-line summary for the Zones card header. None = shared."""
+        return None
 
     # ── Nose detection default ─────────────────────────────────────────
     def default_enable_nose(self) -> bool:

@@ -46,69 +46,58 @@ def build_geometry_step(host):
     host._nor_angle_enabled = False
     host._nor_angle_max_deg = 45.0
 
-    grp = host._group("Step 2 — NOR geometry", status_id="geometry")
-    layout = QVBoxLayout(grp)
-    layout.setSpacing(4)
+    from experiments import common_ui as cu
+    from gui.widgets_v2 import SwitchBox
 
-    # ── Arena (delegates to existing host methods) ──────────────────────
-    from gui.widgets_v2 import ArenaModeButton, IconButton, SwitchBox
-    arena_btn = ArenaModeButton()
-    arena_btn.setText("Define arena")
-    arena_menu = QMenu(arena_btn)
+    # ═══ Arena card — same as Open Field ══════════════════════════════
+    grp, layout = cu.arena_card(host)
 
-    def _arena_action(label, mode_key, fn):
-        arena_menu.addAction(
-            label,
-            lambda: (_set_arena_mode(host, mode_key), arena_btn.setText(label), fn())
-        )
-    _arena_action("Manual — click 4 corners", "manual", host._start_draw_arena)
-    _arena_action("Premade square arena", "square", host._apply_premade_square_arena)
+    def _mode(key, fn):
+        return lambda: (_set_arena_mode(host, key), fn())
+
+    items = [
+        ("Manual — click 4 corners", "manual",
+         _mode("manual", host._start_draw_arena), None),
+        ("Premade square arena", "square",
+         _mode("square", host._apply_premade_square_arena),
+         "Drop a centered square arena; drag the corners to fine-tune."),
+    ]
     # "Auto — from movement (next run)" is gated behind an Extra Features
     # toggle (off by default). Re-enable from launcher → Settings → Extra
     # features.
     if host.config.get("enable_auto_movement_arena", False):
-        _arena_action("Auto — from movement (next run)", "movement",
-                      host._enable_auto_movement_arena)
-    arena_btn.setMenu(arena_menu)
-    host.btn_define_arena = arena_btn
+        items.append(("Auto — from movement (next run)", "movement",
+                      _mode("movement", host._enable_auto_movement_arena), None))
+    row, arena_btn, redraw_btn, clear_btn = cu.define_row(
+        host, items, on_clear=host._clear_arena, attr="btn_define_arena")
+    layout.addLayout(row)
     host.btn_arena = arena_btn
     host.btn_auto_arena = arena_btn
-    btn_clear_arena = IconButton("x", 11, "FAINT", "TEXT", "Clear arena", 28)
-    btn_clear_arena.clicked.connect(host._clear_arena)
-    host.btn_clear_arena = btn_clear_arena
-    arena_btn.follow(btn_clear_arena)
-    arow = QHBoxLayout()
-    arow.setSpacing(6)
-    arow.addWidget(arena_btn, 1)
-    arow.addWidget(btn_clear_arena)
-    layout.addLayout(arow)
+    host.btn_redraw_arena = redraw_btn
+    host.btn_clear_arena = clear_btn
 
-    # ── Perspective correction (warp arena → axis-aligned rect) ────────
-    # Base ExperimentTab owns the toggle handler (_on_perspective_toggled)
-    # and auto-enables the checkbox once the arena is drawn. Same hookup
-    # OF uses — we just place the widget here so NOR has it on Step 2.
-    host.chk_perspective = SwitchBox("Correct perspective")
-    host.chk_perspective.setToolTip(
+    # Perspective — Full view only, like Open Field. Base ExperimentTab
+    # owns the handler and enables it once the arena is drawn.
+    cu.perspective_switch(
+        host, "chk_perspective", host._on_perspective_toggled,
         "Warp video so the arena trapezoid becomes a true axis-aligned "
         "rectangle.\nUse when camera is at an angle. Improves distance / "
-        "speed accuracy.\nRequires arena to be drawn first. Toggle off to "
-        "return to original view."
-    )
+        "speed accuracy.\nRequires arena to be drawn first.")
     host.chk_perspective.setEnabled(False)
-    host.chk_perspective.toggled.connect(host._on_perspective_toggled)
     host._perspective_widget = host.chk_perspective
-    layout.addWidget(host.chk_perspective)
+    layout.addWidget(host.chk_perspective.parentWidget())
 
-    layout.addWidget(host._sep())
-
-    # ── Object A + B blocks ─────────────────────────────────────────────
+    # ═══ Zones card — the two objects ═════════════════════════════════
+    zg, zl = cu.zones_card(host)
     host._nor_widgets = {}
-    for obj_id in OBJECT_NAMES:
-        layout.addWidget(_build_object_block(host, obj_id))
-        layout.addWidget(host._sep())
+    for i, obj_id in enumerate(OBJECT_NAMES):
+        if i:
+            zl.addWidget(host._sep())
+        zl.addWidget(_build_object_block(host, obj_id))
+    zl.addWidget(host._sep())
 
     # ── Direction filter ────────────────────────────────────────────────
-    angle_row = QHBoxLayout()
+    from gui.widgets_v2 import form_row
     chk = SwitchBox("Require nose facing object")
     chk.setToolTip(
         "Only count nose-in-zone frames when the nose also points toward "
@@ -118,7 +107,7 @@ def build_geometry_step(host):
     )
     chk.toggled.connect(lambda on: _on_angle_toggled(host, on))
     host.chk_nor_angle = chk
-    angle_row.addWidget(chk)
+    zl.addWidget(chk)
     spin = QDoubleSpinBox()
     spin.setRange(5.0, 180.0)
     spin.setDecimals(0)
@@ -126,13 +115,10 @@ def build_geometry_step(host):
     spin.setValue(45.0)
     spin.setSuffix(" °")
     spin.setFixedWidth(80)
-    spin.setFixedHeight(24)
     spin.setEnabled(False)
     spin.valueChanged.connect(lambda v: setattr(host, "_nor_angle_max_deg", float(v)))
     host.spin_nor_angle = spin
-    angle_row.addWidget(spin)
-    angle_row.addStretch()
-    layout.addLayout(angle_row)
+    zl.addWidget(form_row("Max angle", spin))
 
     # ── Clear all objects ───────────────────────────────────────────────
     clear_row = QHBoxLayout()
@@ -140,13 +126,10 @@ def build_geometry_step(host):
     btn_clear_objs.clicked.connect(lambda: _clear_objects(host))
     clear_row.addWidget(btn_clear_objs)
     clear_row.addStretch()
-    layout.addLayout(clear_row)
+    zl.addLayout(clear_row)
 
-    # ── Status label ────────────────────────────────────────────────────
-    host.lbl_nor_status = QLabel("Define arena + place both objects")
-    host.lbl_nor_status.setWordWrap(True)
-    theme.set_tone(host.lbl_nor_status, "faint", "font-size:11px;")
-    layout.addWidget(host.lbl_nor_status)
+    host.lbl_nor_status = cu.status_label("Define arena + place both objects")
+    zl.addWidget(host.lbl_nor_status)
 
     # ── Wire deferred init (zone_drawer is built later) ─────────────────
     def _wire():
@@ -177,7 +160,8 @@ def build_geometry_step(host):
         _refresh_status(host)
     QTimer.singleShot(0, _wire)
 
-    _info = [("Correct perspective", host.chk_perspective)]
+    attach_info_box(grp, [("Correct perspective", host.chk_perspective)])
+    _info = []
     for obj_id in OBJECT_NAMES:
         _w = host._nor_widgets[obj_id]
         _lbl = OBJECT_LABELS[obj_id]
@@ -190,7 +174,7 @@ def build_geometry_step(host):
             (f"{_lbl} — Corners", _w["corners"]),
         ]
     _info.append(("Require nose facing object", chk))
-    attach_info_box(grp, _info)
+    attach_info_box(zg, _info)
     return grp
 
 
@@ -221,13 +205,15 @@ def _build_object_block(host, obj_id):
 
     role_combo = QComboBox()
     role_combo.setFixedHeight(24)
-    for key, lbl in ROLE_LABELS.items():
+    _labels = getattr(getattr(host, "experiment", None), "role_labels", None) or ROLE_LABELS
+    for key, lbl in _labels.items():
         role_combo.addItem(lbl, key)
     idx = role_combo.findData(state.get("role", ROLE_NONE))
     if idx >= 0:
         role_combo.setCurrentIndex(idx)
     role_combo.setToolTip(
-        "Role tag — Familiar/Novel drives the Discrimination Index."
+        f"Role tag — {_labels[ROLE_FAMILIAR]}/{_labels[ROLE_NOVEL]} drives the "
+        "Discrimination Index."
     )
     role_combo.currentIndexChanged.connect(
         lambda _i, oid=obj_id, c=role_combo: _on_role_changed(host, oid, c.currentData())
@@ -623,9 +609,12 @@ def build_results_tab(host):
     v = QVBoxLayout(w)
     v.setContentsMargins(8, 8, 8, 8)
     v.setSpacing(6)
+    _labels = getattr(getattr(host, "experiment", None), "role_labels", None) or ROLE_LABELS
+    _nov, _fam = _labels[ROLE_NOVEL], _labels[ROLE_FAMILIAR]
+    _title = getattr(getattr(host, "experiment", None), "results_title", "NOR")
     v.addWidget(QLabel(
-        "NOR summary. Discrimination Index = (Novel − Familiar) / "
-        "(Novel + Familiar). Only populated when both objects have a role."
+        f"{_title} summary. Discrimination Index = ({_nov} − {_fam}) / "
+        f"({_nov} + {_fam}). Only populated when both objects have a role."
     ))
     host._nor_table = QTableWidget()
     host._nor_table.setEditTriggers(QTableWidget.NoEditTriggers)

@@ -294,7 +294,25 @@ def test_pause_detection_with_threshold():
         pause_min_dur_s=1.0,
     )
     assert metrics["Pause Count (#)"] == 1
-    assert metrics["Longest Pause (s)"] == pytest.approx(4.0, rel=1e-3)
+    # Frame 0 has no speed (no previous frame), so 119 of 120 frames count.
+    assert metrics["Longest Pause (s)"] == pytest.approx(119 / FPS, abs=0.01)
+
+
+def test_missed_frames_are_not_immobility_or_pauses():
+    """A mouse that never stops, with tracking lost for 1.5 s, has no
+    immobility and no pause — missed frames are not 'standing still'."""
+    pts = _line((5, 50), (95, 50), 600)            # 20 s, always moving
+    res = _results(pts)
+    for r in res[300:345]:                          # 1.5 s lost
+        r["x"] = r["y"] = None
+    metrics, _, bins = compute_metrics(
+        res, arena=ARENA, center_zone=CENTER_ZONE_50,
+        px_per_cm=1.0, fps=FPS, movement_threshold=0.5,
+        pause_min_dur_s=1.0, bin_size_s=10.0,
+    )
+    assert metrics["Immobility Time (s)"] == pytest.approx(0.0, abs=0.05)
+    assert metrics["Pause Count (#)"] == 0
+    assert bins["Immobility (s)"].sum() == pytest.approx(0.0, abs=0.05)
 
 
 def test_pauses_skipped_without_threshold():
@@ -562,3 +580,37 @@ def test_legacy_center_keyword_still_works():
         cell_min_dwell_s=0.0,
     )
     assert metrics["Center Zone Entries (#)"] == 1
+
+
+def test_bins_count_a_center_visit_once_and_share_speed_base():
+    """One center visit across a bin edge = one entry, in the bin where it
+    starts; bin speed uses the same time base as the session average."""
+    out = _const((10, 10), 90) + _const((50, 50), 60) + _const((10, 10), 90)
+    res = _results(out)                                 # visit 3 s → 5 s
+    for r in res[30:33]:
+        r["x"] = r["y"] = None
+    metrics, _, bins = compute_metrics(
+        res, arena=ARENA, center_zone=CENTER_ZONE_50,
+        px_per_cm=1.0, fps=FPS, bin_size_s=4.0,
+    )
+    assert metrics["Center Zone Entries (#)"] == 1
+    assert list(bins["Center Zone Entries (#)"]) == [1, 0]
+    dist = bins["Distance (cm)"].sum()
+    assert dist / metrics["Duration (s)"] == pytest.approx(
+        metrics["Average Speed (cm/s)"], abs=1e-3)
+
+
+def test_csv_write_failure_is_reported(tmp_path, monkeypatch):
+    import pandas as pd
+    from export.excel_export import export_results
+    metrics, raw, _ = compute_metrics(
+        _results(_line((5, 5), (95, 95), 60)), arena=ARENA,
+        center_zone=CENTER_ZONE_50, px_per_cm=1.0, fps=FPS)
+
+    def locked(self, path, *a, **k):
+        raise PermissionError(f"[Errno 13] Permission denied: '{path}'")
+    monkeypatch.setattr(pd.DataFrame, "to_csv", locked)
+    with pytest.raises(OSError, match="CSV copy could not be written"):
+        export_results(metrics, raw, str(tmp_path / "v.xlsx"), "v", ARENA,
+                       (100, 100), write_csv=True, all_units=False)
+    assert (tmp_path / "v.xlsx").exists()

@@ -38,25 +38,6 @@ def _point_in_poly_mask(xs, ys, poly_px):
     return mask
 
 
-def _angle_to_target(nose_x, nose_y, body_x, body_y, target_x, target_y):
-    """Angle between (body→nose) heading and (body→target) bearing, in deg.
-    Returns NaN when nose/body identical (no heading) or any coord NaN."""
-    if (math.isnan(nose_x) or math.isnan(nose_y)
-            or math.isnan(body_x) or math.isnan(body_y)):
-        return float("nan")
-    hx, hy = nose_x - body_x, nose_y - body_y
-    h_len = math.hypot(hx, hy)
-    if h_len <= 1e-6:
-        return float("nan")
-    tx, ty = target_x - body_x, target_y - body_y
-    t_len = math.hypot(tx, ty)
-    if t_len <= 1e-6:
-        return float("nan")
-    cos_a = (hx * tx + hy * ty) / (h_len * t_len)
-    cos_a = max(-1.0, min(1.0, cos_a))
-    return math.degrees(math.acos(cos_a))
-
-
 def _polygon_centroid(poly_px):
     if not poly_px:
         return (float("nan"), float("nan"))
@@ -205,9 +186,11 @@ def compute(results, settings, fps, px_per_cm):
             role_times_s[role] += total_s
 
     # ── Discrimination Index + preference (only when both roles set).
+    # One object never explored is a real result (DI = ±1), not missing.
     t_fam = role_times_s[ROLE_FAMILIAR]
     t_nov = role_times_s[ROLE_NOVEL]
-    if t_fam + t_nov > 0 and t_fam > 0 and t_nov > 0:
+    roles = {(objects.get(o) or {}).get("role") for o in OBJECT_NAMES}
+    if ROLE_FAMILIAR in roles and ROLE_NOVEL in roles and t_fam + t_nov > 0:
         metrics["discrimination_index"] = round(
             (t_nov - t_fam) / (t_nov + t_fam), 4
         )

@@ -87,6 +87,24 @@ class EPMExperiment(Experiment):
         return (labels, values, colors, lambda v: f"{v:.1f}s",
                 "Time per Arm Type", "Time (s)")
 
+    # ── Setup-card summaries ──────────────────────────────────────────
+    def summary_geometry(self, host):
+        from . import zones as _z
+        zd = getattr(host, "zone_drawer", None)
+        if zd is None:
+            return "Not defined"
+        n = sum(1 for a in _z.ARM_NAMES
+                if len((zd.get_zone(a) or {}).get("geometry") or []) >= 3)
+        if not n:
+            return "Not defined"
+        mode = ("Plus template" if host.rb_epm_template.isChecked()
+                else "Manual")
+        return f"{mode} · {n}/4 arms"
+
+    def summary_zones(self, host):
+        kinds = list(getattr(host, "_epm_arm_kinds", {}).values())
+        return f"{kinds.count('open')} open · {kinds.count('closed')} closed"
+
     def zones_schema(self, host):
         geoms = epm_zones.get_arm_geoms(host)
         arm_kinds = getattr(host, "_epm_arm_kinds", None)
@@ -116,7 +134,7 @@ class EPMExperiment(Experiment):
             "total_entries",
             "entries_open_total", "entries_closed_total", "entries_center",
             "time_open_total_s", "time_closed_total_s", "time_center_s",
-            "pct_time_open", "pct_time_closed", "pct_time_center",
+            "pct_time_open_of_arms", "pct_time_closed_of_arms", "pct_time_center",
             "pct_entries_open", "pct_entries_closed",
         ]
 
@@ -136,11 +154,11 @@ class EPMExperiment(Experiment):
             ("Time open arms (s)",        metrics.get("time_open_total_s")),
             ("Time closed arms (s)",      metrics.get("time_closed_total_s")),
             ("Time center (s)",           metrics.get("time_center_s")),
-            ("Open arms time (%)",        metrics.get("pct_time_open")),
-            ("Closed arms time (%)",      metrics.get("pct_time_closed")),
-            ("Center time (%)",           metrics.get("pct_time_center")),
-            ("Open entries (%)",          metrics.get("pct_entries_open")),
-            ("Closed entries (%)",        metrics.get("pct_entries_closed")),
+            ("Open arms time (% of arm time)",   metrics.get("pct_time_open_of_arms")),
+            ("Closed arms time (% of arm time)", metrics.get("pct_time_closed_of_arms")),
+            ("Center time (% of session)",       metrics.get("pct_time_center")),
+            ("Open entries (% of arm entries)",  metrics.get("pct_entries_open")),
+            ("Closed entries (% of arm entries)", metrics.get("pct_entries_closed")),
             ("Latency to first open entry (s)",
                                           metrics.get("latency_first_open_entry_s")),
             ("Latency to first entry (s)", metrics.get("latency_first_entry_s")),
@@ -298,6 +316,11 @@ class EPMExperiment(Experiment):
              lambda: not zd._arm_show_entries,
              lambda hide: zd.set_arm_show_entries(not hide)),
         ]
+
+    def preflight_zone_problem(self, snapshot):
+        if len(snapshot.get("center_norm") or []) < 3:
+            return "no center zone — draw the center (arm entries are counted from it)"
+        return None
 
     def preflight_auto_scale_warning(self, snapshot):
         arm_cm = float(snapshot.get("arm_length_cm") or 0)

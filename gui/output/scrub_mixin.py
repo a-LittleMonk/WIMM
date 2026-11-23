@@ -42,6 +42,7 @@ class ScrubMixin:
             return None
         self._scrub_cap = cap
         self._scrub_cap_path = path
+        self._scrub_next = 0          # frame the next read() returns
         return cap
 
     def _release_scrub_cap(self):
@@ -62,15 +63,17 @@ class ScrubMixin:
             return
         # Playing / stepping forward: read on from where the decoder is
         # instead of seeking (a seek re-decodes from the last keyframe,
-        # which is what made playback crawl).
-        pos = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
-        ahead = value - pos
+        # which is what made playback crawl). Our own counter: after a
+        # jump cv2's POS_FRAMES can report the asked frame, not the real one.
+        ahead = value - getattr(self, "_scrub_next", -1)
         if 0 <= ahead <= 30:
             for _ in range(ahead):
                 cap.grab()
         else:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, value)
+            from core.video import cached_frame_times, seek_exact
+            seek_exact(cap, value, cached_frame_times(self.video_path))
         ret, frame = cap.read()
+        self._scrub_next = value + 1 if ret else -1
         if ret:
             if self._crop_rect is not None:
                 cx, cy, cw, ch = self._crop_rect

@@ -1363,7 +1363,9 @@ class GraphStyleDialog(QDialog):
         arena_half = 22.0
         fps = 15.0
         n = 4500
-        key = self._current_plugin_key
+        # Preview by family: Object Location looks like Novel Object, etc.
+        key = self._plugins_by_key.get(self._current_plugin_key, {}).get(
+            "family", self._current_plugin_key)
         synth_polys, synth_objs = self._synthetic_shape(key, arena_half)
         # Per-experiment movement model: path that respects how the animal
         # actually moves in THIS apparatus + the matching zone categories.

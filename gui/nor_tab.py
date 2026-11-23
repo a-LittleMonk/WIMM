@@ -19,14 +19,15 @@ from experiments.nor.nor_overlay import (
 
 
 class NORTab(OpenFieldTab):
-    def __init__(self, config):
-        super().__init__(config, experiment=NORExperiment())
+    def __init__(self, config, experiment=None):
+        super().__init__(config, experiment=experiment or NORExperiment())
         # Add NOR results tab. Insert right after Summary (index 1) so the
         # user lands on it after the at-a-glance Summary view.
         try:
             tab = self.experiment.build_results_tabs(self, self._excel_tabs)
             if tab is not None and hasattr(self, "_excel_tabs"):
-                self._excel_tabs.insertTab(1, tab, "NOR")
+                self._excel_tabs.insertTab(
+                    1, tab, getattr(self.experiment, "results_title", "NOR"))
         except Exception:
             pass
         # Live per-object tracking state. Mirrors the YM pattern: pending
@@ -281,7 +282,7 @@ class NORTab(OpenFieldTab):
         NOR never builds. We force the square layout here so the user
         sees one cm input."""
         if hasattr(self, "lbl_cage_w"):
-            self.lbl_cage_w.setText("Side:")
+            self.lbl_cage_w.setText("Side")
         if hasattr(self, "lbl_cage_x"):
             self.lbl_cage_x.setVisible(False)
         if hasattr(self, "lbl_cage_h"):

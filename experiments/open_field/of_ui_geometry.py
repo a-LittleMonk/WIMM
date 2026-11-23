@@ -25,8 +25,8 @@ def _step_geometry_of(host):
         ArenaModeButton, ColorButtons, IconButton, SwitchBox, ToggleTile, form_row,
         mono_font,
     )
-    grp = host._group("Step 2 — Geometry", status_id="geometry", name="Arena")
-    layout = QVBoxLayout(grp)
+    from experiments import common_ui
+    grp, layout = common_ui.arena_card(host)
 
     # ── Arena: define mode select + Redraw + clear
     host.btn_define_arena = ArenaModeButton()
@@ -172,8 +172,7 @@ def _step_geometry_of(host):
         act_movement.setToolTip("")
 
     # ── Zones card ───────────────────────────────────────────────────────
-    zg = host._group("Zones", status_id="zones", name="Zones")
-    zl = QVBoxLayout(zg)
+    zg, zl = common_ui.zones_card(host)
 
     # Zone style — hidden data holder (combo) + two tiles that drive it.
     host.combo_zone_mode = QComboBox()

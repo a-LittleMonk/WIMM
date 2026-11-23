@@ -66,6 +66,15 @@ def build_detection_step(host):
         if text == "more sensitive":
             hints.addStretch(1)
     bv.addLayout(hints)
+    from gui.widgets_v2 import SwitchBox
+    host.chk_low_contrast = SwitchBox("White mouse on white floor")
+    host.chk_low_contrast.setToolTip(
+        "For a mouse the same colour as the floor (e.g. white on white).\n"
+        "Detects with double sensitivity and joins the pieces of the mouse\n"
+        "(head, eyes, tail base, edges) into one before finding its centre.\n"
+        "Off = normal tracking.")
+    host.chk_low_contrast.toggled.connect(lambda _on: host._update_preview())
+    bv.addWidget(host.chk_low_contrast)
     layout.addWidget(box)
 
     # ── advanced image settings

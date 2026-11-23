@@ -1,18 +1,16 @@
 """Custom widgets from the Mice Tracker redesign (v2): segmented control,
-status pill, speed timeline + time ruler, measurements sidebar."""
-import math
-
-from PyQt5.QtCore import QEvent, QObject, QPointF, QRectF, QSize, Qt, pyqtSignal
+status pill, time ruler, measurements sidebar."""
+from PyQt5.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import (
-    QColor, QFont, QImage, QLinearGradient, QPainter, QPainterPath, QPen,
+    QColor, QImage, QLinearGradient, QPainter, QPainterPath, QPen,
 )
 from PyQt5.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
-    QSizePolicy, QSlider, QStyle, QStyleOptionSlider, QToolTip, QVBoxLayout, QWidget,
+    QSlider, QStyle, QStyleOptionSlider, QToolTip, QVBoxLayout, QWidget,
 )
 
 from gui import icons, theme
-from gui.widgets_v2 import mono_font, prop, repolish
+from gui.widgets_v2 import mono_font, prop
 
 
 def _mono(size=11):
@@ -101,236 +99,6 @@ class StatusPill(QLabel):
             self.hide()
 
 
-# ── Timeline panels: speed · center / periphery · missed frames ──────────
-class _Track(QWidget):
-    """Base for the timeline panels: label column on the left, a plot area
-    on the right, a playhead, and click / drag to seek (emits 0..1)."""
-    seek = pyqtSignal(float)
-    LEFT = 74          # label column
-    RIGHT = 12
-
-    def __init__(self, min_h, parent=None):
-        super().__init__(parent)
-        self.setMinimumHeight(min_h)
-        self.setCursor(Qt.PointingHandCursor)
-        self._frac = 0.0
-        theme.notifier.changed.connect(lambda _m: self.update())
-
-    def set_cursor(self, frac):
-        self._frac = max(0.0, min(1.0, float(frac)))
-        self.update()
-
-    def _plot_rect(self):
-        return QRectF(self.LEFT, 10, max(1, self.width() - self.LEFT - self.RIGHT),
-                      max(1, self.height() - 16))
-
-    def _emit_at(self, x):
-        r = self._plot_rect()
-        self.seek.emit(max(0.0, min(1.0, (x - r.left()) / r.width())))
-
-    def mousePressEvent(self, e):
-        self._emit_at(e.x())
-
-    def mouseMoveEvent(self, e):
-        if e.buttons() & Qt.LeftButton:
-            self._emit_at(e.x())
-
-    def _label(self, p, text, y, h):
-        f = QFont(theme.sans_family())
-        f.setPixelSize(10)
-        f.setWeight(QFont.Medium)
-        p.setFont(f)
-        p.setPen(QColor(theme.TEXT_2))
-        p.drawText(QRectF(0, y, self.LEFT - 10, h), Qt.AlignRight | Qt.AlignVCenter, text)
-
-    def _lane(self, p, y, h):
-        r = self._plot_rect()
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor(theme.SURFACE_2))
-        p.drawRoundedRect(QRectF(r.left(), y, r.width(), h), 3, 3)
-
-    def _playhead(self, p):
-        r = self._plot_rect()
-        x = r.left() + r.width() * self._frac
-        p.setPen(QPen(QColor(theme.ACCENT), 1))
-        p.drawLine(QPointF(x, 3), QPointF(x, r.bottom() + 2))
-        p.save()
-        p.translate(x, 5)
-        p.rotate(45)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor(theme.ACCENT))
-        p.drawRect(QRectF(-3.5, -3.5, 7, 7))
-        p.restore()
-
-    def paintEvent(self, _):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        self._paint(p)
-        self._playhead(p)
-
-
-class SpeedTrack(_Track):
-    """Speed over time with the movement-threshold line."""
-
-    def __init__(self, parent=None):
-        super().__init__(70, parent)
-        self._speed, self._thr, self._unit = [], 0.0, "cm/s"
-
-    def set_data(self, speed, thr, unit):
-        self._speed, self._thr, self._unit = list(speed or []), float(thr or 0.0), unit
-        self.update()
-
-    def _paint(self, p):
-        r = self._plot_rect()
-        n = len(self._speed)
-        vmax = max(self._speed) if n else 1.0
-        vmax = max(vmax, self._thr * 1.2, 1e-6)
-        top = math.ceil(vmax / 4.0) * 4 if vmax > 4 else round(vmax, 1)
-        p.setFont(_mono(9))
-        p.setPen(QColor(theme.FAINT))
-        p.drawText(QRectF(0, r.top() - 2, self.LEFT - 10, 12), Qt.AlignRight, f"{top:g}")
-        p.drawText(QRectF(0, r.bottom() - 10, self.LEFT - 10, 12), Qt.AlignRight, "0")
-        self._label(p, self._unit, r.center().y() - 7, 14)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor(theme.SURFACE_2))
-        p.drawRoundedRect(r, 4, 4)
-        p.setPen(QPen(QColor(theme.BORDER), 1))
-        for k in (0.25, 0.5, 0.75):
-            y = r.top() + r.height() * k
-            p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y))
-        if n > 1:
-            path = QPainterPath()
-            for i, v in enumerate(self._speed):
-                x = r.left() + r.width() * i / (n - 1)
-                y = r.bottom() - r.height() * 0.94 * min(1.0, v / top)
-                if i == 0:
-                    path.moveTo(x, y)
-                else:
-                    path.lineTo(x, y)
-            area = QPainterPath(path)
-            area.lineTo(r.right(), r.bottom())
-            area.lineTo(r.left(), r.bottom())
-            area.closeSubpath()
-            g = QLinearGradient(0, r.top(), 0, r.bottom())
-            c0 = QColor(theme.ACCENT)
-            c0.setAlphaF(0.32)
-            c1 = QColor(theme.ACCENT)
-            c1.setAlphaF(0.0)
-            g.setColorAt(0, c0)
-            g.setColorAt(1, c1)
-            p.setClipRect(r)
-            p.fillPath(area, g)
-            p.setPen(QPen(QColor(theme.ACCENT), 1.1))
-            p.setBrush(Qt.NoBrush)
-            p.drawPath(path)
-            p.setClipping(False)
-        if self._thr > 0:
-            y = r.bottom() - r.height() * 0.94 * min(1.0, self._thr / top)
-            pen = QPen(QColor(theme.WARN), 1)
-            pen.setDashPattern([4, 3])
-            p.setPen(pen)
-            p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y))
-            p.setFont(_mono(9))
-            p.setPen(QColor(theme.WARN))
-            p.drawText(QRectF(r.left(), r.top() + 3, r.width() - 6, 12), Qt.AlignRight,
-                       f"threshold {self._thr:.2f} {self._unit}")
-
-
-class ZoneTrack(_Track):
-    """Two lanes: when the animal was in the center, and in the periphery."""
-    LANE = 14
-
-    def __init__(self, parent=None):
-        super().__init__(2 * self.LANE + 26, parent)
-        self._center, self._periph = [], []
-
-    def set_data(self, center, periphery):
-        self._center, self._periph = list(center or []), list(periphery or [])
-        self.update()
-
-    def _runs(self, p, flags, y, color):
-        if not flags:
-            return
-        r = self._plot_rect()
-        m = len(flags)
-        p.save()
-        clip = QPainterPath()
-        clip.addRoundedRect(QRectF(r.left(), y, r.width(), self.LANE), 3, 3)
-        p.setClipPath(clip)
-        p.setPen(Qt.NoPen)
-        p.setBrush(color)
-        start = None
-        for i, c in enumerate(list(flags) + [False]):
-            if c and start is None:
-                start = i
-            elif not c and start is not None:
-                x1 = r.left() + r.width() * start / m
-                x2 = r.left() + r.width() * i / m
-                p.drawRect(QRectF(x1, y, max(1.0, x2 - x1), self.LANE))
-                start = None
-        p.restore()
-
-    def _paint(self, p):
-        r = self._plot_rect()
-        y0 = r.top()
-        y1 = y0 + self.LANE + 6
-        self._label(p, "Center", y0, self.LANE)
-        self._label(p, "Periphery", y1, self.LANE)
-        self._lane(p, y0, self.LANE)
-        self._lane(p, y1, self.LANE)
-        self._runs(p, self._center, y0, QColor(theme.ACCENT))
-        per = QColor(theme.ACCENT)
-        per.setAlphaF(0.45)
-        self._runs(p, self._periph, y1, per)
-
-
-class MissedTrack(_Track):
-    """Red ticks at frames with no detection."""
-    LANE = 12
-
-    def __init__(self, parent=None):
-        super().__init__(self.LANE + 20, parent)
-        self._missed = []
-
-    def set_data(self, missed):
-        self._missed = list(missed or [])
-        self.update()
-
-    def _paint(self, p):
-        r = self._plot_rect()
-        y = r.top()
-        self._label(p, "Missed", y, self.LANE)
-        self._lane(p, y, self.LANE)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor(theme.ERR))
-        for fr in self._missed:
-            x = r.left() + r.width() * fr
-            p.drawRoundedRect(QRectF(x - 1, y + 1, 2, self.LANE - 2), 1, 1)
-
-
-class TimelineTracks(QObject):
-    """The three timeline panels behind one interface (the old combined
-    SpeedTimeline API): set_data / set_cursor fan out, seek is merged."""
-    seek = pyqtSignal(float)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.speed = SpeedTrack()
-        self.zone = ZoneTrack()
-        self.missed = MissedTrack()
-        for t in (self.speed, self.zone, self.missed):
-            t.seek.connect(self.seek)
-
-    def set_data(self, speed, center, missed, thr, unit, periphery=None):
-        self.speed.set_data(speed, thr, unit)
-        self.zone.set_data(center, periphery)
-        self.missed.set_data(missed)
-
-    def set_cursor(self, frac):
-        for t in (self.speed, self.zone, self.missed):
-            t.set_cursor(frac)
-
-
 class TimeTicks(QWidget):
     """Tick ruler under the scrub slider (0, 1, 2 … min or seconds)."""
 
@@ -388,13 +156,6 @@ def _prop_label(text="", role=None, tone=None, mono=None, weight=None):
 
 def _caps(text):
     return _prop_label(text.upper(), role="caps")
-
-
-def _hline():
-    f = QFrame()
-    f.setProperty("role", "hline")
-    f.setFixedHeight(1)
-    return f
 
 
 def _repolish(widget):

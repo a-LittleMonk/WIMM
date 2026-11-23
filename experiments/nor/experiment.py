@@ -13,6 +13,9 @@ from . import ui as nor_ui
 class NORExperiment(Experiment):
     name = "Novel Object"
     key = "nor"
+    family = "nor"
+    results_title = "NOR"
+    role_labels = None          # None → nor_zones.ROLE_LABELS
 
     # Reused for OF-style square-cage px/cm + cage-size widget logic.
     _of_helper = OpenFieldExperiment()
@@ -48,6 +51,17 @@ class NORExperiment(Experiment):
                 "Object Exploration Time", "Time (s)")
 
     # ── Zones ────────────────────────────────────────────────────────────
+    # ── Setup-card summaries ──────────────────────────────────────────
+    def summary_zones(self, host):
+        objs = getattr(host, "_nor_objects", {}) or {}
+        placed = sum(1 for st in objs.values()
+                     if st.get("center_norm") or st.get("custom_geom_norm"))
+        roles = [st.get("role") for st in objs.values()]
+        text = f"{placed}/2 objects"
+        if "novel" in roles and "familiar" in roles:
+            text += " · roles set"
+        return text
+
     def zones_schema(self, host):
         return nor_zones.build_schema(host)
 
@@ -344,7 +358,7 @@ class NORExperiment(Experiment):
             cx = sum(p[0] for p in footprint_px) / len(footprint_px)
             cy = sum(p[1] for p in footprint_px) / len(footprint_px)
             name = st.get("name") or nor_zones.OBJECT_LABELS[obj_id]
-            role = nor_zones.ROLE_LABELS.get(
+            role = (getattr(self, "role_labels", None) or nor_zones.ROLE_LABELS).get(
                 st.get("role", "none"), "—")
             label_txt = name if role == "—" else f"{name} ({role})"
             ax.text(cx, cy, label_txt,

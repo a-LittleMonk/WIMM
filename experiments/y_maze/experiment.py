@@ -60,6 +60,26 @@ class YMazeExperiment(Experiment):
                 "arms": [{"poly": g, "cdir": cd}
                          for g, cd in zip(arms_sorted, cdirs)]}
 
+    # ── Setup-card summaries ──────────────────────────────────────────
+    def summary_geometry(self, host):
+        zd = getattr(host, "zone_drawer", None)
+        if zd is None:
+            return "Not defined"
+        n = sum(1 for a in ym_zones.ARM_NAMES
+                if len((zd.get_zone(a) or {}).get("geometry") or []) >= 3)
+        if not n:
+            return "Not defined"
+        mode = ("Y template" if host.rb_ym_template.isChecked()
+                else "Manual")
+        return f"{mode} · {n}/3 arms"
+
+    def summary_zones(self, host):
+        if not host.rb_ym_template.isChecked():
+            return "arms drawn by hand"
+        w = round(host.spin_ym_arm_width.value() * 100)
+        nz = round(host.spin_ym_neutral_size.value() * 100)
+        return f"arm {w}% · neutral {nz}%"
+
     def zones_schema(self, host):
         # Reflects current per-arm state; freshly built host has empty arms.
         geoms = ym_zones.get_arm_geoms(host)
@@ -287,6 +307,11 @@ class YMazeExperiment(Experiment):
              lambda: not zd._arm_show_entries,
              lambda hide: zd.set_arm_show_entries(not hide)),
         ]
+
+    def preflight_zone_problem(self, snapshot):
+        if len(snapshot.get("neutral_norm") or []) < 3:
+            return "no neutral zone — draw N (arm entries are counted from it)"
+        return None
 
     def preflight_auto_scale_warning(self, snapshot):
         arm_cm = float(snapshot.get("arm_length_cm") or 0)

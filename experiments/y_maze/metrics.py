@@ -2,80 +2,12 @@
 latency to first entry, plus generic kinematics from core."""
 import numpy as np
 import pandas as pd
-from matplotlib.path import Path
 
+from core.arm_entries import arm_visits, point_in_polys
 from core.kinematics import (
     compute_step_distance, compute_basic_kinematics, compute_pauses,
 )
 from .zones import ARM_NAMES, ARM_LABELS
-
-
-def _point_in_polys(xs, ys, polys, priority_first=None):
-    """polys: dict name -> list of (x,y) px. Returns array of zone names
-    (or None) per frame. If `priority_first` names a zone in `polys`, its
-    polygon is tested before all others so it wins overlap (used to make
-    the central neutral zone outrank the arms near the hub)."""
-    out = np.full(len(xs), None, dtype=object)
-    notna = ~np.isnan(xs) & ~np.isnan(ys)
-    if not notna.any():
-        return out
-    pts = np.stack([xs, ys], axis=1)
-    keys = list(polys.keys())
-    if priority_first and priority_first in keys:
-        keys.remove(priority_first)
-        keys.insert(0, priority_first)
-    for name in keys:
-        poly_pts = polys[name]
-        if not poly_pts or len(poly_pts) < 3:
-            continue
-        path = Path(np.array(poly_pts, dtype=float))
-        inside = np.zeros(len(xs), dtype=bool)
-        inside[notna] = path.contains_points(pts[notna])
-        # First-write-wins.
-        unset = out == None  # noqa: E711
-        out[inside & unset] = name
-    return out
-
-
-def _confirmed_seq(arm_seq, min_frames):
-    """Return a copy of arm_seq with sub-threshold runs blanked to None.
-    A frame's arm is preserved only if its containing run is ≥ min_frames."""
-    n = len(arm_seq)
-    out = [None] * n
-    min_frames = max(1, min_frames)
-    i = 0
-    while i < n:
-        a = arm_seq[i]
-        j = i
-        while j < n and arm_seq[j] == a:
-            j += 1
-        if a in ARM_NAMES and (j - i) >= min_frames:
-            for k in range(i, j):
-                out[k] = a
-        i = j
-    return out
-
-
-def _debounce_entries(arm_seq, min_frames):
-    """Debounce: an entry/time only counts when the body stays in an arm for
-    at least `min_frames` consecutive frames. Sub-threshold visits contribute
-    nothing — not even to time-in-arm. Returns (entries, times_frames, seq).
-    `seq` is the in-order list of committed arm names (for alternation calc).
-    Re-entering the same arm without first visiting another arm is not a new
-    entry (standard Y-maze convention)."""
-    confirmed = _confirmed_seq(arm_seq, min_frames)
-    entries = {a: 0 for a in ARM_NAMES}
-    times = {a: 0 for a in ARM_NAMES}
-    seq = []
-    last_committed = None
-    for a in confirmed:
-        if a in ARM_NAMES:
-            times[a] += 1
-            if a != last_committed:
-                entries[a] += 1
-                seq.append(a)
-                last_committed = a
-    return entries, times, seq
 
 
 def _arm_letter(arm_name):
@@ -139,27 +71,15 @@ def compute(results, settings, fps, px_per_cm):
     zone_polys = dict(arms_px)
     if neutral_px and len(neutral_px) >= 3:
         zone_polys["neutral_zone"] = neutral_px
-    zone_seq = _point_in_polys(
+    zone_seq = point_in_polys(
         xs, ys, zone_polys, priority_first="neutral_zone"
     )
-    # arm_seq: only arm names, neutral stripped (used for alternation +
-    # arm-entry counting).
-    arm_seq = np.array([a if a in ARM_NAMES else None for a in zone_seq],
-                       dtype=object)
-
-    confirmed_seq = _confirmed_seq(list(arm_seq), min_frames)
-    entries, times_f, seq = _debounce_entries(list(arm_seq), min_frames)
+    # Confirmed zone per frame (arm, neutral_zone or None), entries,
+    # and entry events (frame, arm) for per-bin counts + alternation.
+    confirmed_seq, entries, times_f, seq, entry_events = arm_visits(
+        zone_seq, ARM_NAMES, min_frames)
     frame_dur = 1.0 / fps if fps else 0.0
     times_s = {a: times_f[a] * frame_dur for a in ARM_NAMES}
-
-    # Per-entry events with frame indices — used for per-bin entry counts +
-    # per-bin alternation %. Mirrors the debounce rule in _debounce_entries.
-    entry_events = []  # list of (frame_idx, arm_name)
-    last_committed = None
-    for i, a in enumerate(confirmed_seq):
-        if a in ARM_NAMES and a != last_committed:
-            entry_events.append((i, a))
-            last_committed = a
 
     # Neutral entries + time. An entry counts on each transition INTO the
     # neutral zone from a different zone (matches the live overlay rule).
@@ -177,12 +97,8 @@ def compute(results, settings, fps, px_per_cm):
     (alt_pct, alt_count, alt_denom,
      triplets_all, triplets_ok, triplets_bad) = _alternation_pct(seq)
 
-    # Perseveration: with our debounce rule (consecutive same-arm collapsed)
-    # the only "unacceptable" triplet shape is X-Y-X — a Same-Arm Return.
-    # Alternate-Arm Returns (AAR) would require counting re-entries to the
-    # same arm as separate events, which the standard Y-maze convention
-    # rejects. So sar_count == triplets_unacceptable_count by construction.
-    sar_count = len(triplets_bad)
+    # Same-Arm Return: an entry into the arm the mouse just left (A → A).
+    sar_count = sum(1 for i in range(1, len(seq)) if seq[i] == seq[i - 1])
 
     total_entries = sum(entries.values())
     duration_s_val = float(basic.get("Duration (s)", 0.0)) or 0.0
@@ -217,7 +133,8 @@ def compute(results, settings, fps, px_per_cm):
         "total_frames":      basic.get("Total Frames", 0),
         "detection_rate_pct": basic.get("Detection Rate (%)", 0.0),
         "unit":           unit,
-        "alternation_pct": round(alt_pct, 2),
+        # Blank (not 0 %) when there are < 3 entries — no triplet exists.
+        "alternation_pct": round(alt_pct, 2) if alt_denom > 0 else None,
         "alternations":    alt_count,
         "alternation_denominator": alt_denom,
         "sar_count":       sar_count,

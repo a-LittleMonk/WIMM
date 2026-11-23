@@ -48,17 +48,20 @@ class EPMTab(OpenFieldTab):
         if layout is None:
             return
         widget = QWidget()
-        h = QHBoxLayout(widget)
+        from PyQt5.QtWidgets import QVBoxLayout
+        from gui import theme as _theme
+        h = QVBoxLayout(widget)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(4)
-        h.addWidget(QLabel("Arm length:"))
+        _cap = QLabel("Arm length")
+        _theme.set_tone(_cap, "text2", "font-size:10.5px;")
+        h.addWidget(_cap)
         spin = QDoubleSpinBox()
         spin.setRange(0.0, 9999.0)
         spin.setDecimals(1)
         spin.setSingleStep(1.0)
         spin.setSuffix(" cm")
-        spin.setFixedWidth(95)
-        spin.setFixedHeight(24)
+
         # Mouse-EPM default 30 cm.
         spin.setValue(float(self.config.get("epm_arm_length_cm", 30.0)))
         spin.setToolTip(
@@ -137,6 +140,7 @@ class EPMTab(OpenFieldTab):
         if arm != self._epm_current_arm:
             self._epm_current_arm = arm
             if arm is not None:
+                # core.arm_entries rule; outside every zone ends nothing.
                 if arm != self._epm_last_committed_arm:
                     self._epm_arm_entries[arm] = self._epm_arm_entries.get(arm, 0) + 1
                     self._epm_last_committed_arm = arm
@@ -287,9 +291,8 @@ class EPMTab(OpenFieldTab):
             rk = self.tracking_results[k]
             xk, yk = rk.get("x"), rk.get("y")
             if xk is None or yk is None:
-                arm = None
-            else:
-                arm = point_to_arm(zd, xk / vw, yk / vh)
+                continue            # lost tracking: skipped, as live does
+            arm = point_to_arm(zd, xk / vw, yk / vh)
             if arm == pending_arm:
                 pending_frames += 1
             else:

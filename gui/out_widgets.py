@@ -41,13 +41,6 @@ class SubTabHeader(QWidget):
         tabs.currentChanged.connect(self._sync)
         self._sync(tabs.currentIndex())
 
-    def set_tab_visible(self, index, visible):
-        if 0 <= index < len(self._btns):
-            self._btns[index].setVisible(visible)
-
-    def refresh_titles(self):
-        for i, b in enumerate(self._btns):
-            b.setText(self._tabs.tabText(i))
 
     def _sync(self, idx):
         for i, b in enumerate(self._btns):

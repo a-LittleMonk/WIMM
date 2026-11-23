@@ -144,8 +144,13 @@ def export_results(
                     _video_config_rows(video_config, video_size, all_units),
                     columns=["Setting", "Value"],
                 ).to_csv(base + "_video_config.csv", index=False)
-        except Exception:
-            pass
+        except OSError as e:
+            # Usually a CSV left open in Excel (Windows locks it). Say so
+            # instead of silently keeping the old, out-of-date CSV.
+            raise OSError(
+                f"The Excel file was saved, but a CSV copy could not be "
+                f"written: {e}. Close it if it is open and export again."
+            ) from e
 
 
 def _style_meta(ws):

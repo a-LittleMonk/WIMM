@@ -47,9 +47,6 @@ class StepHeader(QWidget):
         theme.notifier.changed.connect(lambda _m: self.update())
 
     # -- API ---------------------------------------------------------------
-    def set_icon(self, name):
-        self._icon = name
-        self.update()
 
     def set_title(self, title):
         self._title = title

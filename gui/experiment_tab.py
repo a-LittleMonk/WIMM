@@ -283,6 +283,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         zd = self.zone_drawer
         out = {
             "threshold":    self.spin_threshold.value(),
+            "low_contrast": bool(self.chk_low_contrast.isChecked()),
             "brightness":   self.slider_brightness.value(),
             "contrast":     self.slider_contrast.value(),
             "blur":         self.slider_blur.value(),
@@ -422,6 +423,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self.slider_sharpen.setValue(s.get("sharpen", 0))
         self.spin_clahe.setValue(s.get("clahe", 0))
         self.spin_threshold.setValue(s.get("threshold", 25))
+        self.chk_low_contrast.setChecked(bool(s.get("low_contrast", False)))
         self.spin_max_blob.setValue(s.get("max_blob", 0))
         if "proc_scale" in s:
             v = _migrate_combo_value(s["proc_scale"], _LEGACY_PROC_SCALES, 1.0)
@@ -1349,11 +1351,6 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self._play_last = target
         self.slider_scrub.setValue(target)
 
-    def _on_timeline_seek(self, frac):
-        lo, hi = self.slider_scrub.minimum(), self.slider_scrub.maximum()
-        if self.slider_scrub.isEnabled() and hi > lo:
-            self.slider_scrub.setValue(int(round(lo + frac * (hi - lo))))
-
     def _sync_redesign_reset(self):
         """Video cleared / results dropped: blank the redesign panels."""
         try:
@@ -1361,10 +1358,9 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
                 self._play_timer.stop()
                 self.btn_play.set_icon_name("play")
             for b in (self.btn_step_first, self.btn_step_prev, self.btn_play,
-                      self.btn_step_next, self.btn_step_last, self.btn_miss_card):
+                      self.btn_step_next, self.btn_step_last):
                 b.setEnabled(False)
             self.lbl_frame.setText("")
-            self.speed_timeline.set_data([], [], [], 0.0, "cm/s")
             self.measure_panel.clear()
             # Drop the previous video's issue marks / count.
             self._issues_df = None
@@ -1384,45 +1380,18 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         return None, ""
 
     def _refresh_redesign_data(self):
-        """Feed the speed timeline + session sidebar from the latest results."""
+        """Feed the session sidebar from the latest results."""
         try:
             has = bool(self.tracking_results)
             for b in (self.btn_step_first, self.btn_step_prev, self.btn_play,
                       self.btn_step_next, self.btn_step_last):
                 b.setEnabled(self.slider_scrub.isEnabled())
-            self.btn_miss_card.setEnabled(has)
             self.btn_export.setEnabled(has)
             if not has:
-                self.speed_timeline.set_data([], [], [], 0.0, "cm/s")
                 self.measure_panel.clear()
                 return
             n = len(self.tracking_results)
-            col, unit = self._speed_col()
-            speed = []
-            if col is not None:
-                vals = np.nan_to_num(self.raw_df[col].to_numpy(dtype=float))
-                b = max(1, int(np.ceil(len(vals) / 1000.0)))
-                speed = [float(vals[i:i + b].mean()) for i in range(0, len(vals), b)]
             xs = [r.get("x") is not None for r in self.tracking_results]
-            m = len(speed) or 1
-            bins = max(1, int(np.ceil(n / float(m))))
-            center = []
-            if self.raw_df is not None and "Zone" in self.raw_df.columns:
-                zc = self.raw_df["Zone"].astype(str).str.contains("center", case=False).to_numpy()
-                center = [bool(zc[i:i + bins].mean() >= 0.5) for i in range(0, len(zc), bins)]
-            periphery = []
-            if self.raw_df is not None and "Zone" in self.raw_df.columns:
-                z = self.raw_df["Zone"].astype(str).str.lower()
-                zp = (~z.str.contains("center") & ~z.isin(["", "nan", "none"])).to_numpy()
-                periphery = [bool(zp[i:i + bins].mean() >= 0.5) for i in range(0, len(zp), bins)]
-            missed = [i / float(n) for i, ok in enumerate(xs) if not ok]
-            n_miss = len(missed)
-            self.lbl_missed_count.setText(
-                f"{n_miss} missed frames ({100.0 * n_miss / n:.1f}%)" if n_miss else "No missed frames")
-            if len(missed) > 600:
-                missed = missed[::int(np.ceil(len(missed) / 600.0))]
-            thr = float(self.spin_movement_thr.value()) if hasattr(self, "spin_movement_thr") else 0.0
-            self.speed_timeline.set_data(speed, center, missed, thr, unit or "cm/s", periphery)
             self._refresh_heat()
             dur = n / float(self.fps or 30.0)
             det_rate = 100.0 * sum(1 for x in xs if x) / float(n)
@@ -1439,8 +1408,6 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             if value is None:
                 value = self.slider_scrub.value()
             lo, hi = self.slider_scrub.minimum(), self.slider_scrub.maximum()
-            frac = (value - lo) / float(hi - lo) if hi > lo else 0.0
-            self.speed_timeline.set_cursor(frac)
             self.lbl_frame.setText(f"{int(value)} / {int(hi)}")
             if not self.tracking_results or self.raw_df is None:
                 self.measure_panel.set_frame(None)
@@ -1724,7 +1691,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
 
         # ── Transport: buttons, time, frame, actions, speed timeline, scrubber
         from gui.widgets_v2 import IconButton, KeyedButton, SegTabs
-        from gui.redesign_widgets import TimelineTracks, TimeTicks
+        from gui.redesign_widgets import TimeTicks
         card = QFrame()
         card.setObjectName("TransportCard")
         cv = QVBoxLayout(card)
@@ -1797,13 +1764,6 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         row1.addWidget(fblock)
         row1.addStretch(1)
 
-        self.btn_miss_card = KeyedButton("Next miss", "N", lead="dot")
-        self.btn_miss_card.setToolTip("Jump to next frame with no detection (N)")
-        self.btn_miss_card.setEnabled(False)
-        self.btn_miss_card.clicked.connect(self._jump_next_miss)
-        self.btn_corr_card = KeyedButton("Corrections…", "⌃K", lead="edit")
-        self.btn_corr_card.setToolTip("Manual tracking corrections (Ctrl+K)")
-        self.btn_corr_card.clicked.connect(self._open_corrections_popup)
         # Tracking issues: red marks on the frame slider + this popup button.
         self.btn_issues = KeyedButton("Tracking issues", "", lead="dot")
         self.btn_issues.setToolTip("Open the tracking-issues window: every flagged "
@@ -1811,28 +1771,19 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self.btn_issues.setEnabled(False)
         self.btn_issues.clicked.connect(self._open_tracking_issues_popup)
         row1.addWidget(self.btn_issues)
-        # Next miss / Corrections live in the Missed frames and Frame
-        # corrections panels (built by the batch tab from these widgets).
+        # Next miss (N) and Corrections (Ctrl+K) are keyboard / menu only.
         self.btn_view_popup.hide()   # the View button lives in the canvas toolbar
         cv.addLayout(row1)
         cv.addSpacing(8)
-        self._transport_extras = (self.lbl_total, fblock)
         # Parts hidden one by one when the bar gets narrow (least useful
         # first), so the preview never forces the window to be wide.
         self._transport_row = row1
         self._transport_card = card
         self._transport_droppable = [fblock, self.lbl_total,
                                      self.seg_play_speed, self.btn_issues]
-        self._transport_forced = False
         self._transport_fitting = False
         card.setMinimumWidth(240)
         card.installEventFilter(self)
-
-        # Speed / Center-periphery / Missed tracks — shown as separate panels.
-        self.speed_timeline = TimelineTracks(self)
-        self.speed_timeline.seek.connect(self._on_timeline_seek)
-        self.lbl_missed_count = QLabel("")
-        theme.set_tone(self.lbl_missed_count, "faint", "font-size: 11px;")
 
         from gui.redesign_widgets import IssueSlider
         self.slider_scrub = IssueSlider()   # red marks = tracking issues
@@ -1884,10 +1835,6 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         oh.addWidget(w, 1)
         oh.addWidget(self.measure_panel)
         return outer
-    def set_transport_compact(self, on):
-        """Narrow mode: hide the time total and FRAME read-out."""
-        self._transport_forced = bool(on)
-        self._fit_transport()
 
     def eventFilter(self, obj, event):
         from PyQt5.QtCore import QEvent
@@ -1906,14 +1853,10 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             m = card.contentsMargins()
             lm = card.layout().contentsMargins()
             avail = card.width() - m.left() - m.right() - lm.left() - lm.right()
-            forced = set(map(id, self._transport_extras)) if self._transport_forced else set()
             items = self._transport_droppable
-            # Show everything allowed, then drop parts until the row fits.
+            # Show everything, then drop parts until the row fits.
             for wd in items:
-                if id(wd) not in forced:
-                    wd.setHidden(False)
-                else:
-                    wd.setHidden(True)
+                wd.setHidden(False)
             # btn_issues only shows when it has a reason to (results loaded).
             for wd in items:
                 row.invalidate()
@@ -2512,23 +2455,6 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             else:
                 btn.setVisible(False)
 
-    def _open_recent(self, btn):
-        p = btn.property("path")
-        if p:
-            self._load_video_path(p)
-
-    def _load_video(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open Video", "",
-            "Video Files (*.mp4 *.avi *.mov *.mkv *.wmv *.m4v)"
-        )
-        if not path:
-            return
-        self._load_video_path(path)
-
-    def reload_video(self):
-        if self.video_path and os.path.exists(self.video_path):
-            self._load_video_path(self.video_path)
 
     def _load_video_path(self, path):
         if not os.path.exists(path):
@@ -2538,12 +2464,18 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         if not cap.isOpened():
             QMessageBox.warning(self, "Error", "Cannot open this video file.")
             return
-        self._auto_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        from core.video import probe, warm_frame_times
+        raw_fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+        self._auto_fps, frame_count = probe(cap)
+        if abs(self._auto_fps - raw_fps) > 0.5:
+            logger.warn(f"{os.path.basename(path)}: file reports {raw_fps:g} fps; "
+                        f"using {self._auto_fps:.2f} fps measured from frame times",
+                        source="video")
+        warm_frame_times(path)          # exact scrub jumps (core.video)
         # honor manual override if set
         override = self._fps_override()
         self.fps = override if override > 0 else self._auto_fps
         self._sync_trail_len()
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         self._total_frames = frame_count
         native_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         native_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -2617,6 +2549,12 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             btn = getattr(self, name, None)
             if btn is not None:
                 btn.setEnabled(True)
+        # Define-arena buttons built by experiments.common_ui.define_row.
+        for btn in getattr(self, "_video_gated", []):
+            try:
+                btn.setEnabled(True)
+            except RuntimeError:
+                pass
         # Plugins (Y-Maze, EPM) own their own perspective state through
         # their dedicated checkboxes + saved hub/endpoints. The OF reset
         # below would clear `_H` after every video reload (including the
@@ -2687,7 +2625,8 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         # remains available behind the Extra features toggle and wins
         # over the square when enabled.
         if zd is not None and zd.arena is None:
-            if (exp_key in ("open_field", "nor")
+            _fam = getattr(getattr(self, "experiment", None), "fam", exp_key)
+            if (_fam in ("open_field", "nor", "box")
                     and not self.config.get("enable_auto_movement_arena", False)):
                 try:
                     self._apply_premade_square_arena()
@@ -2968,9 +2907,6 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         except Exception:
             pass
 
-    def auto_movement_pending(self):
-        """Public flag the batch tab reads before each track."""
-        return bool(self._arena_auto_movement)
 
     def auto_arena_padding_pct(self):
         if hasattr(self, "spin_arena_pad_pct"):
@@ -3071,13 +3007,22 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         BL = min(pts, key=lambda p: p[0] - p[1])
         return [TL, TR, BR, BL]
 
+    def _cage_shape(self):
+        """The apparatus shape this test uses (NOR: always square; box
+        tests: their own; Open Field: the Scale card choice)."""
+        exp = getattr(self, "experiment", None)
+        fam = getattr(exp, "fam", None)
+        if fam == "nor":
+            return "square"
+        if fam == "box":
+            return "square" if exp.scale[0] == "square" else "rectangle"
+        return self.config.get("cage_shape", "rectangle")
+
     def _warp_target_size(self):
-        if not self.video_w or not self.video_h:
-            return None
-        if self.config.get("cage_shape", "rectangle") == "square":
-            S = min(self.video_w, self.video_h)
-            return (S, S)
-        return (self.video_w, self.video_h)
+        from experiments.open_field.experiment import warp_target_size
+        w = float(self.spin_cage_w.value()) if hasattr(self, "spin_cage_w") else 0.0
+        h = float(self.spin_cage_h.value()) if hasattr(self, "spin_cage_h") else 0.0
+        return warp_target_size(self.video_w, self.video_h, self._cage_shape(), w, h)
 
     def _build_homography(self, arena_norm):
         if not arena_norm or not self.video_w or not self.video_h:
@@ -3230,6 +3175,15 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             dist = ((calib_pts[1][0] - calib_pts[0][0]) ** 2 +
                     (calib_pts[1][1] - calib_pts[0][1]) ** 2) ** 0.5
             warped_px_per_cm = dist / self.spin_cm.value()
+        elif px_per_cm and self.experiment is not None:
+            # Auto scale: measured on the arena as it fills the warped
+            # frame, so px/cm matches the warped positions above.
+            snap = dict(self.snapshot_settings())
+            snap["arena"] = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+            snap["cage_shape"] = self._cage_shape()
+            v = self.experiment.compute_auto_px_per_cm(snap, self._warp_target_size())
+            if v:
+                warped_px_per_cm = v
 
         return warped_results, warped_arena, warped_center, warped_px_per_cm
 
@@ -3617,6 +3571,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             "sharpen":      self.slider_sharpen.value(),
             "clahe":        self.spin_clahe.value(),
             "threshold":    self.spin_threshold.value(),
+            "low_contrast": bool(self.chk_low_contrast.isChecked()),
             "max_blob":     self.spin_max_blob.value(),
             "proc_scale":   self.combo_proc_scale.currentData(),
             "frame_skip":   int(self.spin_frame_skip.value()),
@@ -3699,6 +3654,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self.slider_sharpen.setValue(p.get("sharpen", 0))
         self.spin_clahe.setValue(p.get("clahe", 0))
         self.spin_threshold.setValue(p.get("threshold", 25))
+        self.chk_low_contrast.setChecked(bool(p.get("low_contrast", False)))
         self.spin_max_blob.setValue(p.get("max_blob", 0))
         if "proc_scale" in p:
             v = _migrate_combo_value(p["proc_scale"], _LEGACY_PROC_SCALES, 1.0)
@@ -3848,8 +3804,6 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             or getattr(self, "_arena_auto_movement", False))
         self.set_step_status("analysis", "ok" if ready else "blocked")
 
-    def _on_tracking_preview(self, frame):
-        self.zone_drawer.set_frame(frame)
 
     def _on_tracking_body_pos(self, body_xy):
         """Live tracker emits per-frame body pixel coords. Updates the cell
@@ -3909,9 +3863,6 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             )
         zd.set_cell_times(self._live_cell_times)
 
-    def _reload_first_frame(self):
-        if self._first_frame_bgr is not None:
-            self.zone_drawer.set_frame(self._first_frame_bgr)
 
     # ── Step 6 ────────────────────────────────────────────────────────────
 
@@ -3961,7 +3912,10 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         except Exception as e:
             theme.set_tone(self.lbl_export, "err", "font-size:11px;")
             from gui.notify import show_done
-            show_done(self, "Excel export failed", str(e), kind="err")
+            title = ("CSV copy not saved"
+                     if str(e).startswith("The Excel file was saved")
+                     else "Excel export failed")
+            show_done(self, title, str(e), kind="err")
 
     # ── exclusion brush ───────────────────────────────────────────────────
 
@@ -4102,10 +4056,14 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         sp = df[col].iloc[i] if col is not None else float("nan")
         sp_txt = "—" if sp != sp else f"{sp:.1f}"
         pxcm = self._get_px_per_cm()
+        # Measured from the arena's top-left corner, like the graphs.
+        arena = self.zone_drawer.get_arena_pixels()
+        ox, oy = (min(arena, key=lambda p: p[0] + p[1])
+                  if arena and not self._perspective_on else (0.0, 0.0))
         if pxcm:
-            xy = f"x {r['x'] / pxcm:.1f}  y {r['y'] / pxcm:.1f}"
+            xy = f"x {(r['x'] - ox) / pxcm:.1f}  y {(r['y'] - oy) / pxcm:.1f}"
         else:
-            xy = f"x {r['x']:.0f}  y {r['y']:.0f}"
+            xy = f"x {r['x'] - ox:.0f}  y {r['y'] - oy:.0f}"
         aid = self.edit_meta_id.text().strip() or "—"
         return [f"{aid} · {sp_txt} {unit}".strip(), xy]
 
@@ -4211,9 +4169,6 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             self._step_groups[status_id] = g
         return g
 
-    @staticmethod
-    def _status_glyph(status):
-        return {"ok": "✓", "warn": "⚠", "blocked": "✗"}.get(status, "")
 
     def _update_group_title(self, gb):
         # Title lives in the card header now — just sync its state.
@@ -4482,9 +4437,18 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self._refresh_step_extras()
         for g in getattr(self, "_cards", []):
             try:
+                # Experiment plugin may describe its own Arena / Zones card;
+                # None falls back to the shared (Open Field) summary.
+                text = None
+                pfn = getattr(getattr(self, "experiment", None),
+                              f"summary_{g._status_id}", None)
+                if pfn is not None:
+                    text = pfn(self)
                 fn = getattr(self, f"_summary_{g._status_id}", None)
-                if fn is not None:
-                    g._header.set_summary(fn())
+                if text is None and fn is not None:
+                    text = fn()
+                if text is not None:
+                    g._header.set_summary(text)
                 g._header.set_status(self._card_status(g))
             except Exception:
                 pass

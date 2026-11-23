@@ -9,6 +9,8 @@ import cv2
 import numpy as np
 from PyQt5.QtCore import QThread, pyqtSignal
 
+from core.video import skip_to
+
 
 class VideoExportThread(QThread):
     """Render an annotated copy of the loaded video. Reads frames in
@@ -65,7 +67,7 @@ class VideoExportThread(QThread):
                 self.error.emit("Cannot open the output video for writing.")
                 return
 
-            cap.set(cv2.CAP_PROP_POS_FRAMES, self.start_frame)
+            skip_to(cap, self.start_frame)   # exact start (core.video)
             total = max(1, self.end_frame - self.start_frame + 1)
             # Pull flag values once.
             view_effects = self._flag("view_effects",

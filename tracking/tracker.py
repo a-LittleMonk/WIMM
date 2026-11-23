@@ -1,3 +1,4 @@
+import math
 import time
 import threading
 import queue as _queue
@@ -5,8 +6,11 @@ from collections import deque
 import cv2
 import numpy as np
 from PyQt5.QtCore import QThread, pyqtSignal
-from tracking.preprocessor import apply_preprocessing, get_mask, get_morph_kernel
+from tracking.preprocessor import (
+    apply_preprocessing, get_mask, get_morph_kernel, build_background, match_level,
+)
 from core import logger
+from core.video import probe, skip_to
 
 
 class _FramePrefetcher:
@@ -216,11 +220,15 @@ class TrackerThread(QThread):
                  trim_start_s: float = 0.0, trim_duration_s: float = 0.0,
                  crop_rect=None, frame_skip: int = 1,
                  smooth_window: int = 3,
-                 enable_nose: bool = False):
+                 enable_nose: bool = False,
+                 low_contrast: bool = False):
         super().__init__()
         self.video_path = video_path
         self.arena = arena
-        self.threshold = threshold
+        # "White mouse on white floor": double sensitivity (+ fragment
+        # merging in _detect_points). Validated on real white-on-white video.
+        self.low_contrast = bool(low_contrast)
+        self.threshold = max(5, round(threshold / 2)) if self.low_contrast else threshold
         self.brightness = brightness
         self.contrast = contrast
         self.blur = blur
@@ -330,8 +338,9 @@ class TrackerThread(QThread):
             self.error.emit("Cannot open video file.")
             return
         try:
-            fps = self.fps_override if self.fps_override > 0 else (cap.get(cv2.CAP_PROP_FPS) or 30.0)
-            total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            # probe(): fixes impossible container fps / frame counts.
+            real_fps, total = probe(cap)
+            fps = self.fps_override if self.fps_override > 0 else real_fps
             fw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             fh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             if self.crop_rect:
@@ -396,7 +405,15 @@ class TrackerThread(QThread):
             else:
                 self._allowed_mask = None
             self._min_area = max(1, int(self.post_params.get("min_blob_area", 150) * self.proc_scale ** 2))
-            self._max_area = int(self._pw * self._ph * self.max_blob_pct / 100) if self.max_blob_pct > 0 else 0
+            if self.max_blob_pct > 0:
+                self._max_area = int(self._pw * self._ph * self.max_blob_pct / 100)
+            else:
+                # No user limit: still reject a blob larger than 20 % of the
+                # arena (a lighting change lights up the whole floor; a mouse
+                # is a few %), so it reads as a miss instead of a jump.
+                region = (cv2.countNonZero(self._allowed_mask)
+                          if self._allowed_mask is not None else self._pw * self._ph)
+                self._max_area = int(region * 0.20)
 
             if total == 0:
                 self.error.emit("Video has no frames.")
@@ -491,7 +508,7 @@ class TrackerThread(QThread):
         indices = np.linspace(self._start_frame, self._start_frame + total - 1, n_samples, dtype=int)
         # Forward-only pass: seek once, then grab() to skip frames + read() at targets.
         # Avoids per-sample seeks (each forces H.264 keyframe decode + replay).
-        cap.set(cv2.CAP_PROP_POS_FRAMES, int(indices[0]))
+        skip_to(cap, int(indices[0]))   # exact (core.video)
         current = int(indices[0])
         bg_frames = []
         for i, frame_idx in enumerate(indices):
@@ -513,10 +530,12 @@ class TrackerThread(QThread):
             self.error.emit("Could not read frames to build background model.")
             return None
 
-        raw_bg = np.median(bg_frames, axis=0).astype(np.uint8)
+        # Freezing-safe background + the floor brightness every frame is
+        # matched to (flicker / auto-exposure). See build_background.
+        raw_bg, floor_ref = build_background(bg_frames, self.threshold, self._allowed_mask)
         proc_bg = apply_preprocessing(raw_bg, self.brightness, self.contrast, self.blur, self.gamma, self.sharpen, self.clahe_clip)
 
-        cap.set(cv2.CAP_PROP_POS_FRAMES, self._start_frame)
+        skip_to(cap, self._start_frame)   # exact trim start (core.video)
         self.status_msg.emit(f"Tracking mouse… proc={self._pw}x{self._ph}")
 
         results = []
@@ -548,7 +567,8 @@ class TrackerThread(QThread):
                 t2 = t1
                 small = self._scale_frame(frame)
                 t3 = _t(); _acc["scale"] += t3 - t2
-                gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+                gray = match_level(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY),
+                                   floor_ref, self._allowed_mask)
                 t4 = _t(); _acc["gray"] += t4 - t3
                 proc_gray = apply_preprocessing(gray, self.brightness, self.contrast, self.blur, self.gamma, self.sharpen, self.clahe_clip)
                 t5 = _t(); _acc["prep"] += t5 - t4
@@ -660,7 +680,7 @@ class TrackerThread(QThread):
         self.status_msg.emit(f"{label} warming up…")
         n_warmup = min(200, total)
         indices = np.linspace(self._start_frame, self._start_frame + total - 1, n_warmup, dtype=int)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, int(indices[0]))
+        skip_to(cap, int(indices[0]))   # exact (core.video)
         current = int(indices[0])
         for i, frame_idx in enumerate(indices):
             if self._stop_flag:
@@ -682,7 +702,7 @@ class TrackerThread(QThread):
                     subtractor.apply(proc)
             self._emit_progress(int(i / n_warmup * 20))
 
-        cap.set(cv2.CAP_PROP_POS_FRAMES, self._start_frame)
+        skip_to(cap, self._start_frame)   # exact trim start (core.video)
         self.status_msg.emit(f"Tracking mouse ({label})…")
 
         smooth_body = deque(maxlen=5)
@@ -746,7 +766,7 @@ class TrackerThread(QThread):
 
     def _track_framediff(self, cap, fps, total):
         self.status_msg.emit("Frame-diff tracking…")
-        cap.set(cv2.CAP_PROP_POS_FRAMES, self._start_frame)
+        skip_to(cap, self._start_frame)   # exact trim start (core.video)
         prev = None
         diff_thr = int(self.model_params.get("diff_threshold", 25))
         use_running = bool(self.model_params.get("use_running_avg", False))
@@ -824,7 +844,7 @@ class TrackerThread(QThread):
 
     def _track_hsv(self, cap, fps, total):
         self.status_msg.emit("HSV-threshold tracking…")
-        cap.set(cv2.CAP_PROP_POS_FRAMES, self._start_frame)
+        skip_to(cap, self._start_frame)   # exact trim start (core.video)
         ch_idx = {"H": 0, "S": 1, "V": 2}.get(self.model_params.get("channel", "V"), 2)
         mode = self.model_params.get("mode", "otsu")
         manual_thr = int(self.model_params.get("manual_threshold", 80))
@@ -895,6 +915,12 @@ class TrackerThread(QThread):
             return _none
         largest = max(contours, key=cv2.contourArea)
         area = cv2.contourArea(largest)
+        if self.low_contrast:
+            # A pale mouse on a pale floor shows as pieces (eyes, tail base,
+            # edges): join those near the largest into one mouse.
+            largest, area = _merge_fragments(
+                contours, radius=0.12 * min(self._pw, self._ph),
+                min_piece=20 * self.proc_scale ** 2)
         if area < self._min_area:
             return _none
         if self._max_area > 0 and area > self._max_area:
@@ -1191,6 +1217,25 @@ class TrackerThread(QThread):
                        nose=nose, tail=tail,
                        nose_color=self._c_nose, tail_color=self._c_tail)
         self.preview.emit(vis)
+
+
+def _merge_fragments(contours, radius, min_piece):
+    """(points, area): the largest blob plus every piece of at least
+    `min_piece` px whose centre is within `radius` px of the largest
+    blob's centre, as one point set (hull / moments / bounding box work
+    on it like a single contour). Used for low-contrast mice."""
+    def centre(c):
+        m = cv2.moments(c)
+        if m["m00"] > 0:
+            return m["m10"] / m["m00"], m["m01"] / m["m00"]
+        x, y, w, h = cv2.boundingRect(c)
+        return x + w / 2.0, y + h / 2.0
+    largest = max(contours, key=cv2.contourArea)
+    lx, ly = centre(largest)
+    keep = [c for c in contours
+            if c is largest or (cv2.contourArea(c) >= min_piece
+                                and math.hypot(centre(c)[0] - lx, centre(c)[1] - ly) <= radius)]
+    return np.vstack(keep), float(sum(cv2.contourArea(c) for c in keep))
 
 
 def _median_filter_results(results, window=3, keys=("x", "y", "nose_x", "nose_y", "tail_x", "tail_y")):

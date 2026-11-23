@@ -26,26 +26,47 @@ from gui import theme
 
 
 def build_geometry_step(host):
-    grp = host._group("Step 2 — Y-Maze geometry", status_id="geometry")
-    layout = QVBoxLayout(grp)
-    layout.setSpacing(4)
+    """Arena card (define Y, redraw / clear, manual arm buttons, perspective)
+    and Zones card (arm width, neutral zone, colours, status) — same
+    structure as Open Field, built from experiments.common_ui."""
+    from experiments import common_ui as cu
 
-    # ── Mode picker (Y-template default; Manual second)
-    mode_row = QHBoxLayout()
-    mode_row.addWidget(QLabel("Mode:"))
-    host.rb_ym_template = QRadioButton("Y-template")
-    host.rb_ym_freehand = QRadioButton("Manual")
+    # ═══ Arena card ═══════════════════════════════════════════════════
+    grp, layout = cu.arena_card(host)
+
+    # Data holders for the define mode (read by snapshot / apply code).
+    host.rb_ym_template = cu.hidden(QRadioButton("Y-template", grp))
+    host.rb_ym_freehand = cu.hidden(QRadioButton("Manual", grp))
     host.rb_ym_template.setChecked(True)
     host._ym_mode_grp = QButtonGroup(grp)
     host._ym_mode_grp.addButton(host.rb_ym_template, 0)
     host._ym_mode_grp.addButton(host.rb_ym_freehand, 1)
-    for rb in (host.rb_ym_template, host.rb_ym_freehand):
-        rb.setStyleSheet("font-size:11px;")
-        mode_row.addWidget(rb)
-    mode_row.addStretch()
-    layout.addLayout(mode_row)
 
-    # ── Manual controls (4 compact buttons: A/B/C/N + clear)
+    def _redraw(key):
+        if key == "template":
+            host._ym_hub = None          # back to the default Y
+            host._ym_endpoints = None
+            host.rb_ym_template.setChecked(True)
+            _start_template(host)
+        else:
+            host.rb_ym_freehand.setChecked(True)
+            _start_arm_edit(host, "arm_a")
+
+    row, _btn, _redraw_btn, _clear_btn = cu.define_row(
+        host,
+        [("Y template", "template",
+          lambda: (host.rb_ym_template.setChecked(True), _start_template(host)),
+          "Places a standard Y; drag the hub and the three arm tips onto "
+          "your maze and set the arm width."),
+         ("Manual — draw arms", "manual",
+          lambda: host.rb_ym_freehand.setChecked(True),
+          "Draw arms A, B, C and the neutral zone yourself.")],
+        on_clear=lambda: _clear_arms(host),
+        attr="btn_ym_define", on_redraw=_redraw)
+    layout.addLayout(row)
+    host.btn_ym_clear = _clear_btn
+
+    # Manual mode: one button per zone + corners per arm.
     host._ym_freehand_widget = QWidget()
     fh = QVBoxLayout(host._ym_freehand_widget)
     fh.setContentsMargins(0, 0, 0, 0)
@@ -56,118 +77,66 @@ def build_geometry_step(host):
     host.btn_ym_arm_b = host._btn("B", width=40)
     host.btn_ym_arm_c = host._btn("C", width=40)
     host.btn_ym_arm_n = host._btn("N", width=40)
-    host.btn_ym_arm_a.setToolTip("Define Arm A — click to start drawing the polygon")
-    host.btn_ym_arm_b.setToolTip("Define Arm B — click to start drawing the polygon")
-    host.btn_ym_arm_c.setToolTip("Define Arm C — click to start drawing the polygon")
-    host.btn_ym_arm_n.setToolTip("Define Neutral zone — click to start drawing the polygon")
+    host.btn_ym_arm_a.setToolTip("Draw Arm A")
+    host.btn_ym_arm_b.setToolTip("Draw Arm B")
+    host.btn_ym_arm_c.setToolTip("Draw Arm C")
+    host.btn_ym_arm_n.setToolTip("Draw the neutral zone")
     host.btn_ym_arm_a.clicked.connect(lambda: _start_arm_edit(host, "arm_a"))
     host.btn_ym_arm_b.clicked.connect(lambda: _start_arm_edit(host, "arm_b"))
     host.btn_ym_arm_c.clicked.connect(lambda: _start_arm_edit(host, "arm_c"))
     host.btn_ym_arm_n.clicked.connect(lambda: _start_arm_edit(host, "neutral_zone"))
-    btn_row.addWidget(host.btn_ym_arm_a)
-    btn_row.addWidget(host.btn_ym_arm_b)
-    btn_row.addWidget(host.btn_ym_arm_c)
-    btn_row.addWidget(host.btn_ym_arm_n)
+    for b in (host.btn_ym_arm_a, host.btn_ym_arm_b,
+              host.btn_ym_arm_c, host.btn_ym_arm_n):
+        btn_row.addWidget(b)
     btn_row.addStretch()
-    fh.addLayout(btn_row)
-
-    corners_row = QHBoxLayout()
-    corners_row.addWidget(QLabel("Corners per arm:"))
+    from gui.widgets_v2 import form_row
+    fh.addWidget(form_row("Draw", btn_row))
     host.spin_ym_corners = QComboBox()
     host.spin_ym_corners.addItems(["4", "5", "6"])
     host.spin_ym_corners.setCurrentIndex(0)
     host.spin_ym_corners.setFixedWidth(60)
-    host.spin_ym_corners.setFixedHeight(24)
-    corners_row.addWidget(host.spin_ym_corners)
-    corners_row.addStretch()
-    fh.addLayout(corners_row)
+    fh.addWidget(form_row("Corners / arm", host.spin_ym_corners))
     layout.addWidget(host._ym_freehand_widget)
 
-    # ── Template controls
+    # Perspective — Full view only, like Open Field.
+    host._ym_persp_widget = cu.perspective_switch(
+        host, "chk_ym_perspective",
+        lambda on: _on_ym_perspective_toggled(host, on),
+        "Warp every frame so the maze appears straight-overhead with arms "
+        "at 120°. Needs the Y template to be placed first.")
+    layout.addWidget(host._ym_persp_widget)
+
+    # ═══ Zones card ═══════════════════════════════════════════════════
+    zg, zl = cu.zones_card(host)
+
     host._ym_template_widget = QWidget()
     tmpl = QVBoxLayout(host._ym_template_widget)
     tmpl.setContentsMargins(0, 0, 0, 0)
-    tmpl.setSpacing(4)
-    # Auto-detect runs the moment template mode is entered (or on video
-    # load) — no manual button needed. Hub + endpoints are draggable on
-    # the preview to fine-tune the auto-placement.
-    tmpl_row = QHBoxLayout()
-    tmpl_row.addWidget(QLabel("Arm width:"))
+    tmpl.setSpacing(7)
     host.spin_ym_arm_width = QDoubleSpinBox()
     host.spin_ym_arm_width.setRange(0.01, 0.95)
     host.spin_ym_arm_width.setDecimals(2)
     host.spin_ym_arm_width.setSingleStep(0.01)
     host.spin_ym_arm_width.setValue(0.10)
-    host.spin_ym_arm_width.setSuffix(" w")
-    host.spin_ym_arm_width.setFixedWidth(85)
-    host.spin_ym_arm_width.setFixedHeight(24)
-    host.spin_ym_arm_width.setToolTip(
-        "Arm width as a fraction of frame width. Rebuilds arms when changed."
-    )
     host.spin_ym_arm_width.valueChanged.connect(lambda _: _rebuild_template(host))
-    tmpl_row.addWidget(host.spin_ym_arm_width)
-    tmpl_row.addStretch()
-    tmpl.addLayout(tmpl_row)
-
-    # Arm length (cm) for calibration lives in Step 3 (Scale step) — see
-    # YMazeTab.__init__ where it replaces the OF cage-size widget there.
-
-    # Perspective correction — warp every frame so the maze appears as
-    # a perfect 120° Y from straight overhead. Eliminates camera tilt
-    # so px/cm is uniform across the frame.
-    persp_row = QHBoxLayout()
-    host.chk_ym_perspective = QCheckBox("Perspective correction")
-    host.chk_ym_perspective.setToolTip(
-        "Warp every frame so the maze appears straight-overhead with arms "
-        "at canonical 120° angles. Requires Define Y to be set first."
-    )
-    host.chk_ym_perspective.toggled.connect(
-        lambda on: _on_ym_perspective_toggled(host, on)
-    )
-    persp_row.addWidget(host.chk_ym_perspective)
-    persp_row.addStretch()
-    tmpl.addLayout(persp_row)
-
-    # Neutral zone size — central hub area where arms meet. Set to 0 to
-    # disable. Same units as arm width (fraction of frame width).
-    neutral_row = QHBoxLayout()
-    neutral_row.addWidget(QLabel("Neutral zone:"))
+    tmpl.addWidget(cu.pct_slider(
+        host, "Arm width", host.spin_ym_arm_width, 1, 40, scale=100,
+        tip="Arm width as % of the video width. Rebuilds the arms."))
     host.spin_ym_neutral_size = QDoubleSpinBox()
-    host.spin_ym_neutral_size.setRange(0.0, 0.50)
+    # Always > 0: arm entries are counted from the neutral hub.
+    host.spin_ym_neutral_size.setRange(0.02, 0.50)
     host.spin_ym_neutral_size.setDecimals(2)
     host.spin_ym_neutral_size.setSingleStep(0.01)
     host.spin_ym_neutral_size.setValue(0.06)
-    host.spin_ym_neutral_size.setSuffix(" r")
-    host.spin_ym_neutral_size.setSpecialValueText("Off")
-    host.spin_ym_neutral_size.setFixedWidth(85)
-    host.spin_ym_neutral_size.setFixedHeight(24)
-    host.spin_ym_neutral_size.setToolTip(
-        "Radius of the central neutral zone (fraction of frame width). "
-        "Where the three arms meet at the hub. Set to 0 to disable."
-    )
-    host.spin_ym_neutral_size.valueChanged.connect(
-        lambda _: _rebuild_template(host)
-    )
-    neutral_row.addWidget(host.spin_ym_neutral_size)
-    neutral_row.addStretch()
-    tmpl.addLayout(neutral_row)
+    host.spin_ym_neutral_size.valueChanged.connect(lambda _: _rebuild_template(host))
+    tmpl.addWidget(cu.pct_slider(
+        host, "Neutral zone", host.spin_ym_neutral_size, 2, 30, scale=100,
+        tip="Radius of the hub where the arms meet, as % of the video "
+            "width. An arm entry counts when the mouse goes from here into "
+            "an arm."))
+    zl.addWidget(host._ym_template_widget)
 
-    layout.addWidget(host._ym_template_widget)
-
-    host.rb_ym_freehand.toggled.connect(lambda on: _on_ym_mode_changed(host))
-    _on_ym_mode_changed(host)
-
-    # ── Clear
-    clear_row = QHBoxLayout()
-    host.btn_ym_clear = host._btn("Clear arms", width=90)
-    host.btn_ym_clear.clicked.connect(lambda: _clear_arms(host))
-    clear_row.addWidget(host.btn_ym_clear)
-    clear_row.addStretch()
-    layout.addLayout(clear_row)
-
-    layout.addWidget(host._sep())
-
-    # ── Zone colors (detection areas + neutral zone)
+    # Zone colours — Full view only.
     host._ym_colors = {
         "arm_a": ARM_COLORS["arm_a"],
         "arm_b": ARM_COLORS["arm_b"],
@@ -175,46 +144,27 @@ def build_geometry_step(host):
         "neutral_zone": NEUTRAL_DEFAULT_COLOR,
     }
     host._ym_color_btns = {}
-    color_label = QLabel("Zone colors:")
-    theme.set_tone(color_label, "text2", "font-size:11px;")
-    layout.addWidget(color_label)
-    color_row = QHBoxLayout()
-    color_row.setSpacing(4)
-    for key, lbl in (("arm_a", "A"), ("arm_b", "B"), ("arm_c", "C"),
-                     ("neutral_zone", "N")):
-        btn = QPushButton(lbl)
-        btn.setFixedSize(34, 24)
-        btn.setToolTip(f"Pick color for {lbl}")
-        btn.clicked.connect(lambda _=False, k=key: _pick_zone_color(host, k))
-        host._ym_color_btns[key] = btn
-        color_row.addWidget(btn)
-    color_row.addStretch()
-    layout.addLayout(color_row)
-    _refresh_color_swatches(host)
+    host._ym_zone_chips = cu.color_buttons(
+        host, lambda: host._ym_colors,
+        [("arm_a", "A"), ("arm_b", "B"), ("arm_c", "C"),
+         ("neutral_zone", "Neutral")],
+        lambda k: _pick_zone_color(host, k))
+    zl.addWidget(host._ym_zone_chips)
 
-    layout.addWidget(host._sep())
-
-    # ── Entry rule + min dwell
-    rule_row = QHBoxLayout()
-    rule_row.addWidget(QLabel("Entry rule:"))
-    host.combo_ym_rule = QComboBox()
+    # Entry rule: always body center (data holder for saved configs).
+    host.combo_ym_rule = cu.hidden(QComboBox(zg))
     host.combo_ym_rule.addItem("Body center", "body")
-    host.combo_ym_rule.setFixedHeight(24)
-    rule_row.addWidget(host.combo_ym_rule)
-    rule_row.addStretch()
-    layout.addLayout(rule_row)
 
-    # Min-dwell control moved to Step 5 — single source of truth for OF + Y-Maze.
+    host.lbl_ym_zones = cu.status_label("No arms defined")
+    zl.addWidget(host.lbl_ym_zones)
 
-    # ── Status
-    host.lbl_ym_zones = QLabel("No arms defined")
-    host.lbl_ym_zones.setWordWrap(True)
-    theme.set_tone(host.lbl_ym_zones, "faint", "font-size:11px;")
-    layout.addWidget(host.lbl_ym_zones)
+    host.rb_ym_freehand.toggled.connect(lambda on: _on_ym_mode_changed(host))
+    _on_ym_mode_changed(host)
+    # Re-opening a card shows all its children — re-apply the mode.
+    for g in (grp, zg):
+        g.toggled.connect(lambda _on: _apply_ym_mode_visibility(host))
 
-    # Seed empty arm zones into the drawer the moment it exists. The
-    # drawer is created later in _build_preview_tab, so we use a small
-    # poll via QTimer to wire up after construction completes.
+    # Seed empty arm zones once the drawer exists (built later).
     from PyQt5.QtCore import QTimer
 
     def _wire():
@@ -224,8 +174,6 @@ def build_geometry_step(host):
             return
         for name in ARM_NAMES:
             zd.add_zone(empty_arm_zone(name))
-        # Seed an empty neutral zone too so the N button (manual mode) has
-        # something to edit out of the box.
         zd.add_zone(empty_neutral_zone())
         try:
             zd.zones_changed.connect(lambda: _refresh_ym_label(host))
@@ -234,21 +182,35 @@ def build_geometry_step(host):
     QTimer.singleShot(0, _wire)
 
     attach_info_box(grp, [
-        ("Arm A", host.btn_ym_arm_a),
-        ("Arm B", host.btn_ym_arm_b),
-        ("Arm C", host.btn_ym_arm_c),
-        ("Neutral zone (N)", host.btn_ym_arm_n),
-        ("Arm width", host.spin_ym_arm_width),
-        ("Perspective correction", host.chk_ym_perspective),
-        ("Neutral zone", host.spin_ym_neutral_size),
+        ("Y template", "Places a standard Y; drag the hub and arm tips onto your maze."),
+        ("Manual", "Draw arms A, B, C and the neutral zone (N) yourself."),
+        ("Correct perspective", host.chk_ym_perspective),
+    ])
+    attach_info_box(zg, [
+        ("Arm width", "Arm width as % of the video width."),
+        ("Neutral zone", "Hub radius as % of the video width; 0 = off."),
+        ("Colors", "Click a zone to change the colour it is drawn in."),
     ])
     return grp
 
 
+def _apply_ym_mode_visibility(host):
+    fh = host.rb_ym_freehand.isChecked()
+    open_arena = host._ym_freehand_widget.parentWidget().isChecked() \
+        if hasattr(host._ym_freehand_widget.parentWidget(), "isChecked") else True
+    open_zones = host._ym_template_widget.parentWidget().isChecked() \
+        if hasattr(host._ym_template_widget.parentWidget(), "isChecked") else True
+    host._ym_freehand_widget.setVisible(fh and open_arena)
+    host._ym_template_widget.setVisible((not fh) and open_zones)
+    # Perspective needs the template (hub + tips).
+    host.chk_ym_perspective.setEnabled(not fh)
+
+
 def _on_ym_mode_changed(host):
     fh = host.rb_ym_freehand.isChecked()
-    host._ym_freehand_widget.setVisible(fh)
-    host._ym_template_widget.setVisible(not fh)
+    _apply_ym_mode_visibility(host)
+    from experiments import common_ui as cu
+    cu.set_define_mode(host, "manual" if fh else "template", "btn_ym_define")
     zd = getattr(host, "zone_drawer", None)
     if zd is None:
         return
@@ -270,25 +232,17 @@ def _start_arm_edit(host, arm_name):
 
 
 def _start_template(host):
-    """Auto-detect the Y-maze in the current preview frame and install
-    hub + 3 endpoint dots labeled A/B/C. Falls back to a default centered
-    Y if detection fails. Hub + endpoints are draggable; arms rebuild live."""
+    """Install the standard Y (hub + 3 arm-tip dots labeled A/B/C) for
+    the user to drag onto their maze. Hub + endpoints are draggable; arms
+    rebuild live. No image detection — the user places the arms."""
     zd = host.zone_drawer
     # If the user has already placed/dragged a template in this session,
     # keep their geometry — re-clicking Define Y should not wipe their
-    # adjustments. Run auto-detect only on a fresh template.
+    # adjustments.
     hub = getattr(host, "_ym_hub", None)
     endpoints = getattr(host, "_ym_endpoints", None)
     if not hub or not endpoints or len(endpoints) < 3:
-        from .auto_detect import detect_y_shape
-        frame = (getattr(host, "_preview_bg_raw", None)
-                 if getattr(host, "_preview_bg_raw", None) is not None
-                 else getattr(host, "_first_frame_bgr", None))
-        detected = detect_y_shape(frame) if frame is not None else None
-        if detected is not None:
-            hub, endpoints = detected
-        else:
-            hub, endpoints = default_y_template_geometry()
+        hub, endpoints = default_y_template_geometry()
     host._ym_hub = tuple(hub)
     host._ym_endpoints = [tuple(p) for p in endpoints[:3]]
     # Ensure we're in idle mode so the corners are immediately draggable.
@@ -431,6 +385,9 @@ def _pick_zone_color(host, key):
 def _refresh_color_swatches(host):
     """Paint each color-picker button with its current color so the user
     can see what's set without opening the dialog."""
+    chips = getattr(host, "_ym_zone_chips", None)
+    if chips is not None:
+        chips.refresh()
     btns = getattr(host, "_ym_color_btns", {})
     for key, btn in btns.items():
         c = host._ym_colors.get(key, "#FFFFFF")

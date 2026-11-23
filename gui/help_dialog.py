@@ -17,11 +17,11 @@ from core import logger
 from gui import theme
 
 # (tab title, module, class) — order of the tabs in the window.
-EXPERIMENTS = (
-    ("Open Field",    "gui.open_field_tab", "OpenFieldTab"),
-    ("Y-Maze",        "gui.y_maze_tab",     "YMazeTab"),
-    ("Novel Object",  "gui.nor_tab",        "NORTab"),
-    ("Elevated Plus", "gui.epm_tab",        "EPMTab"),
+from experiments.registry import EXPERIMENTS as _REG
+
+EXPERIMENTS = tuple(
+    (title, "gui.open_field_tab" if key == "open_field" else module, tab)
+    for key, title, module, _batch, tab in _REG
 )
 
 _cache = {}   # title -> list of (card_name, [(title, text), ...])
@@ -84,22 +84,36 @@ class HelpDialog(QDialog):
         v.setContentsMargins(12, 12, 12, 12)
         self.tabs = QTabWidget()
         v.addWidget(self.tabs)
+        # Pages are filled the first time their tab is shown — building
+        # every experiment's screen up front would take several seconds.
+        self._config = config
+        self._pages = {}
+        for title, module, cls_name in EXPERIMENTS:
+            lbl = QLabel("")
+            lbl.setTextFormat(Qt.RichText)
+            lbl.setWordWrap(True)
+            lbl.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+            lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            lbl.setContentsMargins(6, 6, 6, 6)
+            sc = QScrollArea()
+            sc.setWidgetResizable(True)
+            sc.setWidget(lbl)
+            self.tabs.addTab(sc, title)
+            self._pages[title] = (lbl, module, cls_name, False)
+        self.tabs.currentChanged.connect(self._fill_current)
+        self._fill_current()
+
+    def _fill_current(self, *_):
+        title = self.tabs.tabText(self.tabs.currentIndex())
+        lbl, module, cls_name, done = self._pages.get(title, (None, None, None, True))
+        if done or lbl is None:
+            return
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            for title, module, cls_name in EXPERIMENTS:
-                cards = _gather(title, module, cls_name, config)
-                lbl = QLabel(_page_html(title, cards))
-                lbl.setTextFormat(Qt.RichText)
-                lbl.setWordWrap(True)
-                lbl.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-                lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
-                lbl.setContentsMargins(6, 6, 6, 6)
-                sc = QScrollArea()
-                sc.setWidgetResizable(True)
-                sc.setWidget(lbl)
-                self.tabs.addTab(sc, title)
+            lbl.setText(_page_html(title, _gather(title, module, cls_name, self._config)))
         finally:
             QApplication.restoreOverrideCursor()
+        self._pages[title] = (lbl, module, cls_name, True)
 
     def show_tab(self, title):
         for i in range(self.tabs.count()):

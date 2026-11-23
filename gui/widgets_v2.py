@@ -311,13 +311,6 @@ def hline():
     return f
 
 
-def vline(h=22):
-    f = QFrame()
-    f.setObjectName("HeaderSep")
-    f.setFixedSize(1, h)
-    return f
-
-
 # ── form helpers ───────────────────────────────────────────────────────────
 def form_row(label, widget, label_w=92, tip=None, min_h=26):
     """`label | widget` row of a config card (92 px label column)."""

@@ -105,9 +105,10 @@ def compute_basic_kinematics(df: pd.DataFrame, fps, unit, movement_threshold=0.0
 
     if movement_threshold and movement_threshold > 0:
         frame_dur = 1.0 / fps
-        mobile_mask = df["speed"].fillna(0) > movement_threshold
+        # Undetected frames (speed NaN) are neither mobile nor immobile.
+        mobile_mask = df["speed"] > movement_threshold
         mobility_s   = float(mobile_mask.sum() * frame_dur)
-        immobility_s = float((~mobile_mask).sum() * frame_dur)
+        immobility_s = float((df["speed"] <= movement_threshold).sum() * frame_dur)
         out[f"Movement Threshold ({unit}/s)"] = round(movement_threshold, 3)
         out["Mobility Time (s)"]   = round(mobility_s, 2)
         out["Immobility Time (s)"] = round(immobility_s, 2)
@@ -151,7 +152,9 @@ def compute_pauses(df: pd.DataFrame, fps, unit, movement_threshold, min_dur_s):
         return {}
     fps = float(fps) if fps and fps > 0 else 30.0
     frame_dur = 1.0 / fps
-    immobile_mask = (df["speed"].fillna(0) <= movement_threshold).values
+    # Undetected frames (speed NaN) are False here, so a tracking gap
+    # ends a pause instead of being counted as one.
+    immobile_mask = (df["speed"] <= movement_threshold).values
     pause_durs = find_runs(immobile_mask, frame_dur, min_dur_s)
     return {
         f"Pause Threshold ({unit}/s)":   round(movement_threshold, 3),

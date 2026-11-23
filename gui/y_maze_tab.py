@@ -62,17 +62,20 @@ class YMazeTab(OpenFieldTab):
         if layout is None:
             return
         widget = QWidget()
-        h = QHBoxLayout(widget)
+        from PyQt5.QtWidgets import QVBoxLayout
+        from gui import theme as _theme
+        h = QVBoxLayout(widget)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(4)
-        h.addWidget(QLabel("Arm length:"))
+        _cap = QLabel("Arm length")
+        _theme.set_tone(_cap, "text2", "font-size:10.5px;")
+        h.addWidget(_cap)
         spin = QDoubleSpinBox()
         spin.setRange(0.0, 9999.0)
         spin.setDecimals(1)
         spin.setSingleStep(1.0)
         spin.setSuffix(" cm")
-        spin.setFixedWidth(95)
-        spin.setFixedHeight(24)
+
         spin.setValue(float(self.config.get("ym_arm_length_cm", 30.0)))
         spin.setToolTip(
             "Physical hub-to-tip distance of one arm in cm. Auto-"
@@ -162,7 +165,8 @@ class YMazeTab(OpenFieldTab):
         if arm != self._ym_current_arm:
             self._ym_current_arm = arm
             if arm is not None:
-                # Count entry on transition into a different zone.
+                # Count entry on transition into a different zone
+                # (core.arm_entries rule; outside every zone ends nothing).
                 if arm != self._ym_last_committed_arm:
                     self._ym_arm_entries[arm] = self._ym_arm_entries.get(arm, 0) + 1
                     self._ym_last_committed_arm = arm
@@ -186,10 +190,9 @@ class YMazeTab(OpenFieldTab):
         zd.update()
 
     def _on_preview_bg_ready(self, bg):
-        """After base sets _preview_bg_raw, auto-detect the Y when we're in
-        template mode and no hub/endpoints have been restored or placed yet.
-        Result: opening a new video in Y-Maze mode draws the Y shape on the
-        preview frame without the user clicking 'Define Y' first."""
+        """When a new video loads in template mode with no hub/endpoints
+        restored or placed yet, place the standard Y so the user can drag
+        it onto the maze without clicking 'Define Y' first."""
         super()._on_preview_bg_ready(bg)
         if bg is None:
             return
@@ -261,9 +264,8 @@ class YMazeTab(OpenFieldTab):
             rk = self.tracking_results[k]
             xk, yk = rk.get("x"), rk.get("y")
             if xk is None or yk is None:
-                arm = None
-            else:
-                arm = point_to_arm(zd, xk / vw, yk / vh)
+                continue            # lost tracking: skipped, as live does
+            arm = point_to_arm(zd, xk / vw, yk / vh)
             if arm == pending_arm:
                 pending_frames += 1
             else:

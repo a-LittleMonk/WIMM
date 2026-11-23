@@ -83,28 +83,6 @@ class _Check(QCheckBox):
             self._lbl.setEnabled(self.isEnabled())
 
 
-def wrapped_checkbox(text):
-    """Checkbox with a word-wrapped label (a plain QCheckBox clips long
-    text). Returns (checkbox, container); add the container to a layout.
-    Clicking the text toggles the checkbox."""
-    chk = _Check()
-    chk.setAccessibleName(text)
-    lbl = QLabel(text)
-    lbl.setWordWrap(True)
-    lbl.setMinimumWidth(40)
-    lbl.mouseReleaseEvent = (
-        lambda e, c=chk: c.toggle() if c.isEnabled() and e.button() == Qt.LeftButton else None
-    )
-    chk._lbl = lbl
-    box = QWidget()
-    h = QHBoxLayout(box)
-    h.setContentsMargins(0, 0, 0, 0)
-    h.setSpacing(4)
-    h.addWidget(chk, 0, Qt.AlignTop)
-    h.addWidget(lbl, 1)
-    return chk, box
-
-
 def pair(*widgets):
     """Group widgets (e.g. label + spinbox) so a FlowLayout keeps them together."""
     box = QWidget()

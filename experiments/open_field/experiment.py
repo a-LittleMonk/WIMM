@@ -8,6 +8,22 @@ from . import metrics as of_metrics
 from . import ui as of_ui
 
 
+def warp_target_size(vw, vh, cage_shape, w_cm=0.0, h_cm=0.0):
+    """Size of the straightened ("warped") arena, in px. It keeps the
+    cage's real shape so one px/cm holds in both directions: square →
+    side × side; rectangle → w_cm : h_cm, as large as fits the frame.
+    Unknown dims → the frame size (old behaviour)."""
+    if not vw or not vh:
+        return None
+    if cage_shape == "square":
+        s = min(vw, vh)
+        return (s, s)
+    if w_cm and h_cm and w_cm > 0 and h_cm > 0:
+        k = min(vw / float(w_cm), vh / float(h_cm))
+        return (max(1, int(round(w_cm * k))), max(1, int(round(h_cm * k))))
+    return (vw, vh)
+
+
 class OpenFieldExperiment(Experiment):
     name = "Open Field"
     key = "open_field"

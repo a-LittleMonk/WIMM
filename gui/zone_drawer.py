@@ -225,13 +225,6 @@ class ZoneDrawer(QLabel):
     def center(self, value):
         self.center_zone = value
 
-    @staticmethod
-    def _snap_to_rectangle(pts):
-        """Fit a rotated rectangle to the 4 user clicks. Returns 4 corners (normalized)."""
-        arr = np.array(pts, dtype=np.float32)
-        rect = cv2.minAreaRect(arr)            # ((cx, cy), (w, h), angle)
-        box = cv2.boxPoints(rect)               # 4 corners (float32)
-        return [(float(p[0]), float(p[1])) for p in box]
 
     def set_perspective_locked(self, locked: bool):
         self._perspective_locked = bool(locked)
@@ -460,14 +453,6 @@ class ZoneDrawer(QLabel):
 
     # ── Schema-driven zone API (plugin-friendly) ─────────────────────────
 
-    def set_zone_schema(self, schema_list):
-        """Replace all extra zones with the given list of zone dicts.
-        OF-native zones (arena/center/grid/calib/excl) are untouched."""
-        self._extra_zones = []
-        for z in (schema_list or []):
-            self.add_zone(z)
-        self.update()
-        self.emit_change("schema replaced")
 
     def add_zone(self, zone):
         """Add or replace a zone (matched by name). Style fields fill in
@@ -492,10 +477,6 @@ class ZoneDrawer(QLabel):
         if len(self._extra_zones) != before:
             self.update()
 
-    def clear_extra_zones(self):
-        if self._extra_zones:
-            self._extra_zones = []
-            self.update()
 
     def get_zone(self, name):
         for z in self._extra_zones:
@@ -523,11 +504,6 @@ class ZoneDrawer(QLabel):
         self.update()
         self.mode_changed.emit(self.mode)
 
-    def stop_edit(self):
-        self._editing_zone = None
-        self._poly_clicks = []
-        if self.mode == self.MODE_POLY:
-            self.set_mode(self.MODE_IDLE)
 
     # ── mouse ─────────────────────────────────────────────────────────────
 

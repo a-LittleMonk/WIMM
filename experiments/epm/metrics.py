@@ -3,76 +3,14 @@ time per category, latency to first open-arm entry, plus generic
 kinematics from core."""
 import numpy as np
 import pandas as pd
-from matplotlib.path import Path
 
+from core.arm_entries import arm_visits, point_in_polys
 from core.kinematics import (
     compute_step_distance, compute_basic_kinematics, compute_pauses,
 )
 from .zones import (
     ARM_NAMES, ARM_LABELS, DEFAULT_ARM_KINDS, aggregate_kind_membership,
 )
-
-
-def _point_in_polys(xs, ys, polys, priority_first=None):
-    """polys: dict name -> list of (x,y) px. Returns array of zone names
-    (or None) per frame. priority_first wins overlap (used so center_zone
-    outranks the arms near the hub)."""
-    out = np.full(len(xs), None, dtype=object)
-    notna = ~np.isnan(xs) & ~np.isnan(ys)
-    if not notna.any():
-        return out
-    pts = np.stack([xs, ys], axis=1)
-    keys = list(polys.keys())
-    if priority_first and priority_first in keys:
-        keys.remove(priority_first)
-        keys.insert(0, priority_first)
-    for name in keys:
-        poly_pts = polys[name]
-        if not poly_pts or len(poly_pts) < 3:
-            continue
-        path = Path(np.array(poly_pts, dtype=float))
-        inside = np.zeros(len(xs), dtype=bool)
-        inside[notna] = path.contains_points(pts[notna])
-        unset = out == None  # noqa: E711
-        out[inside & unset] = name
-    return out
-
-
-def _confirmed_seq(arm_seq, min_frames):
-    """Return a copy of arm_seq with sub-threshold runs blanked to None.
-    A frame's arm is preserved only if its containing run is >= min_frames."""
-    n = len(arm_seq)
-    out = [None] * n
-    min_frames = max(1, min_frames)
-    i = 0
-    while i < n:
-        a = arm_seq[i]
-        j = i
-        while j < n and arm_seq[j] == a:
-            j += 1
-        if a in ARM_NAMES and (j - i) >= min_frames:
-            for k in range(i, j):
-                out[k] = a
-        i = j
-    return out
-
-
-def _debounce_entries(arm_seq, min_frames):
-    """Same debounce rule as Y-Maze. Re-entering the same arm without
-    visiting another arm in between does not count as a new entry."""
-    confirmed = _confirmed_seq(arm_seq, min_frames)
-    entries = {a: 0 for a in ARM_NAMES}
-    times = {a: 0 for a in ARM_NAMES}
-    seq = []
-    last_committed = None
-    for a in confirmed:
-        if a in ARM_NAMES:
-            times[a] += 1
-            if a != last_committed:
-                entries[a] += 1
-                seq.append(a)
-                last_committed = a
-    return entries, times, seq
 
 
 def _arm_letter(arm_name):
@@ -109,23 +47,14 @@ def compute(results, settings, fps, px_per_cm):
     zone_polys = dict(arms_px)
     if center_px and len(center_px) >= 3:
         zone_polys["center_zone"] = center_px
-    zone_seq = _point_in_polys(
+    zone_seq = point_in_polys(
         xs, ys, zone_polys, priority_first="center_zone"
     )
-    arm_seq = np.array([a if a in ARM_NAMES else None for a in zone_seq],
-                       dtype=object)
-
-    confirmed_seq = _confirmed_seq(list(arm_seq), min_frames)
-    entries, times_f, seq = _debounce_entries(list(arm_seq), min_frames)
+    # Confirmed zone per frame (arm, center_zone or None) + entries.
+    confirmed_seq, entries, times_f, seq, entry_events = arm_visits(
+        zone_seq, ARM_NAMES, min_frames)
     frame_dur = 1.0 / fps if fps else 0.0
     times_s = {a: times_f[a] * frame_dur for a in ARM_NAMES}
-
-    entry_events = []  # list of (frame_idx, arm_name)
-    last_committed = None
-    for i, a in enumerate(confirmed_seq):
-        if a in ARM_NAMES and a != last_committed:
-            entry_events.append((i, a))
-            last_committed = a
 
     # Center entries + time (no debounce on center; matches live overlay).
     center_frames = int(sum(1 for z in zone_seq if z == "center_zone"))
@@ -156,8 +85,11 @@ def compute(results, settings, fps, px_per_cm):
     def _pct(a, b):
         return round(a / b * 100.0, 2) if b > 0 else 0.0
 
-    pct_time_open = _pct(time_open_total_s, duration_s_val)
-    pct_time_closed = _pct(time_closed_total_s, duration_s_val)
+    # Standard EPM index: % of arm time (open + closed), same base as
+    # % open entries. Center % stays a share of the whole session.
+    arm_time_s = time_open_total_s + time_closed_total_s
+    pct_time_open = _pct(time_open_total_s, arm_time_s)
+    pct_time_closed = _pct(time_closed_total_s, arm_time_s)
     pct_time_center = _pct(center_time_s, duration_s_val)
     pct_entries_open = _pct(entries_open_total, entries_categorized)
     pct_entries_closed = _pct(entries_closed_total, entries_categorized)
@@ -208,8 +140,8 @@ def compute(results, settings, fps, px_per_cm):
         "time_closed_total_s":  round(time_closed_total_s, 3),
         "time_center_s":        round(center_time_s, 3),
         "entries_center":       center_entries,
-        "pct_time_open":        pct_time_open,
-        "pct_time_closed":      pct_time_closed,
+        "pct_time_open_of_arms":        pct_time_open,
+        "pct_time_closed_of_arms":      pct_time_closed,
         "pct_time_center":      pct_time_center,
         "pct_entries_open":     pct_entries_open,
         "pct_entries_closed":   pct_entries_closed,
@@ -329,7 +261,7 @@ EXPORT_COLUMNS = [
     "total_entries",
     "entries_open_total", "entries_closed_total", "entries_center",
     "time_open_total_s", "time_closed_total_s", "time_center_s",
-    "pct_time_open", "pct_time_closed", "pct_time_center",
+    "pct_time_open_of_arms", "pct_time_closed_of_arms", "pct_time_center",
     "pct_entries_open", "pct_entries_closed",
     "latency_first_open_entry_s",
     "entries_arm_n", "entries_arm_s", "entries_arm_e", "entries_arm_w",
@@ -354,12 +286,12 @@ BATCH_SCHEMA = [
     ]),
     ("Open Arms", [
         "entries_open_total", "time_open_total_s",
-        "pct_time_open", "pct_entries_open",
+        "pct_time_open_of_arms", "pct_entries_open",
         "latency_first_open_entry_s",
     ]),
     ("Closed Arms", [
         "entries_closed_total", "time_closed_total_s",
-        "pct_time_closed", "pct_entries_closed",
+        "pct_time_closed_of_arms", "pct_entries_closed",
     ]),
     ("Center", [
         "entries_center", "time_center_s", "pct_time_center",

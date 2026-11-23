@@ -445,6 +445,3 @@ class RunPanel(QFrame):
         self.lbl_pct.setText(f"{pct:.1f}%" if total else "")
         self.segs.set_tokens(tokens)
 
-    def set_times(self, elapsed, eta):
-        self.lbl_elapsed.setText(elapsed or "")
-        self.lbl_eta.setText(eta or "")

@@ -33,10 +33,11 @@ from gui import theme
 
 
 def build_geometry_step(host):
-    grp = host._group("Step 2 — Elevated Plus Maze geometry",
-                       status_id="geometry")
-    layout = QVBoxLayout(grp)
-    layout.setSpacing(4)
+    """Arena card (define plus-maze, redraw / clear, manual arm buttons,
+    perspective) and Zones card (arm width, center zone, open/closed arm
+    labels, colours, status) — same structure as Open Field."""
+    from experiments import common_ui as cu
+    from gui.widgets_v2 import form_row
 
     # Per-host kind + custom-name state. Seeded from defaults; persists
     # across template rebuilds.
@@ -45,22 +46,40 @@ def build_geometry_step(host):
     if not hasattr(host, "_epm_arm_custom_names"):
         host._epm_arm_custom_names = {n: "" for n in ARM_NAMES}
 
-    # ── Mode picker
-    mode_row = QHBoxLayout()
-    mode_row.addWidget(QLabel("Mode:"))
-    host.rb_epm_template = QRadioButton("Plus-template")
-    host.rb_epm_freehand = QRadioButton("Manual")
+    # ═══ Arena card ═══════════════════════════════════════════════════
+    grp, layout = cu.arena_card(host)
+
+    host.rb_epm_template = cu.hidden(QRadioButton("Plus-template", grp))
+    host.rb_epm_freehand = cu.hidden(QRadioButton("Manual", grp))
     host.rb_epm_template.setChecked(True)
     host._epm_mode_grp = QButtonGroup(grp)
     host._epm_mode_grp.addButton(host.rb_epm_template, 0)
     host._epm_mode_grp.addButton(host.rb_epm_freehand, 1)
-    for rb in (host.rb_epm_template, host.rb_epm_freehand):
-        rb.setStyleSheet("font-size:11px;")
-        mode_row.addWidget(rb)
-    mode_row.addStretch()
-    layout.addLayout(mode_row)
 
-    # ── Manual freehand controls — 5 buttons (N/S/E/W + Center) + corners
+    def _redraw(key):
+        if key == "template":
+            host._epm_hub = None          # back to the default plus
+            host._epm_endpoints = None
+            host.rb_epm_template.setChecked(True)
+            _start_template(host)
+        else:
+            host.rb_epm_freehand.setChecked(True)
+            _start_arm_edit(host, "arm_n")
+
+    row, _b, _r, clear_btn = cu.define_row(
+        host,
+        [("Plus template", "template",
+          lambda: (host.rb_epm_template.setChecked(True), _start_template(host)),
+          "Places a plus shape; drag the center and the four arm tips "
+          "onto the maze."),
+         ("Manual — draw arms", "manual",
+          lambda: host.rb_epm_freehand.setChecked(True),
+          "Draw arms N, S, E, W and the center zone yourself.")],
+        on_clear=lambda: _clear_arms(host),
+        attr="btn_epm_define", on_redraw=_redraw)
+    layout.addLayout(row)
+    host.btn_epm_clear = clear_btn
+
     host._epm_freehand_widget = QWidget()
     fh = QVBoxLayout(host._epm_freehand_widget)
     fh.setContentsMargins(0, 0, 0, 0)
@@ -82,191 +101,115 @@ def build_geometry_step(host):
               host.btn_epm_arm_e, host.btn_epm_arm_w, host.btn_epm_center):
         btn_row.addWidget(b)
     btn_row.addStretch()
-    fh.addLayout(btn_row)
-
-    corners_row = QHBoxLayout()
-    corners_row.addWidget(QLabel("Corners per arm:"))
+    fh.addWidget(form_row("Draw", btn_row))
     host.spin_epm_corners = QComboBox()
     host.spin_epm_corners.addItems(["4", "5", "6"])
     host.spin_epm_corners.setCurrentIndex(0)
     host.spin_epm_corners.setFixedWidth(60)
-    host.spin_epm_corners.setFixedHeight(24)
-    corners_row.addWidget(host.spin_epm_corners)
-    corners_row.addStretch()
-    fh.addLayout(corners_row)
+    fh.addWidget(form_row("Corners / arm", host.spin_epm_corners))
     layout.addWidget(host._epm_freehand_widget)
 
-    # ── Template controls
+    # Perspective (+ Adjust…) — Full view only.
+    host.btn_epm_perspective_adjust = host._btn("Adjust…", width=70)
+    host.btn_epm_perspective_adjust.setFixedHeight(24)
+    host.btn_epm_perspective_adjust.setToolTip(
+        "Re-open the perspective tool to fine-tune the corners")
+    host.btn_epm_perspective_adjust.setEnabled(False)
+    host.btn_epm_perspective_adjust.clicked.connect(
+        lambda: _open_perspective_dialog(host, reapply=True))
+    host._epm_persp_widget = cu.perspective_switch(
+        host, "chk_epm_perspective",
+        lambda on: _on_epm_perspective_toggled(host, on),
+        "Open the perspective tool: drag four corners over the maze; the "
+        "grid shows how it maps to a straight-overhead view.",
+        extra=host.btn_epm_perspective_adjust)
+    layout.addWidget(host._epm_persp_widget)
+
+    # ═══ Zones card ═══════════════════════════════════════════════════
+    zg, zl = cu.zones_card(host)
+
     host._epm_template_widget = QWidget()
     tmpl = QVBoxLayout(host._epm_template_widget)
     tmpl.setContentsMargins(0, 0, 0, 0)
-    tmpl.setSpacing(4)
-    tmpl_row = QHBoxLayout()
-    tmpl_row.addWidget(QLabel("Arm width:"))
+    tmpl.setSpacing(7)
     host.spin_epm_arm_width = QDoubleSpinBox()
     host.spin_epm_arm_width.setRange(0.01, 0.95)
     host.spin_epm_arm_width.setDecimals(2)
     host.spin_epm_arm_width.setSingleStep(0.01)
     host.spin_epm_arm_width.setValue(0.10)
-    host.spin_epm_arm_width.setSuffix(" w")
-    host.spin_epm_arm_width.setFixedWidth(85)
-    host.spin_epm_arm_width.setFixedHeight(24)
-    host.spin_epm_arm_width.setToolTip(
-        "Arm width as a fraction of frame width. Rebuilds arms when changed."
-    )
     host.spin_epm_arm_width.valueChanged.connect(
         lambda _: _rebuild_template(host))
-    tmpl_row.addWidget(host.spin_epm_arm_width)
-    tmpl_row.addStretch()
-    tmpl.addLayout(tmpl_row)
-
-    # Perspective correction — opens a manual dialog (quad + gridlines).
-    persp_row = QHBoxLayout()
-    host.chk_epm_perspective = QCheckBox("Perspective correction")
-    host.chk_epm_perspective.setToolTip(
-        "Open the manual perspective tool. Drag four corners over the maze "
-        "area in the video; the cyan grid shows how it maps to a rectangle."
-    )
-    host.chk_epm_perspective.toggled.connect(
-        lambda on: _on_epm_perspective_toggled(host, on)
-    )
-    persp_row.addWidget(host.chk_epm_perspective)
-    host.btn_epm_perspective_adjust = host._btn("Adjust…", width=70)
-    host.btn_epm_perspective_adjust.setToolTip(
-        "Re-open the manual perspective tool to fine-tune the corners"
-    )
-    host.btn_epm_perspective_adjust.setEnabled(False)
-    host.btn_epm_perspective_adjust.clicked.connect(
-        lambda: _open_perspective_dialog(host, reapply=True)
-    )
-    persp_row.addWidget(host.btn_epm_perspective_adjust)
-    persp_row.addStretch()
-    tmpl.addLayout(persp_row)
-
-    # Center-zone size.
-    center_row = QHBoxLayout()
-    center_row.addWidget(QLabel("Center zone:"))
+    tmpl.addWidget(cu.pct_slider(
+        host, "Arm width", host.spin_epm_arm_width, 1, 40, scale=100,
+        tip="Arm width as % of the video width. Rebuilds the arms."))
     host.spin_epm_center_size = QDoubleSpinBox()
-    host.spin_epm_center_size.setRange(0.0, 0.50)
+    # Always > 0: arm entries are counted from the center square.
+    host.spin_epm_center_size.setRange(0.02, 0.50)
     host.spin_epm_center_size.setDecimals(2)
     host.spin_epm_center_size.setSingleStep(0.01)
     host.spin_epm_center_size.setValue(0.06)
-    host.spin_epm_center_size.setSuffix(" r")
-    host.spin_epm_center_size.setSpecialValueText("Off")
-    host.spin_epm_center_size.setFixedWidth(85)
-    host.spin_epm_center_size.setFixedHeight(24)
-    host.spin_epm_center_size.setToolTip(
-        "Radius of the central plus-shaped center zone (fraction of frame "
-        "width). Where the four arms meet at the hub. Set to 0 to disable."
-    )
     host.spin_epm_center_size.valueChanged.connect(
-        lambda _: _rebuild_template(host)
-    )
-    center_row.addWidget(host.spin_epm_center_size)
-    center_row.addStretch()
-    tmpl.addLayout(center_row)
+        lambda _: _rebuild_template(host))
+    tmpl.addWidget(cu.pct_slider(
+        host, "Center zone", host.spin_epm_center_size, 2, 30, scale=100,
+        tip="Size of the center square where the arms meet, as % of the "
+            "video width. An arm entry counts when the mouse goes from here "
+            "into an arm."))
+    zl.addWidget(host._epm_template_widget)
 
-    layout.addWidget(host._epm_template_widget)
-
-    host.rb_epm_freehand.toggled.connect(lambda on: _on_epm_mode_changed(host))
-    _on_epm_mode_changed(host)
-
-    # ── Clear arms
-    clear_row = QHBoxLayout()
-    host.btn_epm_clear = host._btn("Clear arms", width=90)
-    host.btn_epm_clear.clicked.connect(lambda: _clear_arms(host))
-    clear_row.addWidget(host.btn_epm_clear)
-    clear_row.addStretch()
-    layout.addLayout(clear_row)
-
-    layout.addWidget(host._sep())
-
-    # ── Per-arm kind dropdown + custom name field
+    # Open / closed label per arm (EPM's own zone feature).
     host._epm_kind_combos = {}
     host._epm_name_edits = {}
-    kind_label = QLabel("Arm labels:")
-    theme.set_tone(kind_label, "text2", "font-size:11px;")
-    layout.addWidget(kind_label)
     for name in ARM_NAMES:
-        row = QHBoxLayout()
-        row.setSpacing(4)
-        lbl = QLabel(ARM_LABELS[name] + ":")
-        lbl.setFixedWidth(48)
-        lbl.setStyleSheet("font-size:11px;")
-        row.addWidget(lbl)
+        r = QHBoxLayout()
+        r.setContentsMargins(0, 0, 0, 0)
+        r.setSpacing(6)
         combo = QComboBox()
         for text, key in KIND_CHOICES:
             combo.addItem(text, key)
-        # Set current to host kind.
         cur_kind = host._epm_arm_kinds.get(name, DEFAULT_ARM_KINDS[name])
         idx = combo.findData(cur_kind)
         if idx >= 0:
             combo.setCurrentIndex(idx)
-        combo.setFixedHeight(24)
-        combo.setFixedWidth(85)
+        combo.setFixedWidth(95)
         combo.currentIndexChanged.connect(
-            lambda _i, n=name: _on_kind_changed(host, n)
-        )
+            lambda _i, n=name: _on_kind_changed(host, n))
         host._epm_kind_combos[name] = combo
-        row.addWidget(combo)
+        r.addWidget(combo)
         name_edit = QLineEdit()
         name_edit.setPlaceholderText("custom name")
-        name_edit.setFixedHeight(24)
         name_edit.setText(host._epm_arm_custom_names.get(name, ""))
-        name_edit.editingFinished.connect(
-            lambda n=name: _on_name_edit(host, n)
-        )
-        # Only visible when kind == "custom".
+        name_edit.editingFinished.connect(lambda n=name: _on_name_edit(host, n))
         name_edit.setVisible(cur_kind == "custom")
         host._epm_name_edits[name] = name_edit
-        row.addWidget(name_edit, 1)
-        layout.addLayout(row)
+        r.addWidget(name_edit, 1)
+        zl.addWidget(form_row(ARM_LABELS[name], r))
 
-    layout.addWidget(host._sep())
-
-    # ── Zone color overrides (still useful for fine-tuning).
+    # Zone colours — Full view only.
     host._epm_colors = {
         n: KIND_COLORS[host._epm_arm_kinds[n]] for n in ARM_NAMES
     }
     host._epm_colors["center_zone"] = CENTER_DEFAULT_COLOR
     host._epm_color_btns = {}
-    color_label = QLabel("Zone colors:")
-    theme.set_tone(color_label, "text2", "font-size:11px;")
-    layout.addWidget(color_label)
-    color_row = QHBoxLayout()
-    color_row.setSpacing(4)
-    for key, lbl in (("arm_n", "N"), ("arm_s", "S"),
-                     ("arm_e", "E"), ("arm_w", "W"),
-                     ("center_zone", "C")):
-        btn = QPushButton(lbl)
-        btn.setFixedSize(34, 24)
-        btn.setToolTip(f"Pick color for {lbl}")
-        btn.clicked.connect(lambda _=False, k=key: _pick_zone_color(host, k))
-        host._epm_color_btns[key] = btn
-        color_row.addWidget(btn)
-    color_row.addStretch()
-    layout.addLayout(color_row)
-    _refresh_color_swatches(host)
+    host._epm_zone_chips = cu.color_buttons(
+        host, lambda: host._epm_colors,
+        [("arm_n", "N"), ("arm_s", "S"), ("arm_e", "E"), ("arm_w", "W"),
+         ("center_zone", "Center")],
+        lambda k: _pick_zone_color(host, k))
+    zl.addWidget(host._epm_zone_chips)
 
-    layout.addWidget(host._sep())
-
-    # ── Entry rule (min-dwell lives in Step 5 like Y-Maze).
-    rule_row = QHBoxLayout()
-    rule_row.addWidget(QLabel("Entry rule:"))
-    host.combo_epm_rule = QComboBox()
+    # Entry rule: always body center (data holder for saved configs).
+    host.combo_epm_rule = cu.hidden(QComboBox(zg))
     host.combo_epm_rule.addItem("Body center", "body")
-    host.combo_epm_rule.setFixedHeight(24)
-    rule_row.addWidget(host.combo_epm_rule)
-    rule_row.addStretch()
-    layout.addLayout(rule_row)
 
-    # ── Status label
-    host.lbl_epm_zones = QLabel("No arms defined")
-    host.lbl_epm_zones.setWordWrap(True)
-    theme.set_tone(host.lbl_epm_zones, "faint", "font-size:11px;")
-    layout.addWidget(host.lbl_epm_zones)
+    host.lbl_epm_zones = cu.status_label("No arms defined")
+    zl.addWidget(host.lbl_epm_zones)
 
-    # Seed empty zones once zone_drawer exists.
+    host.rb_epm_freehand.toggled.connect(lambda on: _on_epm_mode_changed(host))
+    _on_epm_mode_changed(host)
+    for g in (grp, zg):
+        g.toggled.connect(lambda _on: _apply_epm_mode_visibility(host))
+
     from PyQt5.QtCore import QTimer
 
     def _wire():
@@ -284,18 +227,37 @@ def build_geometry_step(host):
     QTimer.singleShot(0, _wire)
 
     attach_info_box(grp, [
-        ("Arm width", host.spin_epm_arm_width),
-        ("Perspective correction", host.chk_epm_perspective),
+        ("Plus template", "Drag the center and the four arm tips onto the maze."),
+        ("Manual", "Draw arms N, S, E, W and the center zone yourself."),
+        ("Correct perspective", host.chk_epm_perspective),
         ("Adjust…", host.btn_epm_perspective_adjust),
-        ("Center zone", host.spin_epm_center_size),
+    ])
+    attach_info_box(zg, [
+        ("Arm width", "Arm width as % of the video width."),
+        ("Center zone", "Center size as % of the video width; 0 = off."),
+        ("Arm labels", "Mark each arm Open or Closed (or a custom name)."),
+        ("Colors", "Click a zone to change the colour it is drawn in."),
     ])
     return grp
 
 
+def _apply_epm_mode_visibility(host):
+    fh = host.rb_epm_freehand.isChecked()
+    a = host._epm_freehand_widget.parentWidget()
+    z = host._epm_template_widget.parentWidget()
+    open_a = a.isChecked() if hasattr(a, "isChecked") else True
+    open_z = z.isChecked() if hasattr(z, "isChecked") else True
+    host._epm_freehand_widget.setVisible(fh and open_a)
+    host._epm_template_widget.setVisible((not fh) and open_z)
+    for n, edit in getattr(host, "_epm_name_edits", {}).items():
+        edit.setVisible(open_z and host._epm_arm_kinds.get(n) == "custom")
+
+
 def _on_epm_mode_changed(host):
     fh = host.rb_epm_freehand.isChecked()
-    host._epm_freehand_widget.setVisible(fh)
-    host._epm_template_widget.setVisible(not fh)
+    _apply_epm_mode_visibility(host)
+    from experiments import common_ui as cu
+    cu.set_define_mode(host, "manual" if fh else "template", "btn_epm_define")
     zd = getattr(host, "zone_drawer", None)
     if zd is None:
         return
@@ -464,6 +426,9 @@ def _pick_zone_color(host, key):
 
 
 def _refresh_color_swatches(host):
+    chips = getattr(host, "_epm_zone_chips", None)
+    if chips is not None:
+        chips.refresh()
     btns = getattr(host, "_epm_color_btns", {})
     for key, btn in btns.items():
         c = host._epm_colors.get(key, "#FFFFFF")

@@ -701,9 +701,6 @@ class IssuesMixin:
         self._issues_state_lbl.setText(((f"  ·  {note}" if note else "") + state + info).lstrip(" ·"))
         self._refresh_corrections_buttons_issues()
 
-    def _render_issue_video_frame(self, frame_no):
-        """Back-compat: the view now always mirrors the current frame."""
-        self._refresh_issue_view()
 
     def _on_issue_row_selected(self):
         """Single click on a row = ring on mini map + seek the video (the
@@ -893,41 +890,6 @@ class IssuesMixin:
         return sorted(int(f) for f in df.loc[df["Status"] == "active", "Frame"]
                       if 0 <= int(f) < n)
 
-    def _interpolate_frames(self, idxs):
-        """Replace the point of each frame in `idxs` with a straight-line
-        estimate from the nearest good frames before / after it (frames
-        being fixed and missed frames are skipped as anchors). The
-        tracker's own point is kept so "Undo fix here" / "Clear all fixes"
-        can bring it back. Returns how many frames were filled."""
-        res = self.tracking_results
-        n = len(res)
-        todo = set(int(i) for i in idxs if 0 <= int(i) < n)
-
-        def good(j):
-            return j not in todo and res[j].get("x") is not None
-
-        filled = 0
-        for i in sorted(todo):
-            a = next((j for j in range(i - 1, -1, -1) if good(j)), None)
-            b = next((j for j in range(i + 1, n) if good(j)), None)
-            if a is None and b is None:
-                continue
-            if a is None:
-                x, y = res[b]["x"], res[b]["y"]
-            elif b is None:
-                x, y = res[a]["x"], res[a]["y"]
-            else:
-                t = (i - a) / float(b - a)
-                x = res[a]["x"] + t * (res[b]["x"] - res[a]["x"])
-                y = res[a]["y"] + t * (res[b]["y"] - res[a]["y"])
-            for r in self._result_rows(i):
-                if not r.get("corrected") and not r.get("interpolated"):
-                    r["orig_x"], r["orig_y"] = r.get("x"), r.get("y")
-                r.pop("corrected", None)
-                r["x"], r["y"] = float(x), float(y)
-                r["interpolated"] = True
-            filled += 1
-        return filled
 
     def _recalc_after_autofix(self):
         """Recalculate numbers, graphs and the issue list right away."""

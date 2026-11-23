@@ -926,10 +926,9 @@ QToolButton#InfoBtn {{
 QToolButton#InfoBtn:hover {{ background: {ACCENT_BG}; border-color: {ACCENT}; color: {TEXT}; }}
 QToolButton#InfoBtn:pressed {{ background: {ACCENT_LINE}; }}
 
-/* Panels (gui/panels.py): header = drag handle on top of the pane body */
-QMainWindow#PanelHost {{ background: transparent; }}
-QMainWindow#PanelHost::separator {{ background: transparent; width: 10px; height: 10px; }}
-QMainWindow#PanelHost::separator:hover {{ background: {G_ACC_BG}; }}
+/* Main screen panes (Queue | Configuration | Preview): header on top of the pane body */
+QSplitter#MainSplit::handle {{ background: transparent; }}
+QSplitter#MainSplit::handle:hover {{ background: {G_ACC_BG}; }}
 QWidget#PaneHeader[panel="true"] {{
     background: {G_PANEL}; border: 1px solid {G_RIM}; border-top-color: {G_HI};
     border-bottom: 1px solid {G_LINE};
@@ -941,10 +940,6 @@ QWidget#PanelBody {{
 }}
 QWidget#Pane[panel="true"], QScrollArea#Measurements[panel="true"] {{
     background: transparent; border: 0; border-radius: 0;
-}}
-QFrame#PanelDivider {{ background: {G_LINE}; border: 0; margin: 0 2px; }}
-QWidget#PaneHeader[floating="true"], QWidget#PanelBody[floating="true"] {{
-    background: {POPUP}; border-radius: 0;
 }}
 
 /* Video canvas toolbar + legend (gui/canvas_chrome.py) */

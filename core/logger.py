@@ -57,12 +57,6 @@ def subscribe(cb: Callable[[Tuple[float, str, str, str]], None]) -> None:
             _subscribers.append(cb)
 
 
-def unsubscribe(cb: Callable[[Tuple[float, str, str, str]], None]) -> None:
-    with _lock:
-        if cb in _subscribers:
-            _subscribers.remove(cb)
-
-
 def format_entry(entry: Tuple[float, str, str, str]) -> str:
     ts, level, source, msg = entry
     t = time.strftime("%H:%M:%S", time.localtime(ts))
