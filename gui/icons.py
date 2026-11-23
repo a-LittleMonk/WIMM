@@ -1,4 +1,5 @@
-"""Icon set from the Mice Tracker redesign (16×16 line icons).
+"""Icon set from the Mice Tracker redesign (16×16 line icons, plus 24×24
+launcher arena icons).
 
 `pixmap(name, size, color)` renders an inline SVG with QtSvg, HiDPI aware and
 cached.  `icon(name, size, color)` wraps it in a QIcon.  Colours come from
@@ -78,20 +79,51 @@ _ICONS = {
     "popout":   ('<path d="M9 2.5h4.5V7M13.5 2.5L8 8M11.5 9.5v4h-9v-9h4"/>', "stroke", 1.4),
     "logo":     ('<rect x="3.5" y="3.5" width="9" height="9" rx="1.2"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/>',
                  "stroke", 1.5),
+    "search":   ('<circle cx="7" cy="7" r="4.5"/><path d="M13.5 13.5l-3.3-3.3"/>', "stroke", 1.5),
+    # Launcher arena icons — top-down schematics of each apparatus, drawn on
+    # a 24-unit grid (4th tuple item = viewBox size).
+    "t_open_field": ('<rect x="3.5" y="3.5" width="17" height="17" rx="2"/>'
+                     '<rect x="8.5" y="8.5" width="7" height="7" rx="1" stroke-dasharray="2 2"/>', "stroke", 1.6, 24),
+    "t_y_maze":     ('<path d="M12 13.5V21M12 13.5 4 5M12 13.5 20 5"/>', "stroke", 1.6, 24),
+    "t_novel_object": ('<rect x="3.5" y="3.5" width="17" height="17" rx="2"/><circle cx="8.5" cy="8.5" r="2"/>'
+                       '<path d="M15.5 13.5l2.5 4.5h-5z"/>', "stroke", 1.6, 24),
+    "t_elevated_plus": ('<path d="M9.5 3.5h5v6h6v5h-6v6h-5v-6h-6v-5h6z"/>', "stroke", 1.6, 24),
+    "t_object_location": ('<rect x="3.5" y="3.5" width="17" height="17" rx="2"/><circle cx="8" cy="8" r="1.8"/>'
+                          '<circle cx="16" cy="16" r="1.8" stroke-dasharray="1.5 1.5"/>'
+                          '<path d="M10 10l3.5 3.5M13.5 10.5v3h-3"/>', "stroke", 1.6, 24),
+    "t_three_chamber": ('<rect x="2.5" y="6" width="19" height="12" rx="1.5"/>'
+                        '<path d="M9 6v4M9 14v4M15 6v4M15 14v4"/>', "stroke", 1.6, 24),
+    "t_place_pref": ('<rect x="2.5" y="6" width="19" height="12" rx="1.5"/>'
+                     '<path d="M12 6v4.5M12 13.5V18M5.5 9.5l3 3M5.5 13l2 2M15.5 10h3M15.5 14h3"/>', "stroke", 1.6, 24),
+    "t_light_dark": ('<rect x="2.5" y="6" width="19" height="12" rx="1.5"/>'
+                     '<rect x="13" y="6" width="8.5" height="12" fill="currentColor" fill-opacity=".35" stroke="none"/>'
+                     '<path d="M13 6v12"/><circle cx="7.5" cy="12" r="1.8"/>', "stroke", 1.6, 24),
+    "t_zero_maze":  ('<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="5"/>'
+                     '<path d="M12 3.5V7M12 17v3.5"/>', "stroke", 1.6, 24),
+    "t_t_maze":     ('<path d="M3 6h18M12 6v14"/>', "stroke", 1.6, 24),
+    "t_radial_maze": ('<circle cx="12" cy="12" r="2.6"/><path d="M12 3v6.4M12 14.6V21M3 12h6.4M14.6 12H21'
+                      'M5.6 5.6l4.6 4.6M13.8 13.8l4.6 4.6M18.4 5.6l-4.6 4.6M10.2 13.8l-4.6 4.6"/>', "stroke", 1.6, 24),
+    "t_water_maze": ('<circle cx="12" cy="12" r="8.5"/><rect x="13.5" y="7" width="3.5" height="3.5" rx=".6"/>'
+                     '<path d="M6.5 14c1-.8 2-.8 3 0s2 .8 3 0 2-.8 3 0"/>', "stroke", 1.6, 24),
+    "t_custom":     ('<path d="M5 18.5 6.5 6 14 8.5 19 5.5 18 18.5z"/><circle cx="12" cy="13" r="1.5"/>',
+                     "stroke", 1.6, 24),
+    "t_new":        ('<path d="M5 18.5 6.5 6 14 8.5 19 5.5 18 18.5z" stroke-dasharray="2.4 2.4"/>'
+                     '<path d="M12 9v7M8.5 12.5h7"/>', "stroke", 1.8, 24),
 }
 
 _cache = {}
 
 
 def _svg(name, size, color):
-    inner, kind, sw = _ICONS[name]
+    inner, kind, sw, *rest = _ICONS[name]
+    vb = rest[0] if rest else 16
     if kind == "fill":
         attrs = f'fill="{color}" stroke="none"'
     else:
         attrs = (f'fill="none" stroke="{color}" stroke-width="{sw}" '
                  f'stroke-linecap="round" stroke-linejoin="round"')
     inner = inner.replace("currentColor", color)
-    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" '
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {vb} {vb}" '
             f'width="{size}" height="{size}" {attrs}>{inner}</svg>')
 
 
