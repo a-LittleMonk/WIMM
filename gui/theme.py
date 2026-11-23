@@ -984,79 +984,6 @@ QToolTip {{ background: {POPUP}; color: {TEXT}; border: 1px solid {POPUP_EDGE}; 
 """
 
 
-# ── Instrument control kit ────────────────────────────────────────────────
-# Scientific-style buttons, fields, chips and segmented controls (custom
-# widgets live in gui.kit). Uses the *opaque* tokens so controls read as
-# solid instruments on the glass panes. KIT_SCOPE limits the kit to widgets
-# under that selector — "" applies it app-wide.
-KIT_SCOPE = "QWidget#KitSheet "
-
-
-def _kit_qss(scope, mono):
-    rules = f"""
-@QPushButton {{
-    background: {SURFACE}; color: {TEXT}; border: 1px solid {BORDER_2}; border-radius: 4px;
-    padding: 0 12px; min-height: 26px; font-size: 12px; font-weight: 500;
-}}
-@QPushButton:hover {{ background: {HOVER}; border-color: {FAINT}; }}
-@QPushButton:focus {{ border-color: {ACCENT}; }}
-@QPushButton:pressed {{ background: {INPUT}; padding-top: 1px; }}
-@QPushButton:disabled {{ background: transparent; color: {DISABLED}; border: 1px dashed {BORDER_2}; }}
-@QPushButton[primary="true"] {{
-    background: {ACCENT}; border: 1px solid {ACCENT}; color: {ON_ACCENT}; font-weight: 600;
-}}
-@QPushButton[primary="true"]:hover {{ background: {ACCENT_HI}; border-color: {ACCENT_HI}; }}
-@QPushButton[primary="true"]:pressed {{ background: {ACCENT}; padding-top: 1px; }}
-@QPushButton[primary="true"]:disabled {{ background: transparent; border: 1px dashed {ACCENT_DIS}; color: {DISABLED}; }}
-@QPushButton[ghost="true"] {{ background: transparent; border-color: transparent; color: {TEXT_2}; }}
-@QPushButton[ghost="true"]:hover {{ background: {HOVER}; color: {TEXT}; }}
-@QPushButton[danger="true"] {{ background: transparent; border-color: {ERR_LINE}; color: {ERR}; }}
-@QPushButton[danger="true"]:hover {{ background: {ERR_BG}; border-color: {ERR}; }}
-
-@QLineEdit, @QComboBox, @QSpinBox, @QDoubleSpinBox {{
-    background: {INPUT}; color: {TEXT}; border: 1px solid {BORDER_2}; border-radius: 4px;
-    padding: 0 8px; min-height: 26px; selection-background-color: {ACCENT}; selection-color: {ON_ACCENT};
-}}
-@QLineEdit:hover, @QComboBox:hover, @QSpinBox:hover, @QDoubleSpinBox:hover {{ border-color: {FAINT}; }}
-@QLineEdit:focus, @QComboBox:focus, @QSpinBox:focus, @QDoubleSpinBox:focus {{ border-color: {ACCENT}; }}
-@QLineEdit[invalid="true"] {{ border-color: {ERR}; background: {ERR_BG}; }}
-@QComboBox::drop-down {{ width: 24px; border: 0; border-left: 1px solid {BORDER}; }}
-@QFrame#MeasureField {{ background: {INPUT}; border: 1px solid {BORDER_2}; border-radius: 4px; }}
-@QFrame#MeasureField:hover {{ border-color: {FAINT}; }}
-@QFrame#MeasureField[focused="true"] {{ border-color: {ACCENT}; }}
-@QFrame#MeasureField[invalid="true"] {{ border-color: {ERR}; background: {ERR_BG}; }}
-@QDoubleSpinBox#MeasureSpin {{
-    background: transparent; border: 0; padding: 0 4px; min-height: 0; font-family: "{mono}";
-}}
-@QToolButton#MeasureStep {{
-    background: transparent; border: 0; border-radius: 3px; color: {TEXT_2}; font-size: 14px; padding: 0;
-}}
-@QToolButton#MeasureStep:hover {{ background: {HOVER}; color: {TEXT}; }}
-@QToolButton#MeasureStep:pressed {{ background: {ACCENT_BG}; color: {ACCENT}; }}
-
-@QCheckBox[chip="true"] {{
-    spacing: 0; padding: 0 8px; height: 22px; border-radius: 3px; font-family: "{mono}"; font-size: 11px;
-    background: {INPUT}; color: {TEXT_2}; border: 1px solid {BORDER_2};
-}}
-@QCheckBox[chip="true"]:checked {{ background: {ACCENT_BG}; color: {ACCENT}; border: 1px solid {ACCENT_LINE}; }}
-@QCheckBox[chip="true"]::indicator {{ width: 0; height: 0; }}
-
-@QFrame#Segmented {{ background: {INPUT}; border: 1px solid {BORDER_2}; border-radius: 4px; }}
-@QFrame#Segmented QPushButton {{
-    background: transparent; border: 0; border-radius: 0;
-    color: {TEXT_2}; font-size: 11.5px; font-weight: 500; min-height: 0; padding: 0 12px;
-}}
-@QFrame#Segmented QPushButton:hover {{ background: {HOVER}; color: {TEXT}; }}
-@QFrame#Segmented QPushButton:checked {{ background: {ACCENT_BG}; color: {ACCENT}; }}
-
-@QLabel[role="kit-section"] {{ font-size: 13px; font-weight: 600; color: {TEXT}; background: transparent; }}
-@QLabel[role="kit-caption"] {{ font-size: 11px; color: {FAINT}; background: transparent; }}
-@QLabel[role="kit-label"] {{ font-size: 12px; color: {TEXT_2}; background: transparent; }}
-@QLabel[role="kit-error"] {{ font-size: 11px; color: {ERR}; background: transparent; }}
-"""
-    return rules.replace("@", scope)
-
-
 _applied_fonts = {}
 
 
@@ -1093,7 +1020,7 @@ def apply_theme(app, new_mode=None):
     font.setPixelSize(12)
     app.setFont(font)
     app.setPalette(_palette())
-    sheet = _qss(sans, mono, _assets()) + _kit_qss(KIT_SCOPE, mono)
+    sheet = _qss(sans, mono, _assets())
     # Repaint once at the end instead of widget-by-widget while restyling.
     windows = [w for w in app.topLevelWidgets() if w.updatesEnabled()]
     for w in windows:
