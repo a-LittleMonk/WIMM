@@ -6,7 +6,7 @@ render time and the icon-bearing widgets re-render on `theme.notifier`.
 from PyQt5.QtCore import QRectF, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QFontMetricsF, QIcon, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (
-    QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
+    QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QSizePolicy, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -243,6 +243,55 @@ class KeyHint(QLabel):
         super().__init__(text, parent)
         self.setProperty("role", "keyhint")
         self.setAlignment(Qt.AlignCenter)
+
+
+class ValueEdit(QLineEdit):
+    """The number beside a slider: shows `fmt(slider value)`, and you can
+    click it and type a value (Enter or clicking away applies, Esc undoes).
+    `to_slider` turns the typed number into the slider's own units
+    (e.g. 1.2 -> 120 for a ×-scaled slider); out-of-range values clamp."""
+
+    def __init__(self, slider, fmt, to_slider=lambda n: n, role="slidervalue",
+                 parent=None):
+        super().__init__(parent)
+        self._slider, self._fmt, self._to = slider, fmt, to_slider
+        self.setProperty("role", role)
+        self.setFrame(False)
+        self.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.setToolTip("Click and type a value, then press Enter")
+        slider.valueChanged.connect(self.show_value)
+        self.editingFinished.connect(self._apply)
+        self.show_value(slider.value())
+
+    def show_value(self, v):
+        if not self.hasFocus():
+            self.setText(self._fmt(v))
+
+    def _apply(self):
+        import re
+        text = self.text().strip().lower().replace(",", ".")
+        m = re.search(r"[-+]?\d*\.?\d+", text)
+        s = self._slider
+        if m:
+            v = int(round(self._to(float(m.group()))))
+            s.setValue(max(s.minimum(), min(s.maximum(), v)))
+        elif text.startswith("off"):
+            s.setValue(s.minimum())
+        self.setText(self._fmt(s.value()))
+        self.clearFocus()
+
+    def focusInEvent(self, e):
+        super().focusInEvent(e)
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(0, self.selectAll)     # typing replaces the number
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key_Escape:
+            # Restore first: leaving the box applies whatever text it holds.
+            self.setText(self._fmt(self._slider.value()))
+            self.clearFocus()
+            return
+        super().keyPressEvent(e)
 
 
 class CountPill(QLabel):

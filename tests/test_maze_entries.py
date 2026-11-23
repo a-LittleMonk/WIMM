@@ -110,3 +110,18 @@ def test_lost_tracking_does_not_split_an_arm_visit():
         r["x"] = r["y"] = None
     m, _, _ = YM.compute(rows, YM_SET, FPS, 5)
     assert m["entry_sequence"] == "AB"
+
+
+def test_nor_arena_time_uses_the_pixel_arena():
+    """Tab and batch pass the arena in pixels; NOR must not rescale it
+    (it did: arena entries / time were meaningless)."""
+    from experiments.nor.experiment import NORExperiment
+    res = [{"frame": i, "timestamp": i / 30, "x": 100 + i % 50, "y": 100.0,
+            "nose_x": None, "nose_y": None} for i in range(300)]
+    res += [{"frame": 300 + i, "timestamp": (300 + i) / 30, "x": 500.0, "y": 500.0,
+             "nose_x": None, "nose_y": None} for i in range(60)]          # 2 s outside
+    s = {"arena": [(50, 50), (300, 50), (300, 300), (50, 300)], "video_w": 640, "video_h": 640,
+         "objects_norm": {}, "min_dwell_s": 0.2}
+    m, _, _ = NORExperiment().compute_metrics(res, s, 30.0, 10.0)
+    assert m["arena_entries"] == 1
+    assert abs(m["arena_total_time_s"] - 10.0) < 0.05

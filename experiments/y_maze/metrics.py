@@ -5,7 +5,7 @@ import pandas as pd
 
 from core.arm_entries import arm_visits, point_in_polys
 from core.kinematics import (
-    compute_step_distance, compute_basic_kinematics, compute_pauses,
+    compute_step_distance, compute_basic_kinematics, compute_pauses, time_at,
 )
 from .zones import ARM_NAMES, ARM_LABELS
 
@@ -112,7 +112,7 @@ def compute(results, settings, fps, px_per_cm):
     latency_s = None
     for i, a in enumerate(confirmed_seq):
         if a in ARM_NAMES:
-            latency_s = i * frame_dur + trim_start_s
+            latency_s = time_at(df, i, fps) + trim_start_s
             break
 
     # compute_basic_kinematics / compute_pauses return human-readable

@@ -193,7 +193,6 @@ class AppearanceDialog(QDialog):
             self._base_preset[m] = name if name in theme.AURORA_PRESETS[m] else None
         self._mode = theme.mode()
         self._loading = False
-        self._orig_fonts = dict(theme.FONTS)
         # Restyling the whole app takes ~0.2 s — do it once edits pause.
         self._restyle = QTimer(self)
         self._restyle.setSingleShot(True)
@@ -209,7 +208,6 @@ class AppearanceDialog(QDialog):
         root.setContentsMargins(12, 14, 12, 8)
         root.setSpacing(12)
         self.tabs.addTab(colours, "Colours")
-        self.tabs.addTab(self._build_fonts_tab(), "Fonts")
 
         top = QHBoxLayout()
         top.addWidget(QLabel("Edit palette for"))
@@ -296,113 +294,6 @@ class AppearanceDialog(QDialog):
         outer.addLayout(btns)
 
         self._load_mode()
-
-    # ── fonts ────────────────────────────────────────────────────────────
-    _FONT_ROWS = (
-        ("ui", "Interface", "Buttons, labels, menus and body text."),
-        ("data", "Numbers & data", "Values, units, times, file names, tables."),
-        ("label", "Section labels", "Small headers such as CURRENT FRAME."),
-    )
-
-    def _build_fonts_tab(self):
-        w = QWidget()
-        v = QVBoxLayout(w)
-        v.setContentsMargins(12, 14, 12, 8)
-        v.setSpacing(12)
-        form = QFormLayout()
-        form.setVerticalSpacing(4)
-        self._font_combos = {}
-        for role, title, note in self._FONT_ROWS:
-            cmb = FontPicker()
-            self._fill_font_combo(cmb, role)
-            cmb.currentIndexChanged.connect(lambda _i, r=role: self._on_font(r))
-            self._font_combos[role] = cmb
-            hint = QLabel(note)
-            theme.set_tone(hint, "faint", "font-size: 11px;")
-            col = QVBoxLayout()
-            col.setSpacing(2)
-            col.addWidget(cmb)
-            col.addWidget(hint)
-            form.addRow(title, col)
-        v.addLayout(form)
-
-        self.font_sample = QWidget()
-        self.font_sample.setObjectName("FontSample")
-        sv = QVBoxLayout(self.font_sample)
-        sv.setContentsMargins(14, 12, 14, 12)
-        sv.setSpacing(6)
-        self.smp_label = QLabel("CURRENT FRAME")
-        self.smp_ui = QLabel("Arena detected. Run tracking to measure time in the center zone.")
-        self.smp_ui.setWordWrap(True)
-        self.smp_data = QLabel("12.50 cm    00:03:41.2    n = 24    0.83 cm/s")
-        for lb in (self.smp_label, self.smp_ui, self.smp_data):
-            sv.addWidget(lb)
-        self.font_sample.setStyleSheet(
-            "QWidget#FontSample { border: 1px solid rgba(128,128,128,90); border-radius: 8px; }")
-        v.addWidget(self.font_sample)
-
-        row = QHBoxLayout()
-        b = QPushButton("Reset fonts")
-        b.clicked.connect(self._on_fonts_reset)
-        row.addWidget(b)
-        row.addStretch(1)
-        v.addStretch(1)
-        v.addLayout(row)
-        self._update_font_sample()
-        return w
-
-    def _fill_font_combo(self, cmb, role):
-        installed = theme.installed_families()
-        auto = {"ui": theme._first_available(theme.SANS_STACK),
-                "data": theme._first_available(theme.MONO_STACK),
-                "label": "same as Numbers & data"}[role]
-        cmb.blockSignals(True)
-        cmb.clear()
-        cmb.addItem(f"Automatic ({auto})", None)
-        if role == "label":
-            suggested = theme.FONT_CHOICES["ui"] + theme.FONT_CHOICES["data"]
-        else:
-            suggested = theme.FONT_CHOICES[role]
-        shown = [f for f in dict.fromkeys(suggested) if f in installed]
-        for fam in shown:
-            cmb.addItem(fam, fam)
-            f = QFont(fam)
-            f.setPixelSize(13)
-            cmb.setItemData(cmb.count() - 1, f, Qt.FontRole)
-        cmb.insertSeparator(cmb.count())
-        for fam in sorted(installed - set(shown), key=str.lower):
-            if not fam.startswith("@"):  # skip vertical CJK aliases
-                cmb.addItem(fam, fam)
-        cur = theme.FONTS.get(role)
-        idx = cmb.findData(cur) if cur else 0
-        cmb.setCurrentIndex(max(0, idx))
-        cmb.blockSignals(False)
-
-    def _on_font(self, role):
-        theme.FONTS[role] = self._font_combos[role].currentData()
-        self._update_font_sample()
-        self._restyle.start()
-
-    def _on_fonts_reset(self):
-        theme.set_fonts({})
-        for role, cmb in self._font_combos.items():
-            cmb.blockSignals(True)
-            cmb.setCurrentIndex(0)
-            cmb.blockSignals(False)
-        self._update_font_sample()
-        self._restyle.start()
-
-    def _update_font_sample(self):
-        def font(fam, px, weight=QFont.Normal, spacing=0.0):
-            f = QFont(fam)
-            f.setPixelSize(px)
-            f.setWeight(weight)
-            if spacing:
-                f.setLetterSpacing(QFont.AbsoluteSpacing, spacing)
-            return f
-        self.smp_label.setFont(font(theme.label_family(), 11, QFont.DemiBold, 1.0))
-        self.smp_ui.setFont(font(theme.sans_family(), 13))
-        self.smp_data.setFont(font(theme.mono_family(), 12))
 
     # ── rows ─────────────────────────────────────────────────────────────
     def _make_row(self, i):
@@ -566,7 +457,6 @@ class AppearanceDialog(QDialog):
         for m in _MODES:
             theme.set_aurora(m, self._specs[m])
         self._config["aurora"] = {m: theme.copy_spec(theme.AURORA[m]) for m in _MODES}
-        self._config["fonts"] = {r: f for r, f in theme.FONTS.items() if f}
         self._config["aurora_preset"] = {m: n for m, n in self._base_preset.items() if n}
         self._save_config()
         self._restyle.stop()
@@ -577,7 +467,6 @@ class AppearanceDialog(QDialog):
     def reject(self):
         for m in _MODES:
             theme.set_aurora(m, self._original[m])
-        theme.set_fonts(self._orig_fonts)
         self._restyle.stop()
         theme.apply_theme(QApplication.instance())
         super().reject()

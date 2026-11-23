@@ -241,10 +241,10 @@ def _step_geometry_of(host):
     host.slider_center_pct.setRange(10, 90)
     host.slider_center_pct.setValue(50)
     host.slider_center_pct.setMinimumHeight(22)
-    host.lbl_center_pct = QLabel("50%")
+    from gui.widgets_v2 import ValueEdit
+    host.lbl_center_pct = ValueEdit(host.slider_center_pct, lambda v: f"{int(v)}%", role="valuepill")
     host.lbl_center_pct.setAlignment(Qt.AlignCenter)
     host.lbl_center_pct.setFixedWidth(44)
-    host.lbl_center_pct.setProperty("role", "valuepill")
     host.lbl_center_pct.setFont(mono_font(11))
     srow = QHBoxLayout()
     srow.setContentsMargins(0, 0, 0, 0)
@@ -260,7 +260,7 @@ def _step_geometry_of(host):
         host.slider_center_pct.setValue(max(host.slider_center_pct.minimum(),
                                             min(host.slider_center_pct.maximum(), int(v))))
         host.slider_center_pct.blockSignals(False)
-        host.lbl_center_pct.setText(f"{int(v)}%")
+        host.lbl_center_pct.show_value(v)
     host.slider_center_pct.valueChanged.connect(_slider_to_spin)
     host.spin_center_pct.valueChanged.connect(_spin_to_slider)
     zl.addWidget(form_row("Center zone", srow))

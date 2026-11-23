@@ -10,7 +10,7 @@ os.environ.setdefault("MPLCONFIGDIR", os.path.join(CACHE_DIR, "matplotlib"))
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt
 from gui.main_window import MainWindow, load_config
-from gui.theme import apply_theme, load_aurora, load_fonts, register_bundled_fonts
+from gui.theme import apply_theme, load_aurora, register_bundled_fonts
 
 
 def main():
@@ -20,7 +20,6 @@ def main():
     register_bundled_fonts()
     config = load_config()
     load_aurora(config)
-    load_fonts(config)
     apply_theme(app, config.get("theme", "dark"))   # first start: dark · Graphite
     window = MainWindow()
     window.show()

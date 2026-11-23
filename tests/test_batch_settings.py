@@ -127,3 +127,26 @@ def test_batch_px_per_cm_follows_mode_and_frame():
     auto = {"calib_mode": "auto", "cage_shape": "square", "cage_w_cm": 40, "cage_h_cm": 40,
             "arena": [(0, 0), (1, 0), (1, 1), (0, 1)]}
     assert _px_per_cm_for(auto, exp, (720, 720)) == 18.0
+
+
+def test_value_box_beside_a_slider_takes_typed_numbers():
+    """Click the number beside a slider and type: Enter applies (clamped,
+    in the shown units), Esc undoes."""
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtTest import QTest
+    from PyQt5.QtWidgets import QApplication, QSlider
+    from gui.widgets_v2 import ValueEdit
+    app = QApplication.instance() or QApplication([])
+    s = QSlider(); s.setRange(50, 300); s.setValue(100)
+    e = ValueEdit(s, lambda v: f"{v/100:.1f}×", lambda n: n * 100)
+    e.show()
+
+    def typ(text, key=Qt.Key_Return):
+        e.setFocus(); e.selectAll(); QTest.keyClicks(e, text); QTest.keyClick(e, key)
+        app.processEvents()
+    typ("1.5"); assert s.value() == 150 and e.text() == "1.5×"
+    typ("9");   assert s.value() == 300                     # clamped to the range
+    typ("2", Qt.Key_Escape); assert s.value() == 300 and e.text() == "3.0×"
+    s.setValue(120); assert e.text() == "1.2×"                # slider -> box

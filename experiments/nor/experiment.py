@@ -108,8 +108,8 @@ class NORExperiment(Experiment):
                 "footprint_px": [(x * vw, y * vh) for (x, y) in footprint_norm],
                 "zone_px":      [(x * vw, y * vh) for (x, y) in zone_norm],
             }
-        arena_norm = settings.get("arena") or []
-        arena_px = [(x * vw, y * vh) for (x, y) in arena_norm] if arena_norm else []
+        # Callers (tab + batch) pass the arena already in pixels.
+        arena_px = [(float(x), float(y)) for (x, y) in (settings.get("arena") or [])]
         s = dict(settings)
         s["objects"] = objects_px
         s["arena_px"] = arena_px
@@ -342,14 +342,15 @@ class NORExperiment(Experiment):
             if not footprint_norm:
                 continue
             color = st.get("color") or nor_zones.OBJECT_COLORS.get(obj_id, "#FFFFFF")
-            footprint_px = [(x * vw, y * vh) for (x, y) in footprint_norm]
+            to_graph = getattr(host, "to_graph_space", lambda pts: pts)
+            footprint_px = to_graph([(x * vw, y * vh) for (x, y) in footprint_norm])
             ax.add_patch(Polygon(
                 footprint_px, closed=True,
                 facecolor=color, edgecolor=color,
                 alpha=0.55, linewidth=1.4, zorder=4.5,
             ))
             if zone_norm:
-                zone_px = [(x * vw, y * vh) for (x, y) in zone_norm]
+                zone_px = to_graph([(x * vw, y * vh) for (x, y) in zone_norm])
                 ax.add_patch(Polygon(
                     zone_px, closed=True,
                     facecolor="none", edgecolor=color,

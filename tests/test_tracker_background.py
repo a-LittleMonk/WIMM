@@ -58,3 +58,20 @@ def test_low_contrast_switch_doubles_sensitivity_and_off_changes_nothing():
     from tracking.tracker import TrackerThread
     assert TrackerThread("v.mp4", threshold=25).threshold == 25
     assert TrackerThread("v.mp4", threshold=25, low_contrast=True).threshold == 12
+
+
+def test_low_contrast_keeps_the_piece_near_the_mouse_over_a_bigger_far_one():
+    """A late shadow or dropping larger than the faint mouse must not win
+    when the mouse was just seen nearby."""
+    import cv2
+    from tracking.tracker import _merge_fragments, _near_far
+    m = np.zeros((300, 300), np.uint8)
+    m[50:62, 50:62] = 255             # faint mouse piece, 144 px, near last position
+    m[200:230, 200:230] = 255         # shadow, 900 px, far away
+    cs, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    near, far = _near_far(cs, (55, 55), 30, 20)
+    assert cv2.boundingRect(near)[0] == 50 and cv2.boundingRect(far)[0] == 200
+    pts, _ = _merge_fragments(cs, radius=30, min_piece=20, anchor=near)
+    assert cv2.boundingRect(pts)[0] == 50
+    pts, _ = _merge_fragments(cs, radius=30, min_piece=20)          # no anchor: largest
+    assert cv2.boundingRect(pts)[0] == 200

@@ -341,7 +341,8 @@ def _assets():
 
     # Keyed by the colours used: Qt caches stylesheet images by path. Kept in
     # the app folder (settings/cache), not the system temp folder.
-    key = "_".join(c.lstrip("#") for c in (ACCENT, INPUT, BORDER_2, ON_ACCENT, FAINT, TEXT_2, SCROLL))
+    key = "_".join(c.lstrip("#") for c in (ACCENT, ACCENT_HI, INPUT, BORDER_2, ON_ACCENT, FAINT,
+                                         TEXT_2, SCROLL, SURFACE))
     folder = os.path.join(CACHE_DIR, "theme", f"{_mode}_{key}")
     os.makedirs(folder, exist_ok=True)
     out = {}
@@ -404,6 +405,23 @@ def _assets():
             p.drawEllipse(QRectF(14 if on else 2, 2, 14, 14))
         return draw
 
+    def knob(color, faded=False):
+        # Slider handle: anti-aliased dot with a thin panel-coloured ring
+        # (QSS border-radius circles are drawn without anti-aliasing).
+        def draw(p, _s):
+            c = QColor(color)
+            if faded:
+                c.setAlphaF(0.45)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(QColor(SURFACE)))
+            p.drawEllipse(QRectF(0, 0, 12, 12))
+            p.setBrush(QBrush(c))
+            p.drawEllipse(QRectF(1.5, 1.5, 9, 9))
+        return draw
+
+    save("knob", 12, knob(ACCENT))
+    save("knob_hover", 12, knob(ACCENT_HI))
+    save("knob_dis", 12, knob(BORDER_2, True))
     save("switch_off", 30, switch(False), 18)
     save("switch_on", 30, switch(True), 18)
     save("switch_off_dis", 30, switch(False, True), 18)
@@ -421,19 +439,8 @@ def _assets():
 
 
 # ── Fonts ──────────────────────────────────────────────────────────────────
-# Three roles the user can set in View → Appearance → Fonts (config["fonts"]):
-#   ui     interface text — buttons, labels, menus
-#   data   numbers, units, times, file names, tables (monospace reads best)
-#   label  small section headers ("CURRENT FRAME"); defaults to the data font
-# None = automatic (first installed font from the stack).
-FONT_ROLES = ("ui", "data", "label")
-FONTS = {"ui": None, "data": None, "label": None}
-FONT_CHOICES = {  # suggestions shown first, when installed
-    "ui": ["Segoe UI", "Segoe UI Variable Text", "Bahnschrift", "Aptos", "Calibri",
-           "Inter", "IBM Plex Sans", "Roboto", "Source Sans 3", "Arial", "Verdana", "Tahoma"],
-    "data": ["Consolas", "Cascadia Mono", "IBM Plex Mono", "Roboto Mono",
-             "Source Code Pro", "Lucida Console", "Courier New"],
-}
+# Built-in only: interface text uses SANS_STACK, numbers / data and small
+# section labels use MONO_STACK (first installed font of each stack).
 _families = None
 # Not offered as UI / data fonts (the bundled logo font and the old defaults).
 HIDDEN_FAMILY_PREFIXES = ("Instrument Sans", "JetBrains Mono")
@@ -486,32 +493,16 @@ def _first_available(candidates):
     return candidates[-1]
 
 
-def _chosen(role):
-    name = FONTS.get(role)
-    return name if name and name in installed_families() else None
-
-
 def sans_family():
-    return _chosen("ui") or _first_available(SANS_STACK)
+    return _first_available(SANS_STACK)
 
 
 def mono_family():
-    return _chosen("data") or _first_available(MONO_STACK)
+    return _first_available(MONO_STACK)
 
 
 def label_family():
-    return _chosen("label") or mono_family()
-
-
-def set_fonts(fonts):
-    """Install font choices {role: family or None}; unknown roles ignored."""
-    for role in FONT_ROLES:
-        name = (fonts or {}).get(role)
-        FONTS[role] = str(name) if name else None
-
-
-def load_fonts(config):
-    set_fonts(config.get("fonts") or {})
+    return mono_family()
 
 
 def _palette():
@@ -630,10 +621,11 @@ QRadioButton::indicator:checked {{ image: url({A["radio_on"]}); }}
 QSlider::groove:horizontal {{ height: 4px; background: {BORDER_2}; border-radius: 2px; }}
 QSlider::sub-page:horizontal {{ background: {ACCENT}; border-radius: 2px; }}
 QSlider::handle:horizontal {{
-    background: {ACCENT}; border: 2px solid {SURFACE}; width: 10px; height: 10px;
-    margin: -6px 0; border-radius: 7px;
+    image: url({A["knob"]}); background: transparent; border: 0;
+    width: 12px; height: 12px; margin: -4px 0;
 }}
-QSlider::handle:horizontal:hover {{ background: {ACCENT_HI}; }}
+QSlider::handle:horizontal:hover {{ image: url({A["knob_hover"]}); }}
+QSlider::handle:horizontal:disabled {{ image: url({A["knob_dis"]}); }}
 QProgressBar {{
     background: {BORDER}; border: 0; border-radius: 2px; max-height: 4px; text-align: center; color: transparent;
 }}
@@ -857,8 +849,8 @@ QPushButton#ArenaMode::menu-indicator {{ image: url({A["arrow_down"]}); subcontr
     subcontrol-position: right center; right: 8px; width: 10px; height: 10px; }}
 QFrame#SensBox {{ background: {SURFACE_2}; border: 1px solid {BORDER}; border-radius: 6px; }}
 QFrame#SensBox QLabel {{ background: transparent; }}
-QLabel[role="sensval"] {{ font-family: "{mono}"; font-size: 13px; font-weight: 500; color: {ACCENT}; }}
-QLabel[role="valuepill"] {{
+QLabel[role="sensval"], QLineEdit[role="sensval"] {{ font-family: "{mono}"; font-size: 13px; font-weight: 500; color: {ACCENT}; }}
+QLabel[role="valuepill"], QLineEdit[role="valuepill"] {{
     font-family: "{mono}"; font-size: 11px; padding: 2px 0; border-radius: 4px;
     background: {SURFACE_2}; border: 1px solid {BORDER};
 }}
@@ -911,7 +903,10 @@ QToolButton[ibtn="primary"]:hover {{ background: {ACCENT_HI}; }}
 QToolButton[ibtn="primary"]:disabled {{ background: {ACCENT_DIS}; }}
 QLabel[role="scrub"] {{ font-family: "{mono}"; font-size: 19px; font-weight: 500; color: {TEXT}; letter-spacing: -0.3px; }}
 QLabel[role="scrubtotal"] {{ font-family: "{mono}"; font-size: 11.5px; color: {FAINT}; }}
-QLabel[role="slidervalue"] {{ font-family: "{mono}"; font-size: 10.5px; color: {TEXT_2}; }}
+QLabel[role="slidervalue"], QLineEdit[role="slidervalue"] {{ font-family: "{mono}"; font-size: 10.5px; color: {TEXT_2}; }}
+QLineEdit[role="slidervalue"], QLineEdit[role="sensval"] {{ background: transparent; border: 1px solid transparent; border-radius: 4px; padding: 0 2px; }}
+QLineEdit[role="slidervalue"]:hover, QLineEdit[role="sensval"]:hover, QLineEdit[role="valuepill"]:hover {{ border-color: {BORDER}; }}
+QLineEdit[role="slidervalue"]:focus, QLineEdit[role="sensval"]:focus, QLineEdit[role="valuepill"]:focus {{ border-color: {ACCENT}; background: {SURFACE}; }}
 QLabel[role="frame"] {{ font-family: "{mono}"; font-size: 11.5px; color: {TEXT}; }}
 QGroupBox#StepGroup {{
     margin: 0; background: transparent; border: 0; border-bottom: 1px solid {BORDER};

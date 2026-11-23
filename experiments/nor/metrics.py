@@ -16,7 +16,7 @@ import pandas as pd
 from matplotlib.path import Path
 
 from core.kinematics import (
-    compute_step_distance, compute_basic_kinematics, compute_pauses,
+    compute_step_distance, compute_basic_kinematics, compute_pauses, time_at,
 )
 from .zones import (
     OBJECT_NAMES, OBJECT_LABELS, ROLE_FAMILIAR, ROLE_NOVEL,
@@ -169,7 +169,7 @@ def compute(results, settings, fps, px_per_cm):
 
         latency_s = None
         for (s, _e) in bouts:
-            latency_s = round(s * frame_dur + trim_start_s, 3)
+            latency_s = round(time_at(df, s, fps_safe) + trim_start_s, 3)
             break
 
         prefix = obj_id  # "object_a" / "object_b"

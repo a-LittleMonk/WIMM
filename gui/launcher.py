@@ -463,7 +463,7 @@ class TestCard(QFrame):
         if self._enabled_card:
             self.name.setStyleSheet(
                 f"font-family:'{theme.sans_family()}'; font-weight:600; "
-                f"font-size:{self._fit_px}px; letter-spacing:-0.3px; "
+                f"font-size:{self._fit_px}px; "
                 f"line-height:1.2; color:{theme.TEXT}; background:transparent;"
             )
             bg = theme.G_HOVER if self._hover else theme.G_PANEL

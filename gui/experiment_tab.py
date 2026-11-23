@@ -1262,11 +1262,8 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             self._open_model_tuning_dialog()      # show the reset values
 
     def _save_tuning_to_config(self):
-        self.config["model_params"] = {m: dict(p) for m, p in self._model_params.items()}
-        self.config["post_params"] = dict(self._post_params)
-        win = self.window()
-        if hasattr(win, "_save_config"):
-            win._save_config()
+        self._persist_config("model_params", {m: dict(p) for m, p in self._model_params.items()})
+        self._persist_config("post_params", dict(self._post_params))
 
     # ── Simple / Full view ────────────────────────────────────────────────
 
@@ -2749,7 +2746,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             return
         if getattr(self, "_suppress_calib_mode", False):
             return
-        self.config["calib_mode"] = self._calib_mode()
+        self._persist_config("calib_mode", self._calib_mode())
         if self._calib_mode() != "manual":
             # Leaving Manual: stop any line in progress and drop the drawn
             # line so only the selected mode's calibration is in play.
@@ -3050,10 +3047,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
 
     def _on_cage_shape_changed(self):
         shape = self.combo_cage_shape.currentData()
-        self.config["cage_shape"] = shape
-        win = self.window()
-        if hasattr(win, "_save_config"):
-            win._save_config()
+        self._persist_config("cage_shape", shape)
         if self._perspective_on:
             self._compute_homography()
             if self._first_frame_bgr is not None:
@@ -3066,11 +3060,8 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
 
     def _on_cage_size_changed(self, _v=None):
         # Persist + refresh derived calibration state.
-        self.config["cage_w_cm"] = float(self.spin_cage_w.value())
-        self.config["cage_h_cm"] = float(self.spin_cage_h.value())
-        win = self.window()
-        if hasattr(win, "_save_config"):
-            win._save_config()
+        self._persist_config("cage_w_cm", float(self.spin_cage_w.value()))
+        self._persist_config("cage_h_cm", float(self.spin_cage_h.value()))
         self._update_calib_status()
         self._recompute_metrics_and_views()
 
@@ -3130,6 +3121,16 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         s["trim_start_s"]       = float(s.get("trim_start", 0.0))
         return s
 
+    def to_graph_space(self, pts_list):
+        """Video-pixel points -> the (straightened) space the graphs are
+        drawn in; plugins use it so their overlays line up with the track."""
+        H = None if self._perspective_on else self._persistent_homography()
+        if H is None or not pts_list:
+            return pts_list
+        arr = np.array([[[float(p[0]), float(p[1])]] for p in pts_list], dtype=np.float32)
+        w = cv2.perspectiveTransform(arr, H)
+        return [(float(p[0][0]), float(p[0][1])) for p in w]
+
     def _graph_data(self):
         """Returns (results, arena_pixels, center_pixels, px_per_cm) in warped (undistorted) space."""
         results = self.tracking_results
@@ -3142,13 +3143,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         H = self._persistent_homography()
         if H is None:
             return results, arena, center, px_per_cm
-
-        def warp_pts(pts_list):
-            if not pts_list:
-                return pts_list
-            arr = np.array([[[float(p[0]), float(p[1])]] for p in pts_list], dtype=np.float32)
-            w = cv2.perspectiveTransform(arr, H)
-            return [(float(p[0][0]), float(p[0][1])) for p in w]
+        warp_pts = self.to_graph_space
 
         warped_results = []
         for r in results:
@@ -3888,7 +3883,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
                 self.tracking_results, plugin_settings, self.fps, px_per_cm,
             )
             video_name = os.path.splitext(os.path.basename(self.video_path))[0]
-            out_path = os.path.join(output_folder, f"{video_name}_open_field.xlsx")
+            out_path = os.path.join(output_folder, f"{video_name}_{getattr(self.experiment, 'key', 'open_field')}.xlsx")
             export_results(
                 metrics=metrics,
                 raw_df=raw_df,
@@ -3900,6 +3895,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
                 bin_df=bin_df,
                 metadata=self._metadata(),
                 write_csv=True,
+                test_name=getattr(self.experiment, 'name', 'Open Field'),
                 video_config=(self.experiment.filter_video_config(self.snapshot_settings())
                               if self.experiment is not None
                               else self.snapshot_settings()),
@@ -4128,11 +4124,11 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         slider.setSingleStep(step)
         slider.setPageStep(max(step, 10))
         slider.setMinimumHeight(22)
-        val_lbl = QLabel(fmt_fn(default))
-        val_lbl.setFixedWidth(38)
-        val_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        val_lbl.setProperty("role", "slidervalue")
-        slider.valueChanged.connect(lambda v: val_lbl.setText(fmt_fn(v)))
+        from gui.widgets_v2 import ValueEdit
+        # ×-scaled sliders store hundredths: typing 1.2 means 120.
+        val_lbl = ValueEdit(slider, fmt_fn,
+                            (lambda n: n * 100) if "×" in fmt_fn(default) else (lambda n: n))
+        val_lbl.setFixedWidth(42)
         slider.valueChanged.connect(self._update_preview)
         row.addWidget(lbl, 0, 0)
         row.addWidget(slider, 0, 1)

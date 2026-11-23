@@ -7,6 +7,8 @@ with the apparatus size from the Scale card (dims = (W, H) cm).
 """
 import math
 
+from core.kinematics import time_at
+
 from .base import BoxExperiment, ParamSpec as P
 from .engine import ZoneDef, OUT, committed_sequence
 from . import geometry as geo
@@ -485,7 +487,7 @@ class TMaze(BoxExperiment):
         return {
             "First Choice": ("Left" if first[0] == "left" else "Right") if first else "none",
             "Latency to First Choice (s)":
-                round(first[1] * ctx["dt"] + ctx["trim_start"], 3) if first else "never",
+                round(time_at(ctx["df"], first[1], ctx["fps"]) + ctx["trim_start"], 3) if first else "never",
             "Goal-Arm Choices (#)": len(seq),
             "Alternations (#)": alt,
             "Alternation (%)": round(100 * alt / (len(seq) - 1), 2) if len(seq) > 1 else None,
@@ -563,7 +565,7 @@ class RadialMaze(BoxExperiment):
                 first_rep = i
             seen.add(a)
             if t_all is None and baited <= seen:
-                t_all = round(s * ctx["dt"] + ctx["trim_start"], 3)
+                t_all = round(time_at(ctx["df"], s, ctx["fps"]) + ctx["trim_start"], 3)
         all_baited = len(baited) == n
         return {
             "Total Arm Entries (#)": len(arms),

@@ -1931,7 +1931,7 @@ class ExperimentBatchTab(QWidget):
         gs = getattr(et, "_graph_style", None)
         try:
             return json.dumps([gs.to_dict() if gs is not None else None, export_bg(),
-                               dict(theme.FONTS)], sort_keys=True, default=str)
+                               ], sort_keys=True, default=str)
         except Exception:
             return None
 
@@ -3319,7 +3319,7 @@ class ExperimentBatchTab(QWidget):
         from core.app_paths import backup_dir
         backup_folder = backup_dir(self.config)
         if backup_folder and os.path.isdir(backup_folder):
-            backup_path = os.path.join(backup_folder, f"{name}_open_field.xlsx")
+            backup_path = os.path.join(backup_folder, f"{name}_{exp_key or 'open_field'}.xlsx")
             exp = getattr(self.embedded_tab, "experiment", None)
             vc = exp.filter_video_config(s) if exp is not None else s
             export_results(
@@ -3327,6 +3327,7 @@ class ExperimentBatchTab(QWidget):
                 video_name=name, arena=arena_px, video_size=(vw, vh),
                 graph_images=graph_images, bin_df=bin_df, metadata=meta,
                 write_csv=False, video_config=vc,
+                test_name=getattr(exp, "name", "Open Field"),
             )
             logger.info(
                 f"Backup saved: {os.path.basename(backup_path)} | "
@@ -4017,7 +4018,7 @@ class ExperimentBatchTab(QWidget):
 
     def _save_config(self):
         win = self.window()
-        if hasattr(win, "_save_config"):
+        if win is not self and hasattr(win, "_save_config"):
             win._save_config()
 
     def set_simple_mode(self, simple: bool):

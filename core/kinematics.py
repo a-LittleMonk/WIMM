@@ -26,6 +26,10 @@ def compute_step_distance(df: pd.DataFrame, px_per_cm, fps):
     speed_px = np.full(n, np.nan)
     last_valid = -1
     fps_eff = float(fps) if fps else 0.0
+    # Real frame times (tracker reads them from the video) so a dropped-
+    # frame gap does not turn into a speed spike.
+    ts = (pd.to_numeric(df["timestamp"], errors="coerce").to_numpy(dtype=float)
+          if "timestamp" in df.columns else np.full(n, np.nan))
     for i in range(n):
         if np.isnan(xs[i]):
             continue
@@ -35,7 +39,10 @@ def compute_step_distance(df: pd.DataFrame, px_per_cm, fps):
             d = float(np.sqrt(dx * dx + dy * dy))
             step_px[i] = d
             gap = i - last_valid
-            if fps_eff > 0 and gap > 0:
+            span = ts[i] - ts[last_valid]
+            if span > 0:
+                speed_px[i] = d / span
+            elif fps_eff > 0 and gap > 0:
                 speed_px[i] = d * fps_eff / gap
         last_valid = i
 
@@ -50,6 +57,16 @@ def compute_step_distance(df: pd.DataFrame, px_per_cm, fps):
     df["step_dist"] = step_px * scale
     df["speed"]     = speed_px * scale
     return scale, unit
+
+
+def time_at(df, i, fps):
+    """Video time (s) of row i: the tracker's real frame time when present
+    (correct across dropped-frame gaps), else i / fps."""
+    if df is not None and "timestamp" in df.columns and 0 <= i < len(df):
+        t = pd.to_numeric(df["timestamp"].iloc[i], errors="coerce")
+        if pd.notna(t):
+            return float(t)
+    return i / fps if fps else 0.0
 
 
 def compute_basic_kinematics(df: pd.DataFrame, fps, unit, movement_threshold=0.0):

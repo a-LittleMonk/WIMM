@@ -1667,17 +1667,23 @@ class GraphsMixin:
         fps = self.fps or 30
         px_per_cm = self._get_px_per_cm()
 
-        x = df["X (px)"].values.astype(float)
-        y = df["Y (px)"].values.astype(float)
         t = df["Time (s)"].values.astype(float)
-
-        dist_px = np.sqrt(np.diff(x)**2 + np.diff(y)**2)
-        speed = dist_px * fps
-        calibrated = bool(px_per_cm and px_per_cm > 0)
-        if calibrated:
-            speed = speed / px_per_cm
+        # Same per-frame speed as the Excel column (real frame times, so a
+        # dropped-frame gap is not a spike).
+        unit_col = next((c for c in df.columns if c.startswith("Speed")), None)
+        if unit_col is not None:
+            speed = df[unit_col].values.astype(float)[1:]
+            base_unit = unit_col.split("(")[-1].rstrip(")")
+        else:
+            x = df["X (px)"].values.astype(float)
+            y = df["Y (px)"].values.astype(float)
+            speed = np.sqrt(np.diff(x)**2 + np.diff(y)**2) * fps
+            calibrated = bool(px_per_cm and px_per_cm > 0)
+            if calibrated:
+                speed = speed / px_per_cm
+            base_unit = "cm/s" if calibrated else "px/s"
         # Chosen speed unit (Customize graphs → Speed unit); axis title follows.
-        factor, sp_unit, st = speed_axis(st, "Speed", "cm/s" if calibrated else "px/s")
+        factor, sp_unit, st = speed_axis(st, "Speed", base_unit)
         speed = speed * factor
         tfac, _t_unit, st = time_axis(st, "xlabel")      # chosen time unit
 

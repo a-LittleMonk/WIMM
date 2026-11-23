@@ -112,13 +112,16 @@ def pct_slider(host, label, spin, lo, hi, scale=1.0, off_at_zero=False,
     """Visible slider + value pill driving a hidden spin box (the data
     holder other code reads/writes). `scale` converts spin units to the
     shown % (e.g. 100 for a 0–1 fraction). Returns a form row."""
-    from gui.widgets_v2 import form_row, mono_font
+    from gui.widgets_v2 import ValueEdit, form_row, mono_font
     spin.hide()
     spin._keep_hidden = True
     slider = QSlider(Qt.Horizontal)
     slider.setRange(int(lo), int(hi))
     slider.setMinimumHeight(22)
-    pill = QLabel()
+
+    def fmt(pct):
+        return "Off" if (off_at_zero and pct <= 0) else f"{pct}{suffix}"
+    pill = ValueEdit(slider, fmt, role="valuepill")
     pill.setAlignment(Qt.AlignCenter)
     pill.setFixedWidth(44)
     pill.setProperty("role", "valuepill")
@@ -129,7 +132,7 @@ def pct_slider(host, label, spin, lo, hi, scale=1.0, off_at_zero=False,
         slider.blockSignals(True)
         slider.setValue(max(slider.minimum(), min(slider.maximum(), pct)))
         slider.blockSignals(False)
-        pill.setText("Off" if (off_at_zero and pct <= 0) else f"{pct}{suffix}")
+        pill.show_value(pct)
 
     slider.valueChanged.connect(lambda v: spin.setValue(v / float(scale)))
     spin.valueChanged.connect(show)

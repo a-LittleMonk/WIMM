@@ -10,7 +10,7 @@ from tracking.preprocessor import (
     apply_preprocessing, get_mask, get_morph_kernel, build_background, match_level,
 )
 from core import logger
-from core.video import probe, skip_to
+from core.video import frame_times, probe, skip_to
 
 
 class _FramePrefetcher:
@@ -298,6 +298,11 @@ class TrackerThread(QThread):
         self._mass_ema = 0.0          # smoothed mass-asym (kills per-frame flicker)
         self._mass_ema_init = False
         self._prev_conf = 0.0         # last frame's confidence
+        self._back_run = 0            # frames walking fast against the nose
+        self._lc_last = None          # low-contrast: last body (proc px)
+        self._lc_lost = 0             # low-contrast: frames since last body
+        self._lc_far = 0              # low-contrast: frames a far piece out-sized the near one
+        self._mass_vote = 0           # low-contrast: + = hips heavier holds, - = head heavier
 
     def stop(self):
         self._stop_flag = True
@@ -449,9 +454,25 @@ class TrackerThread(QThread):
                 results = _median_filter_results(results, window=self.smooth_window)
                 if self.frame_skip > 1:
                     results = self._interpolate_skipped(results, fps)
+                if self.fps_override <= 0:
+                    self._stamp_real_times(results)
                 self.finished_tracking.emit(results)
         finally:
             cap.release()
+
+    def _stamp_real_times(self, results):
+        """timestamp = each frame's real time in the video (decoder
+        timestamps), so dropped-frame gaps keep their true length instead
+        of frame / fps. Unchanged when the backend gives no timestamps."""
+        times = frame_times(self.video_path)
+        s = self._start_frame
+        if not times or s >= len(times):
+            return
+        t0 = times[s]
+        for r in results:
+            k = s + int(r["frame"])
+            if k < len(times):
+                r["timestamp"] = (times[k] - t0) / 1000.0
 
     def _interpolate_skipped(self, results, fps):
         """Densify a sparse result list (every frame_skip-th frame) by
@@ -917,10 +938,28 @@ class TrackerThread(QThread):
         area = cv2.contourArea(largest)
         if self.low_contrast:
             # A pale mouse on a pale floor shows as pieces (eyes, tail base,
-            # edges): join those near the largest into one mouse.
-            largest, area = _merge_fragments(
-                contours, radius=0.12 * min(self._pw, self._ph),
-                min_piece=20 * self.proc_scale ** 2)
+            # edges): join those near the mouse into one. The mouse is the
+            # big piece near its last position, not simply the largest —
+            # a late shadow or dropping can be larger than a faint mouse.
+            r = 0.12 * min(self._pw, self._ph)
+            min_piece = 20 * self.proc_scale ** 2
+            self._lc_lost += 1
+            anchor = None
+            if self._lc_last is not None:
+                near, far = _near_far(contours, self._lc_last, r * self._lc_lost, min_piece)
+                # A far piece wins only after out-sizing the near one for
+                # LC_SWITCH frames; until then: the near piece, or a miss.
+                bigger = far is not None and (near is None or
+                                              cv2.contourArea(far) > cv2.contourArea(near))
+                self._lc_far = self._lc_far + 1 if bigger else 0
+                if self._lc_far >= LC_SWITCH:
+                    anchor, self._lc_far = far, 0
+                elif near is not None:
+                    anchor = near
+                else:
+                    return _none
+            largest, area = _merge_fragments(contours, radius=r,
+                                             min_piece=min_piece, anchor=anchor)
         if area < self._min_area:
             return _none
         if self._max_area > 0 and area > self._max_area:
@@ -974,6 +1013,8 @@ class TrackerThread(QThread):
                     if total > 0:
                         mass_signed = (n_a - n_b) / total
 
+        if self.low_contrast:
+            self._lc_last, self._lc_lost = body, 0
         return body, semi_major, semi_minor, angle_deg, end_a, end_b, mass_signed
 
     def _resolve_nose(self, body, end_a, end_b, mass_signed,
@@ -1071,6 +1112,15 @@ class TrackerThread(QThread):
 
         # Mass: hip-heavier ⇒ end_a is hip if mass_smoothed>0 ⇒ nose is end_b.
         # → mass_score(a) = -mass_smoothed,  mass_score(b) = +mass_smoothed.
+        # A pale mouse shows its head (eyes, ears) more than its white
+        # hips, so "hips heavier" can be reversed. With the switch on,
+        # learn which end is heavier from frames where it walks fast
+        # (front = the way it moves).
+        if self.low_contrast and vmag > 0.15 * semi_major and abs(mass_signed) > 0.02:
+            a_ahead = dax * v[0] + day * v[1] > 0
+            self._mass_vote += 1 if (mass_signed > 0) != a_ahead else -1
+        if self._mass_vote < 0:
+            mass_smoothed = -mass_smoothed
         mass_score_a = -mass_smoothed
         mass_score_b = +mass_smoothed
 
@@ -1151,6 +1201,19 @@ class TrackerThread(QThread):
                 nose, tail = end_b, end_a
                 axis = (dbx, dby)
 
+        # Mice rarely walk backwards for long: moving fast against the
+        # chosen nose for several frames means it sits on the wrong end
+        # (continuity alone would keep it there for the rest of the video).
+        if vmag > 0.15 * semi_major and axis[0] * v[0] + axis[1] * v[1] < -0.5 * vmag:
+            self._back_run += 1
+        else:
+            self._back_run = 0
+        if self._back_run >= 4:
+            nose, tail = tail, nose
+            axis = (-axis[0], -axis[1])
+            self._back_run = 0
+            score_a = score_b = 0.0          # confidence 0: let the next frames settle
+
         # Confidence: margin between scores, normalized by max possible
         # weight sum so it lives in roughly [0, 1].
         confidence = min(1.0, abs(score_a - score_b) / wsum)
@@ -1219,22 +1282,44 @@ class TrackerThread(QThread):
         self.preview.emit(vis)
 
 
-def _merge_fragments(contours, radius, min_piece):
-    """(points, area): the largest blob plus every piece of at least
-    `min_piece` px whose centre is within `radius` px of the largest
-    blob's centre, as one point set (hull / moments / bounding box work
-    on it like a single contour). Used for low-contrast mice."""
-    def centre(c):
-        m = cv2.moments(c)
-        if m["m00"] > 0:
-            return m["m10"] / m["m00"], m["m01"] / m["m00"]
-        x, y, w, h = cv2.boundingRect(c)
-        return x + w / 2.0, y + h / 2.0
-    largest = max(contours, key=cv2.contourArea)
-    lx, ly = centre(largest)
+LC_SWITCH = 8   # frames (~0.25 s) a far piece must out-size the near one
+
+
+def _centre(c):
+    m = cv2.moments(c)
+    if m["m00"] > 0:
+        return m["m10"] / m["m00"], m["m01"] / m["m00"]
+    x, y, w, h = cv2.boundingRect(c)
+    return x + w / 2.0, y + h / 2.0
+
+
+def _near_far(contours, last, gate, min_piece):
+    """(largest piece within `gate` px of `last`, largest piece beyond it);
+    pieces under `min_piece` px are ignored. Either may be None."""
+    near = far = None
+    for c in contours:
+        a = cv2.contourArea(c)
+        if a < min_piece:
+            continue
+        cx, cy = _centre(c)
+        if math.hypot(cx - last[0], cy - last[1]) <= gate:
+            if near is None or a > cv2.contourArea(near):
+                near = c
+        elif far is None or a > cv2.contourArea(far):
+            far = c
+    return near, far
+
+
+def _merge_fragments(contours, radius, min_piece, anchor=None):
+    """(points, area): the anchor blob (default: the largest) plus every
+    piece of at least `min_piece` px whose centre is within `radius` px of
+    the anchor's centre, as one point set (hull / moments / bounding box
+    work on it like a single contour). Used for low-contrast mice."""
+    largest = anchor if anchor is not None else max(contours, key=cv2.contourArea)
+    lx, ly = _centre(largest)
     keep = [c for c in contours
             if c is largest or (cv2.contourArea(c) >= min_piece
-                                and math.hypot(centre(c)[0] - lx, centre(c)[1] - ly) <= radius)]
+                                and math.hypot(_centre(c)[0] - lx, _centre(c)[1] - ly) <= radius)]
     return np.vstack(keep), float(sum(cv2.contourArea(c) for c in keep))
 
 

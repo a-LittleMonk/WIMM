@@ -53,3 +53,19 @@ def test_impossible_fps_is_measured_from_timestamps():
     fps, n = probe(cap)
     assert fps == pytest.approx(31.25)          # 32 ms per frame
     assert n == pytest.approx(625, abs=2)        # 20000 frames @1000 fps = 20 s
+
+
+def test_frame_gap_keeps_real_time_in_speed_and_latency():
+    """A 5 s recording gap: the step across it is divided by 5 s (no speed
+    spike), and times after it are real video times, not frame / fps."""
+    import pandas as pd
+    from core.kinematics import compute_step_distance, time_at
+    fps = 30.0
+    t = [i / fps for i in range(10)] + [10 / fps + 5.0 + i / fps for i in range(10)]
+    df = pd.DataFrame({"timestamp": t, "x": [i * 1.0 for i in range(20)], "y": 0.0})
+    df.loc[10, "x"] = 9.0 + 15.0                 # moved 15 cm during the gap
+    compute_step_distance(df, 1.0, fps)
+    assert df["speed"].iloc[10] == pytest.approx(15.0 / 5.0, rel=0.01)
+    assert df["speed"].iloc[5] == pytest.approx(30.0)
+    assert time_at(df, 12, fps) == pytest.approx(12 / fps + 5.0)
+    assert time_at(pd.DataFrame({"x": [1, 2]}), 1, fps) == pytest.approx(1 / fps)

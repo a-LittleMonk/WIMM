@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from core.kinematics import (
-    compute_step_distance, compute_basic_kinematics, compute_pauses,
+    compute_step_distance, compute_basic_kinematics, compute_pauses, time_at,
 )
 from . import geometry as geo
 
@@ -194,7 +194,7 @@ def compute(results, settings, fps, px_per_cm, zones, *, title=""):
             metrics[f"Entries into {z.label} (#)"] = e
             f0 = st.first.get(z.name)
             metrics[f"Latency to {z.label} (s)"] = (
-                round(f0 * dt + trim_start, 3) if f0 is not None else "never")
+                round(time_at(df, f0, fps) + trim_start, 3) if f0 is not None else "never")
             metrics[f"Mean Visit in {z.label} (s)"] = (
                 round(t / e, 3) if e else 0.0)
 

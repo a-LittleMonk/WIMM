@@ -63,6 +63,7 @@ def export_results(
     write_csv: bool = True,
     video_config: Optional[dict] = None,
     all_units: bool = True,
+    test_name: str = "Open Field",
 ):
     # Every distance / speed / time value is written in all scales side
     # by side (cm, mm, m · cm/s … km/h · s, min) so the examiner can pick.
@@ -87,7 +88,7 @@ def export_results(
             bin_df.to_excel(writer, sheet_name="Time Bins", index=False)
 
     wb = load_workbook(output_path)
-    _style_summary(wb["Summary"], video_name)
+    _style_summary(wb["Summary"], video_name, test_name)
     if "Metadata" in wb.sheetnames:
         _style_meta(wb["Metadata"])
     _style_raw(wb["Raw Data"])
@@ -165,14 +166,14 @@ def _style_meta(ws):
         ws.column_dimensions[get_column_letter(col[0].column)].width = min(length + 4, 40)
 
 
-def _style_summary(ws, video_name: str):
+def _style_summary(ws, video_name: str, test_name: str = "Open Field"):
     blue = PatternFill("solid", fgColor="1A6EA8")
     white_bold = Font(color="FFFFFF", bold=True, size=11)
     dark_bold = Font(bold=True, size=13)
 
     ws.insert_rows(1)
     ws.insert_rows(1)
-    ws["A1"] = f"Open Field Test — {video_name}"
+    ws["A1"] = f"{test_name} Test — {video_name}"
     ws["A1"].font = dark_bold
     ws["A1"].alignment = Alignment(horizontal="left")
 

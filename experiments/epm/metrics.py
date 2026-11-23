@@ -6,7 +6,7 @@ import pandas as pd
 
 from core.arm_entries import arm_visits, point_in_polys
 from core.kinematics import (
-    compute_step_distance, compute_basic_kinematics, compute_pauses,
+    compute_step_distance, compute_basic_kinematics, compute_pauses, time_at,
 )
 from .zones import (
     ARM_NAMES, ARM_LABELS, DEFAULT_ARM_KINDS, aggregate_kind_membership,
@@ -101,14 +101,14 @@ def compute(results, settings, fps, px_per_cm):
     open_set = set(open_arms)
     for i, a in enumerate(confirmed_seq):
         if a in open_set:
-            latency_open_s = i * frame_dur + trim_start_s
+            latency_open_s = time_at(df, i, fps) + trim_start_s
             break
 
     # Generic latency to first ANY confirmed arm entry (kept for parity).
     latency_any_s = None
     for i, a in enumerate(confirmed_seq):
         if a in ARM_NAMES:
-            latency_any_s = i * frame_dur + trim_start_s
+            latency_any_s = time_at(df, i, fps) + trim_start_s
             break
 
     low_activity_flag = entries_categorized < 10
