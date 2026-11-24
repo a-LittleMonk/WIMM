@@ -1,4 +1,4 @@
-"""View → Appearance: edit the aurora backdrop for light and dark mode.
+"""Appearance button: edit the aurora backdrop for light and dark mode.
 
 Per mode the user picks a background colour, how many gradient colours to
 blend (1..theme.AURORA_MAX), and each colour's shade and strength — or starts

@@ -39,14 +39,7 @@ def build_geometry_step(host, exp):
 
     def _mode(key, fn):
         def run():
-            if key != "movement":
-                host._arena_auto_movement = False
             host._arena_define_mode = key
-            if hasattr(host, "_refresh_arena_mode_chip"):
-                try:
-                    host._refresh_arena_mode_chip()
-                except Exception:
-                    pass
             fn()
         return run
 

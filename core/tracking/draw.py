@@ -110,7 +110,7 @@ def draw_body_overlay(frame, r, frame_idx=None, results=None,
                      style="off", do_ellipse=False,
                      do_trail=False, trail_len=0, trail_fade=False,
                      color_fn=None, tag_lines=None,
-                     shape="dot", size=5):
+                     shape="dot", size=5, display_w=None):
     """Burn body / ellipse / trail overlays onto a numpy frame.
 
     Parameters
@@ -130,6 +130,10 @@ def draw_body_overlay(frame, r, frame_idx=None, results=None,
         Centre marker shape — one of MARKER_SHAPES.
     size : int
         Centre marker radius in px, authored for a 640 px wide frame.
+    display_w : int | None
+        On-screen width the frame is shown at. Given → marker sizes are in
+        screen px, so the marker looks the same for every video size / crop.
+        None (video export) → sizes follow the frame width.
     do_ellipse, do_trail : bool
         Toggles for each overlay.
     trail_len : int
@@ -146,7 +150,7 @@ def draw_body_overlay(frame, r, frame_idx=None, results=None,
         except Exception:
             return default
 
-    sc = _scale(frame)
+    sc = frame.shape[1] / display_w if display_w else _scale(frame)
     cx, cy = r.get("x"), r.get("y")
 
     # Trail

@@ -184,10 +184,6 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self._scrub_cap_path = None
         self._first_frame_bgr = None
         self._current_scrub_frame_bgr = None
-        # Auto-from-movement state: when True, the next tracking run skips
-        # the arena (whole frame is the detection area), and the arena is
-        # built live from the bounding box of the mouse's path.
-        self._arena_auto_movement = False
         # Live cell overlay during tracking — off by default for speed.
         # When off, cell numbers / timer / entries are temporarily hidden
         # during a tracking run so the tracker doesn't pay for repaints
@@ -195,7 +191,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self._live_cell_overlay = False
         self._tracking_active = False
         self._cell_show_state_backup = None
-        # Last-picked define-arena mode: "manual" | "contrast" | "movement".
+        # Last-picked define-arena mode: "manual" | "square" | "contrast".
         # Stored per video and reflected in the dropdown button label.
         self._arena_define_mode = None
         # Per-video crop rect (x, y, w, h) in original-frame pixels, or None.
@@ -323,7 +319,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             "trim_start":   self.spin_trim_start.value(),
             "trim_duration": self.spin_trim_duration.value(),
             "center_pct":   (self.spin_center_pct.value()
-                             if hasattr(self, "spin_center_pct") else 25),
+                             if hasattr(self, "spin_center_pct") else 50),
             "calib_mode":   (self._calib_mode()
                              if hasattr(self, "rb_calib_auto") else None),
             "calib_p1":     zd.calib_p1,
@@ -359,9 +355,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             },
         }
         # Let the experiment plugin inject its own keys + override defaults.
-        # Y-Maze uses this to set s["arena"] = convex hull of arms and force
-        # arena_auto_movement=False so tracking uses the user-defined arms
-        # instead of the OF auto-from-movement default.
+        # Y-Maze uses this to set s["arena"] = convex hull of arms.
         exp = getattr(self, "experiment", None)
         # The test's own per-video state (arm shapes, objects, template
         # handles …) so switching videos can put it back (apply_settings).
@@ -494,8 +488,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self.spin_trim_start.setValue(float(s.get("trim_start", 0.0)))
         self.spin_trim_duration.setValue(float(s.get("trim_duration", 0.0)))
         if hasattr(self, "spin_center_pct"):
-            mode_default = 25 if self.zone_drawer.zone_mode == "grid" else 50
-            self.spin_center_pct.setValue(int(s.get("center_pct", mode_default)))
+            self.spin_center_pct.setValue(int(s.get("center_pct", 50)))
         zd = self.zone_drawer
         zd.calib_p1 = s.get("calib_p1")
         zd.calib_p2 = s.get("calib_p2")
@@ -545,9 +538,6 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             self.spin_cage_w.setValue(float(s["cage_w_cm"]))
         if hasattr(self, "spin_cage_h") and s.get("cage_h_cm") is not None:
             self.spin_cage_h.setValue(float(s["cage_h_cm"]))
-        self._arena_auto_movement = bool(s.get("arena_auto_movement", False))
-        if hasattr(self, "spin_arena_pad_pct") and s.get("arena_pad_pct") is not None:
-            self.spin_arena_pad_pct.setValue(float(s["arena_pad_pct"]))
         # Default to Off (1 = every frame) when the video has no saved value,
         # so a fresh video never inherits the previous video's skip setting.
         self.spin_frame_skip.setValue(int(s["frame_skip"])
@@ -572,14 +562,11 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             label_map = {
                 "manual":   "Manual — click 4 corners",
                 "contrast": "Auto — from contrast (now)",
-                "movement": "Auto — from movement (next run)",
             }
             label = label_map.get(self._arena_define_mode)
             self.btn_define_arena.setText(
                 f"{label} ▾" if label else "Define arena ▾"
             )
-        if hasattr(self, "_refresh_arena_mode_chip"):
-            self._refresh_arena_mode_chip()
         # Restore calibration mode (radio). Suppress handler so the change
         # doesn't re-trigger save / recompute mid-apply.
         if hasattr(self, "rb_calib_auto"):
@@ -1689,8 +1676,8 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self.btn_interpolate.setEnabled(False)
         self.btn_interpolate.clicked.connect(self._interpolate_gaps)
 
-        # Corrections popup is launched from the main menu bar (View →
-        # Corrections…); no button under the video.
+        # Corrections popup is launched from the header's Corrections button
+        # (Ctrl+K); no button under the video.
         self._corrections_popup = None  # lazy
 
         # "View" button — opens a popup with overlay options
@@ -2639,10 +2626,8 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
 
         self._push_recent(path)
 
-        # Default new videos to "Auto — from movement": skip arena setup
-        # now and let the next tracking run build the polygon from the
-        # mouse's positions. Only fires when there's no arena currently
-        # on the drawer. In batch flow this runs again post-apply_settings
+        # Default arena for new videos. Only fires when there's no arena
+        # currently on the drawer. In batch flow this runs again post-apply_settings
         # in _load_into_embedded (which is the authoritative gate after
         # per-video state restore); here it covers standalone load paths
         # like the startup auto-load of the last opened video.
@@ -2650,13 +2635,10 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         exp_key = getattr(getattr(self, "experiment", None), "key", None)
         # OF / NOR default to a centered premade square so the user always
         # opens to a usable arena. Y-Maze / EPM use their own geometry
-        # (arms / plus template) and are skipped. Auto-from-movement
-        # remains available behind the Extra features toggle and wins
-        # over the square when enabled.
+        # (arms / plus template) and are skipped.
         if zd is not None and zd.arena is None:
             _fam = getattr(getattr(self, "experiment", None), "fam", exp_key)
-            if (_fam in ("open_field", "nor", "box")
-                    and not self.config.get("enable_auto_movement_arena", False)):
+            if _fam in ("open_field", "nor", "box"):
                 try:
                     self._apply_premade_square_arena()
                     self._arena_define_mode = "square"
@@ -2667,34 +2649,8 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
                             )
                         except RuntimeError:
                             pass
-                    if hasattr(self, "_refresh_arena_mode_chip"):
-                        try:
-                            self._refresh_arena_mode_chip()
-                        except RuntimeError:
-                            pass
                 except Exception:
                     pass
-            elif (exp_key != "y_maze"
-                    and self.config.get("enable_auto_movement_arena", False)):
-                self._arena_auto_movement = True
-                self._arena_define_mode = "movement"
-                if hasattr(self, "btn_define_arena"):
-                    try:
-                        self.btn_define_arena.setText(
-                            "Auto — from movement (next run) ▾"
-                        )
-                    except RuntimeError:
-                        pass
-                if hasattr(self, "_refresh_arena_mode_chip"):
-                    try:
-                        self._refresh_arena_mode_chip()
-                    except RuntimeError:
-                        pass
-                if hasattr(self, "lbl_zones"):
-                    self.lbl_zones.setText(
-                        "Auto-from-movement queued — run tracking; arena "
-                        "will form from the mouse's path."
-                    )
 
     def _cleanup_bg_builder(self, builder):
         try:
@@ -2822,14 +2778,6 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
                             f"({getattr(exp, 'key', '?')}): {e}",
                             source="plugin")
 
-    def _refresh_arena_mode_chip(self):
-        # Padding only applies to auto-from-movement (which itself is
-        # gated behind the Extra features toggle).
-        if hasattr(self, "_arena_pad_widget"):
-            self._arena_pad_widget.setVisible(
-                self._arena_define_mode == "movement"
-            )
-
     # ── Step 3 ────────────────────────────────────────────────────────────
 
     def _start_draw_arena(self):
@@ -2922,118 +2870,6 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
                 setattr(zd, k, v)
             self._cell_show_state_backup = None
             zd.update()
-
-    def _enable_auto_movement_arena(self):
-        """User picked 'Auto from movement'. Flag set; the next tracking
-        run will skip the arena and build it live from mouse positions."""
-        self._arena_auto_movement = True
-        # Clear any existing arena so the user sees fresh state.
-        self.zone_drawer.arena = None
-        self.zone_drawer.center_zone = None
-        self.zone_drawer.update()
-        self._refresh_zones_label()
-        self._update_run_button()
-        self.lbl_zones.setText(
-            "Auto-from-movement queued — run tracking; arena will form "
-            "from the mouse's path."
-        )
-        # Notify the batch tab (if any) so its per-video setting is updated.
-        try:
-            self.zone_drawer.emit_change("arena cleared — auto-from-movement queued")
-        except Exception:
-            pass
-
-
-    def auto_arena_padding_pct(self):
-        if hasattr(self, "spin_arena_pad_pct"):
-            return float(self.spin_arena_pad_pct.value())
-        return 5.0
-
-    @staticmethod
-    def _fit_quad_from_points(pts):
-        """Return 4 (x, y) corners that approximate the convex hull of `pts`.
-        Uses iterative cv2.approxPolyDP — the more bumpy the hull, the larger
-        the simplification epsilon needs to be to land exactly on 4 vertices.
-        Falls back to the rotated min-area rectangle if a 4-point fit can't
-        be reached. `pts` is an (N, 2) numpy float32 array."""
-        if len(pts) < 4:
-            return None
-        try:
-            hull = cv2.convexHull(pts)
-        except Exception as e:
-            logger.warn(f"convexHull failed (n={len(pts)}): {e}", source="arena")
-            return None
-        if hull is None or len(hull) < 4:
-            return None
-        if len(hull) == 4:
-            return hull.reshape(-1, 2)
-        peri = cv2.arcLength(hull, True)
-        # Binary-search epsilon — find the smallest one that yields exactly
-        # 4 vertices.
-        lo, hi = 0.001, 0.5
-        best = None
-        for _ in range(40):
-            eps = (lo + hi) / 2.0 * peri
-            approx = cv2.approxPolyDP(hull, eps, True)
-            n = len(approx)
-            if n == 4:
-                best = approx.reshape(-1, 2)
-                break
-            if n > 4:
-                lo = (lo + hi) / 2.0
-            else:
-                hi = (lo + hi) / 2.0
-        if best is None:
-            # Fall back to rotated min-area rectangle.
-            (cx, cy), (w, h), ang = cv2.minAreaRect(pts)
-            return cv2.boxPoints(((cx, cy), (w, h), ang)).astype(np.float32)
-        return best.astype(np.float32)
-
-    @staticmethod
-    def _expand_quad(quad, pad_frac):
-        """Expand a 4-point quad outward from its centroid by `pad_frac`
-        (e.g. 0.05 = +5%). Returns same shape as input."""
-        if pad_frac <= 0:
-            return quad
-        cx = float(np.mean(quad[:, 0]))
-        cy = float(np.mean(quad[:, 1]))
-        scale = 1.0 + pad_frac
-        out = quad.copy()
-        out[:, 0] = cx + (quad[:, 0] - cx) * scale
-        out[:, 1] = cy + (quad[:, 1] - cy) * scale
-        return out
-
-    def commit_auto_movement_arena(self, points_px, frame_w, frame_h):
-        """Build a 4-sided polygon from `points_px` (convex-hull ≈ quad),
-        expand by the user's padding %, set as the arena, clear the flag."""
-        if not points_px:
-            self._arena_auto_movement = False
-            return None
-        try:
-            pts = np.array(points_px, dtype=np.float32)
-            quad = self._fit_quad_from_points(pts)
-            if quad is None:
-                self._arena_auto_movement = False
-                return None
-            pad = self.auto_arena_padding_pct() / 100.0
-            quad = self._expand_quad(quad, pad)
-            quad[:, 0] = np.clip(quad[:, 0], 0, frame_w - 1)
-            quad[:, 1] = np.clip(quad[:, 1], 0, frame_h - 1)
-            arena_norm = [(float(x) / frame_w, float(y) / frame_h)
-                          for x, y in quad]
-            self.zone_drawer.arena = arena_norm
-            self._compute_center()
-            # Make sure handles render after the commit — mode → IDLE.
-            self.zone_drawer.set_mode(ZoneDrawer.MODE_IDLE)
-            self.zone_drawer.emit_change("arena committed from movement (auto)")
-            self.zone_drawer.update()
-            self._arena_auto_movement = False
-            return arena_norm
-        except Exception:
-            import traceback
-            traceback.print_exc()
-            self._arena_auto_movement = False
-            return None
 
     @staticmethod
     def _sort_quad_screen(pts):
@@ -3332,9 +3168,6 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             theme.set_tone(self.lbl_zones, "faint", "font-size:11px;")
         if self.zone_drawer.arena:
             self.set_step_status("geometry", "ok")
-        elif getattr(self, "_arena_auto_movement", False):
-            # Arena is built from movement during the run — a valid choice.
-            self.set_step_status("geometry", "ok")
         else:
             self.set_step_status("geometry", "blocked")
 
@@ -3411,7 +3244,8 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
                     cv2.circle(display, (int(xv), int(yv)), 7, (166, 107, 211), -1)
                     cv2.circle(display, (int(xv), int(yv)), 9, (130, 70, 170), 2)
             else:
-                self._draw_body_on_frame(display, r, rel_idx)
+                self._draw_body_on_frame(display, r, rel_idx,
+                                         display_w=self.marker_display_w())
 
     def _detection_mask(self, frame_bgr):
         """What the current Detection settings find on `frame_bgr`
@@ -3774,9 +3608,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
     # ── Step 5 ────────────────────────────────────────────────────────────
 
     def _update_run_button(self):
-        ready = self.video_path is not None and (
-            self.zone_drawer.arena is not None
-            or getattr(self, "_arena_auto_movement", False))
+        ready = self.video_path is not None and self.zone_drawer.arena is not None
         self.set_step_status("analysis", "ok" if ready else "blocked")
 
 
@@ -4056,7 +3888,8 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
                             body_style=None,
                             draw_ellipse=None, draw_trail=None,
                             trail_len=None, trail_fade=None,
-                            results_override=None, tag_lines=None):
+                            results_override=None, tag_lines=None,
+                            display_w=None):
         """Thin wrapper. When override params are None, current widget state
         is used (live preview). Export thread passes explicit flags."""
         from core.tracking.draw import draw_body_overlay
@@ -4072,7 +3905,16 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             trail_fade=trail_fade if trail_fade is not None else self.chk_trail_fade.isChecked(),
             color_fn=self._bgr,
             tag_lines=tag_lines,
+            display_w=display_w,
         )
+
+    def marker_display_w(self):
+        """Width (screen px) the video is shown at in the preview, so the
+        body marker keeps one on-screen size for any video size."""
+        try:
+            return self.zone_drawer._get_disp_rect()[2] or None
+        except Exception:
+            return None
 
     # ── scrub seek / cap cache / slider shortcuts: gui/output/scrub_mixin.py
     # ── output tabs ───────────────────────────────────────────────────────
@@ -4185,9 +4027,6 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             # …and sub-panels that only show for the selected mode
             if gb is getattr(self, "_step_groups", {}).get("scale"):
                 self._refresh_calib_mode_visibility()
-            pad = getattr(self, "_arena_pad_widget", None)
-            if pad is not None and pad.parent() is gb:
-                self._refresh_arena_mode_chip()
         else:
             gb.setMaximumHeight(HEADER_H + 1)
 
@@ -4216,10 +4055,10 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
 
     def _summary_geometry(self):
         zd = self.zone_drawer
-        if not zd.arena and not getattr(self, "_arena_auto_movement", False):
+        if not zd.arena:
             return "Not defined"
         modes = {"manual": "Manual · 4 corners", "square": "Premade square",
-                 "movement": "Auto · from movement", "contrast": "Auto · contrast"}
+                 "contrast": "Auto · contrast"}
         text = modes.get(getattr(self, "_arena_define_mode", None), "Defined")
         shape = getattr(self, "combo_cage_shape", None)
         if shape is not None:

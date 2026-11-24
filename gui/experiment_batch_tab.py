@@ -143,7 +143,7 @@ def _px_per_cm_for(s, exp, size):
 PER_VIDEO_KEYS = frozenset({
     # Arena / area detection
     "arena", "original_arena", "perspective",
-    "arena_auto_movement", "arena_define_mode", "arena_pad_pct",
+    "arena_define_mode",
     "center_zone", "center",          # center is re-derived from center_pct
     # Calibration line drawn on this video
     "calib_p1", "calib_p2", "calib_cm",
@@ -2076,7 +2076,7 @@ class ExperimentBatchTab(QWidget):
             QMessageBox.warning(
                 self, "Export stopped",
                 "These videos' numbers could not be updated to their current "
-                "settings, so nothing was exported (see View → Logs):\n\n"
+                "settings, so nothing was exported (see the Logs button):\n\n"
                 + "\n".join(f"  • {os.path.basename(p)}" for p in failed))
             return False
         return True
@@ -2138,7 +2138,7 @@ class ExperimentBatchTab(QWidget):
             lbl.setText(f"Wrote {count['files']} graph file(s) for {count['videos']} "
                         f"video(s) to {out_folder}")
         else:
-            lbl.setText("No graphs written — see View → Logs for details.")
+            lbl.setText("No graphs written — see the Logs button for details.")
 
     def _save_combined_excel(self):
         if not self._completed_data:
@@ -2447,20 +2447,7 @@ class ExperimentBatchTab(QWidget):
         )
         self.videos.append(path)
         self.video_status[path] = STATUS_NEEDS
-        # Seed auto-from-movement as the arena default so a freshly added
-        # video can run without manual arena drawing. _has_arena/preflight
-        # read video_settings, not the embedded widget — must persist here.
-        # Skip for Y-Maze: it requires user-defined arms, not an auto arena.
-        exp_key = getattr(getattr(self.embedded_tab, "experiment", None),
-                          "key", None)
-        if (path not in self.video_settings and exp_key != "y_maze"
-                and self.config.get("enable_auto_movement_arena", False)):
-            self.video_settings[path] = {
-                "arena_auto_movement": True,
-                "arena_define_mode": "movement",
-            }
-        elif path not in self.video_settings:
-            self.video_settings[path] = {}
+        self.video_settings.setdefault(path, {})
         row = VideoRow(path, self._on_edit, self._on_run, self._on_remove,
                        self._on_trim)
         self.row_widgets[path] = row
@@ -2707,41 +2694,6 @@ class ExperimentBatchTab(QWidget):
             pass
         self.lbl_status.setText("")
 
-    def _on_body_for_auto_movement(self, body_xy):
-        """Collect body positions during auto-from-movement runs and grow
-        the displayed arena (4-sided polygon) live."""
-        if body_xy is None:
-            return
-        x, y = float(body_xy[0]), float(body_xy[1])
-        self._auto_movement_pts.append((x, y))
-        # Re-fit only every few frames to keep the UI snappy.
-        if len(self._auto_movement_pts) % 5 != 0:
-            return
-        et = self.embedded_tab
-        try:
-            import numpy as _np
-            pts = _np.array(self._auto_movement_pts, dtype=_np.float32)
-            if len(pts) < 4:
-                # Too few — bracket with a small square so the user sees
-                # the box has appeared.
-                cx, cy = float(pts[:, 0].mean()), float(pts[:, 1].mean())
-                s = 25.0
-                quad = _np.array([(cx - s, cy - s), (cx + s, cy - s),
-                                   (cx + s, cy + s), (cx - s, cy + s)],
-                                  dtype=_np.float32)
-            else:
-                quad = et._fit_quad_from_points(pts)
-                if quad is None:
-                    return
-            pad = et.auto_arena_padding_pct() / 100.0
-            quad = et._expand_quad(quad, pad)
-            fw, fh = et.video_w or 1, et.video_h or 1
-            arena_norm = [(float(p[0]) / fw, float(p[1]) / fh) for p in quad]
-            et.zone_drawer.arena = arena_norm
-            et.zone_drawer.update()
-        except Exception:
-            pass
-
     def _has_live_ymaze_arms(self, path):
         """For Y-Maze runs where the embedded panel is showing `path` but
         the capture pipeline hasn't persisted arms yet. Reads zones directly
@@ -2786,8 +2738,6 @@ class ExperimentBatchTab(QWidget):
             # the per-video capture hasn't fired yet. Look at the embedded
             # tab's live zones when we're running the currently-loaded path.
             return self._has_live_ymaze_arms(path)
-        if s.get("arena_auto_movement"):
-            return True
         # Y-Maze: arms count as valid arena.
         arms_norm = s.get("arms_norm") or {}
         if arms_norm and all(len(v or []) >= 3 for v in arms_norm.values()):
@@ -3187,85 +3137,71 @@ class ExperimentBatchTab(QWidget):
         else:
             vw, vh = full_vw, full_vh
 
-        # ── Auto-from-movement: skip arena up front; will be built live
-        # from the body's path and committed after tracking completes.
-        # OF-ONLY feature — never fires for other experiments even if the
-        # flag somehow leaked into the snapshot.
-        exp_key = getattr(getattr(self.embedded_tab, "experiment", None),
-                          "key", None)
-        auto_movement = (bool(s.get("arena_auto_movement"))
-                         and exp_key == "open_field")
-        if auto_movement:
-            arena_norm = None
-            center_norm = None
-        else:
-            arena_norm = s.get("arena")
-            center_norm = s.get("center_zone", s.get("center"))  # legacy fallback
-            # Y-Maze fallback: if the snapshot didn't persist the hull (e.g.
-            # the user changed arms and clicked Run before zones_changed
-            # propagated), build the hull from arms_norm on the spot.
-            if not arena_norm:
-                arms_norm = s.get("arms_norm") or {}
-                # Plugin-aware fallback: pick the right ARM_NAMES + hull
-                # helper based on the embedded experiment.
-                if not arms_norm and self._embedded_loaded_path == path:
-                    et = self.embedded_tab
-                    plug_key = getattr(getattr(et, "experiment", None),
-                                       "key", None)
-                    zd = getattr(et, "zone_drawer", None) if et is not None else None
-                    if plug_key == "y_maze" and zd is not None:
-                        from experiments.y_maze.zones import ARM_NAMES as _AN
-                        for name in _AN:
-                            z = zd.get_zone(name)
-                            arms_norm[name] = (list(z["geometry"])
-                                               if (z and z.get("geometry"))
-                                               else [])
-                        s["arms_norm"] = arms_norm
-                    elif plug_key == "epm" and zd is not None:
-                        from experiments.epm.zones import ARM_NAMES as _AN
-                        for name in _AN:
-                            z = zd.get_zone(name)
-                            arms_norm[name] = (list(z["geometry"])
-                                               if (z and z.get("geometry"))
-                                               else [])
-                        s["arms_norm"] = arms_norm
-                if arms_norm:
-                    plug_key = getattr(getattr(self.embedded_tab,
-                                                "experiment", None),
-                                        "key", None) if hasattr(
-                        self, "embedded_tab") else None
-                    if plug_key == "epm":
-                        from experiments.epm.zones import convex_hull, ARM_NAMES
-                    else:
-                        from experiments.y_maze.zones import convex_hull, ARM_NAMES
-                    pts = []
-                    for name in ARM_NAMES:
-                        g = arms_norm.get(name) or []
-                        if len(g) >= 3:
-                            pts.extend(g)
-                    if len(pts) >= 3:
-                        hull = convex_hull(pts)
-                        if hull and len(hull) >= 3:
-                            arena_norm = hull
-                            s["arena"] = hull
+        arena_norm = s.get("arena")
+        center_norm = s.get("center_zone", s.get("center"))  # legacy fallback
+        # Y-Maze fallback: if the snapshot didn't persist the hull (e.g.
+        # the user changed arms and clicked Run before zones_changed
+        # propagated), build the hull from arms_norm on the spot.
+        if not arena_norm:
+            arms_norm = s.get("arms_norm") or {}
+            # Plugin-aware fallback: pick the right ARM_NAMES + hull
+            # helper based on the embedded experiment.
+            if not arms_norm and self._embedded_loaded_path == path:
+                et = self.embedded_tab
+                plug_key = getattr(getattr(et, "experiment", None),
+                                   "key", None)
+                zd = getattr(et, "zone_drawer", None) if et is not None else None
+                if plug_key == "y_maze" and zd is not None:
+                    from experiments.y_maze.zones import ARM_NAMES as _AN
+                    for name in _AN:
+                        z = zd.get_zone(name)
+                        arms_norm[name] = (list(z["geometry"])
+                                           if (z and z.get("geometry"))
+                                           else [])
+                    s["arms_norm"] = arms_norm
+                elif plug_key == "epm" and zd is not None:
+                    from experiments.epm.zones import ARM_NAMES as _AN
+                    for name in _AN:
+                        z = zd.get_zone(name)
+                        arms_norm[name] = (list(z["geometry"])
+                                           if (z and z.get("geometry"))
+                                           else [])
+                    s["arms_norm"] = arms_norm
+            if arms_norm:
+                plug_key = getattr(getattr(self.embedded_tab,
+                                            "experiment", None),
+                                    "key", None) if hasattr(
+                    self, "embedded_tab") else None
+                if plug_key == "epm":
+                    from experiments.epm.zones import convex_hull, ARM_NAMES
+                else:
+                    from experiments.y_maze.zones import convex_hull, ARM_NAMES
+                pts = []
+                for name in ARM_NAMES:
+                    g = arms_norm.get(name) or []
+                    if len(g) >= 3:
+                        pts.extend(g)
+                if len(pts) >= 3:
+                    hull = convex_hull(pts)
+                    if hull and len(hull) >= 3:
+                        arena_norm = hull
+                        s["arena"] = hull
         # If perspective correction is on, the saved "arena" is the post-warp
         # full-frame quad. Use the original polygon to build the homography
         # and let the tracker see the WARPED video — same as the GUI preview.
-        # Auto-from-movement mode disables perspective (no arena to warp).
         homography = None
         warp_size = None
         # Plugin-supplied homography first (Y-maze builds from hub + 3
         # endpoints; OF returns None and falls through to the cage logic).
-        if not auto_movement:
-            exp = getattr(self.embedded_tab, "experiment", None)
-            if exp is not None:
-                try:
-                    res = exp.build_tracking_homography(s, (vw, vh))
-                except Exception as e:
-                    raise RuntimeError(f"Perspective correction failed: {e}") from e
-                if res is not None:
-                    homography, warp_size = res
-        if homography is None and s.get("perspective") and not auto_movement:
+        exp = getattr(self.embedded_tab, "experiment", None)
+        if exp is not None:
+            try:
+                res = exp.build_tracking_homography(s, (vw, vh))
+            except Exception as e:
+                raise RuntimeError(f"Perspective correction failed: {e}") from e
+            if res is not None:
+                homography, warp_size = res
+        if homography is None and s.get("perspective"):
             original = s.get("original_arena") or arena_norm
             if original and len(original) >= 4:
                 import numpy as _np
@@ -3287,7 +3223,7 @@ class ExperimentBatchTab(QWidget):
                 except cv2.error:
                     homography = None
                     warp_size = None
-        if homography is None and _perspective_wanted(s) and not auto_movement:
+        if homography is None and _perspective_wanted(s):
             raise RuntimeError(
                 "Perspective correction is on, but it can't be built for this video "
                 "(arena / maze corners missing or invalid). Redraw them or turn "
@@ -3355,6 +3291,8 @@ class ExperimentBatchTab(QWidget):
             exclusion_mask=excl_mask,
             crop_rect=crop_tuple,
             body_style=body_style_key,
+            marker_shape=s.get("marker_shape", "dot"),
+            marker_size=s.get("marker_size", 5),
             max_blob_pct=s.get("max_blob", 0),
             proc_scale=proc_scale,
             colors={
@@ -3380,6 +3318,7 @@ class ExperimentBatchTab(QWidget):
         thread.error.connect(errors.append)
         thread.progress.connect(self._on_progress)
         thread.preview.connect(self._on_preview)
+        thread.display_w_fn = getattr(self.embedded_tab, "marker_display_w", None)
         # Forward per-frame body coords to the embedded tab's cell-highlight.
         et = self.embedded_tab
         et._live_cell_times = {}
@@ -3393,11 +3332,6 @@ class ExperimentBatchTab(QWidget):
         # _on_tracking_nose_pos handler. Hasattr-guarded so OF/YM ignore.
         if hasattr(et, "_on_tracking_nose_pos"):
             thread.nose_pos.connect(et._on_tracking_nose_pos)
-        # Auto-from-movement: also collect positions and grow the live arena.
-        auto_pts = []
-        if auto_movement:
-            self._auto_movement_pts = auto_pts
-            thread.body_pos.connect(self._on_body_for_auto_movement)
         self._tracker_thread = thread
         # Notify the embedded tab so it can drop live cell overlays for speed.
         et.begin_tracking()
@@ -3406,7 +3340,7 @@ class ExperimentBatchTab(QWidget):
         finally:
             et.end_tracking()
             # Disconnect every signal we connected above. Lambdas hold refs
-            # to self/et/auto_pts; without disconnect they accumulate across
+            # to self/et; without disconnect they accumulate across
             # videos in long batches even though `thread` itself is dropped.
             for sig in (thread.finished_tracking, thread.progress, thread.error,
                         thread.preview, thread.body_pos, thread.nose_pos):
@@ -3424,22 +3358,6 @@ class ExperimentBatchTab(QWidget):
             source="tracking",
         )
         results = self._check_tracker_outcome(path, thread, results, errors)
-
-        # Auto-from-movement: commit the final arena from collected points.
-        if auto_movement:
-            arena_norm = self.embedded_tab.commit_auto_movement_arena(
-                auto_pts, vw, vh
-            )
-            if arena_norm:
-                arena_px = [(int(nx * vw), int(ny * vh)) for nx, ny in arena_norm]
-                # Persist into the per-video settings so re-runs / saves keep it.
-                s["arena"] = arena_norm
-                s["arena_auto_movement"] = False  # one-shot — clear flag.
-                self.video_settings[path] = dict(s)
-                # If center zone polygon was auto-computed by commit, save it too.
-                if self.embedded_tab.zone_drawer.center_zone:
-                    s["center_zone"] = list(self.embedded_tab.zone_drawer.center_zone)
-                    self.video_settings[path]["center_zone"] = s["center_zone"]
 
         fps = s.get("fps_override", 0.0) or auto_fps
         # Route through the experiment plugin so Y-Maze gets Y-Maze
@@ -3522,7 +3440,8 @@ class ExperimentBatchTab(QWidget):
         backup_folder = backup_dir(self.config)
         if backup_folder and os.path.isdir(backup_folder):
             exp = getattr(self.embedded_tab, "experiment", None)
-            fkey = getattr(exp, "file_key", None) or exp_key or "open_field"
+            fkey = (getattr(exp, "file_key", None) or getattr(exp, "key", None)
+                    or "open_field")
             backup_path = os.path.join(backup_folder,
                                        f"{self._backup_stem(path)}_{fkey}.xlsx")
             vc = exp.filter_video_config(s) if exp is not None else s
@@ -3646,8 +3565,7 @@ class ExperimentBatchTab(QWidget):
                 except cv2.error:
                     homography = None
                     warp_size = None
-        auto_movement = False   # Multi-Run never builds the arena from movement
-        if homography is None and _perspective_wanted(s) and not auto_movement:
+        if homography is None and _perspective_wanted(s):
             raise RuntimeError(
                 "Perspective correction is on, but it can't be built for this video "
                 "(arena / maze corners missing or invalid). Redraw them or turn "
@@ -3711,6 +3629,8 @@ class ExperimentBatchTab(QWidget):
             exclusion_mask=excl_mask,
             crop_rect=crop_tuple,
             body_style=body_style_key,
+            marker_shape=s.get("marker_shape", "dot"),
+            marker_size=s.get("marker_size", 5),
             max_blob_pct=s.get("max_blob", 0),
             proc_scale=proc_scale,
             colors={
@@ -3921,21 +3841,16 @@ class ExperimentBatchTab(QWidget):
                 except Exception:
                     pass
             return False
-        # Default new videos to "Auto — from movement": skip arena
-        # setup now and let the next tracking run build the polygon
-        # from the mouse's positions. Only triggers when there's no
-        # arena saved AND no arena currently on the drawer (so an
-        # in-session manual draw isn't overwritten).
+        # Default arena for new videos. Only when there's no arena saved AND
+        # none on the drawer (so an in-session manual draw isn't overwritten).
         zd = getattr(et, "zone_drawer", None)
         no_saved_arena = not (self.video_settings.get(path) or {}).get("arena")
         exp_key = getattr(getattr(et, "experiment", None), "key", None)
         # OF / NOR default to a centered premade square. Y-Maze / EPM use
-        # their own geometry. Auto-from-movement is still available behind
-        # the Extra features toggle and overrides the square.
+        # their own geometry.
         if zd is not None and zd.arena is None and no_saved_arena:
             _fam = getattr(getattr(et, "experiment", None), "fam", exp_key)
-            if (_fam in ("open_field", "nor", "box")
-                    and not self.config.get("enable_auto_movement_arena", False)):
+            if _fam in ("open_field", "nor", "box"):
                 try:
                     et._apply_premade_square_arena()
                     et._arena_define_mode = "square"
@@ -3946,11 +3861,6 @@ class ExperimentBatchTab(QWidget):
                             )
                         except Exception:
                             pass
-                    if hasattr(et, "_refresh_arena_mode_chip"):
-                        try:
-                            et._refresh_arena_mode_chip()
-                        except Exception:
-                            pass
                     # The square is a real arena: save it and show the row
                     # as Ready, not "Needs setup".
                     if zd.arena and self.video_status.get(path, STATUS_NEEDS) == STATUS_NEEDS:
@@ -3959,32 +3869,6 @@ class ExperimentBatchTab(QWidget):
                         self._mark_ready_if_eligible(path, vs)
                 except Exception:
                     pass
-            elif (exp_key != "y_maze"
-                    and self.config.get("enable_auto_movement_arena", False)):
-                et._arena_auto_movement = True
-                et._arena_define_mode = "movement"
-                # Persist into video_settings so _has_arena / preflight see
-                # the queued auto-mode without waiting for a later capture.
-                vs = self.video_settings.setdefault(path, {})
-                vs["arena_auto_movement"] = True
-                vs["arena_define_mode"] = "movement"
-                if hasattr(et, "btn_define_arena"):
-                    try:
-                        et.btn_define_arena.setText(
-                            "Auto — from movement (next run) ▾"
-                        )
-                    except Exception:
-                        pass
-                if hasattr(et, "_refresh_arena_mode_chip"):
-                    try:
-                        et._refresh_arena_mode_chip()
-                    except Exception:
-                        pass
-                if hasattr(et, "lbl_zones"):
-                    et.lbl_zones.setText(
-                        "Auto-from-movement queued — run tracking; arena "
-                        "will form from the mouse's path."
-                    )
 
         self._embedded_loaded_path = path
         self._read_only = read_only

@@ -267,7 +267,6 @@ class YMazeExperiment(Experiment):
         # Y-maze view). The tracker arena is built on the fly from
         # arms_norm by _do_track_and_export's fallback.
         snapshot["arena"] = None
-        snapshot["arena_auto_movement"] = False
         # Force-clear the live zone-drawer arena too so the change is
         # immediate without waiting for a subsequent video reload.
         if zd.arena is not None:
@@ -280,7 +279,7 @@ class YMazeExperiment(Experiment):
     _OF_ONLY_VIDEO_CONFIG_KEYS = (
         "cage_w_cm", "cage_h_cm", "cage_shape",
         "zone_mode", "center_pct",
-        "arena_define_mode", "arena_pad_pct", "arena_auto_movement",
+        "arena_define_mode",
         "cell_min_dwell", "cell_min_dwell_s", "perspective", "arrow",
     )
 

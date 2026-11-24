@@ -5,10 +5,9 @@ from PyQt5.QtWidgets import (
     QMainWindow, QTabWidget, QAction, QFileDialog, QStatusBar, QMessageBox,
     QPushButton, QShortcut, QStackedWidget, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QFrame, QApplication, QAbstractSpinBox, QSlider, QComboBox,
-    QDialog, QGroupBox, QFormLayout, QLineEdit, QCheckBox, QMenu, QMenuBar,
+    QMenu, QMenuBar,
     QToolButton,
 )
-from tracking.tracker import DEFAULT_MODEL_PARAMS
 from PyQt5.QtCore import Qt, QObject, QEvent, QTimer, QPropertyAnimation, QEasingCurve, pyqtProperty
 from PyQt5.QtGui import QKeySequence, QPainter
 from gui.openfield_batch_tab import OpenFieldBatchTab
@@ -176,7 +175,7 @@ class MainWindow(QMainWindow):
         # splitter handles and margins: below this the preview is cut off.
         self.setMinimumSize(1000, 600)
 
-        # The View / Settings menus live inside the app header (redesign v2),
+        # The Settings menu lives inside the app header (redesign v2),
         # so they use their own QMenuBar instead of the window's native one.
         self._menubar = QMenuBar()
         self._menubar.setObjectName("HeaderMenu")
@@ -186,33 +185,16 @@ class MainWindow(QMainWindow):
         act_home.setShortcut(QKeySequence("Ctrl+H"))
         act_home.triggered.connect(self._show_launcher)
         self.addAction(act_home)
-        # View menu — log viewer + future view-related actions.
-        self.view_menu = self._menubar.addMenu("View")
         # Settings menu — rebuilt per experiment; last on the toolbar.
         self.settings_menu = self._menubar.addMenu("Settings")
-        act_logs = QAction("Logs…", self)
-        act_logs.setShortcut(QKeySequence("Ctrl+L"))
-        act_logs.triggered.connect(self._open_log_dialog)
-        self.view_menu.addAction(act_logs)
-        act_corrections = QAction("Tracking corrections…", self)
-        act_corrections.setShortcut(QKeySequence("Ctrl+K"))
-        act_corrections.setToolTip(
-            "Open the manual-corrections popup for the active experiment tab"
-        )
-        act_corrections.triggered.connect(self._open_corrections_for_active_tab)
-        self.view_menu.addAction(act_corrections)
-        act_customize = QAction("Customize graphs…", self)
-        act_customize.setShortcut(QKeySequence("Ctrl+G"))
-        act_customize.setToolTip(
-            "Edit per-graph colors, widths, labels, colormap, grid, and presets"
-        )
-        act_customize.triggered.connect(self._open_graph_style_for_active_tab)
-        self.view_menu.addAction(act_customize)
-        self.view_menu.addSeparator()
-        act_appearance = QAction("Appearance…", self)
-        act_appearance.setToolTip("Background palette for light and dark mode")
-        act_appearance.triggered.connect(self._open_appearance)
-        self.view_menu.addAction(act_appearance)
+        # Keyboard shortcuts for the header buttons (window-level actions).
+        for key, fn in (("Ctrl+L", self._open_log_dialog),
+                        ("Ctrl+K", self._open_corrections_for_active_tab),
+                        ("Ctrl+G", self._open_graph_style_for_active_tab)):
+            act = QAction(self)
+            act.setShortcut(QKeySequence(key))
+            act.triggered.connect(fn)
+            self.addAction(act)
         self.act_simple_mode = QAction("Simple mode", self, checkable=True)
         self.act_simple_mode.setChecked(bool(self.config.get("simple_mode", True)))
         self.act_simple_mode.toggled.connect(self._on_simple_mode_toggled)
@@ -372,7 +354,21 @@ class MainWindow(QMainWindow):
         self.seg_theme = ThemeToggle(1 if theme.mode() == "dark" else 0)
         self.seg_theme.changed.connect(self._on_theme_toggled)
         h.addWidget(self.seg_theme)
+        # Former View-menu items. Corrections / Graphs only apply inside a test.
+        self.b_corrections = QPushButton("Corrections")
+        self.b_corrections.setToolTip("Manual tracking corrections (Ctrl+K)")
+        self.b_corrections.clicked.connect(self._open_corrections_for_active_tab)
+        self.b_graphs = QPushButton("Graphs")
+        self.b_graphs.setToolTip("Customize graphs: colours, widths, labels, presets (Ctrl+G)")
+        self.b_graphs.clicked.connect(self._open_graph_style_for_active_tab)
+        b_appearance = QPushButton("Appearance")
+        b_appearance.setToolTip("Background palette for light and dark mode")
+        b_appearance.clicked.connect(self._open_appearance)
+        for b in (self.b_corrections, self.b_graphs, b_appearance):
+            b.setFixedHeight(28)
+            h.addWidget(b)
         b_logs = QPushButton("Logs")
+        b_logs.setToolTip("App event log (Ctrl+L)")
         b_logs.setFixedHeight(28)
         b_logs.clicked.connect(self._open_log_dialog)
         h.addWidget(b_logs)
@@ -455,6 +451,8 @@ class MainWindow(QMainWindow):
         on_tool = self.stack.currentIndex() == 1
         self.crumb_sep.setVisible(on_tool)
         self.lbl_crumb.setVisible(on_tool)
+        self.b_corrections.setVisible(on_tool)
+        self.b_graphs.setVisible(on_tool)
         if on_tool:
             self._refresh_crumb()
 
@@ -677,10 +675,7 @@ class MainWindow(QMainWindow):
 
     def _build_launcher_menu(self):
         self.settings_menu.clear()
-        self.settings_menu.setEnabled(True)
-        act_extra = QAction("Extra features…", self)
-        act_extra.triggered.connect(self._open_extra_features_dialog)
-        self.settings_menu.addAction(act_extra)
+        self.settings_menu.setEnabled(False)  # launcher has no settings
 
     def _add_nav_actions(self):
         act_refresh = QAction("Refresh app", self)
@@ -767,191 +762,6 @@ class MainWindow(QMainWindow):
         )
         act_bk.triggered.connect(self._pick_backup_folder)
         self.settings_menu.addAction(act_bk)
-
-    def _open_extra_features_dialog(self):
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Extra features")
-        outer = QVBoxLayout(dlg)
-        outer.setSpacing(10)
-        outer.setContentsMargins(12, 12, 12, 12)
-
-        # ── Body-parts overlay style ─────────────────────────────────────
-        body_box = QGroupBox("Video overlay — body parts")
-        body_lay = QVBoxLayout(body_box)
-        body_lay.setSpacing(4)
-        body_note = QLabel(
-            "What to draw on the tracked mouse in the video preview. "
-            "'Off' shows only the bare detection point (default)."
-        )
-        body_note.setWordWrap(True)
-        body_note.setProperty("role", "muted")
-        body_lay.addWidget(body_note)
-
-        body_row = QHBoxLayout()
-        body_row.addWidget(QLabel("Style:"))
-        cmb_body = QComboBox()
-        # Same values as the View popover's "Body marker → Show" combo.
-        cmb_body.addItem("Off",                  "off")
-        cmb_body.addItem("Center",               "dot")
-        cmb_body.addItem("Center + nose + tail", "ends")
-        cmb_body.setFixedHeight(24)
-        current = self.config.get("body_style", "dot")
-        # Older configs stored this launcher's previous values.
-        current = {"dots": "dot", "skeleton": "ends",
-                   "dots+skeleton": "ends"}.get(current, current)
-        idx = cmb_body.findData(current)
-        if idx >= 0:
-            cmb_body.setCurrentIndex(idx)
-        cmb_body.currentIndexChanged.connect(
-            lambda: self._apply_body_style(cmb_body.currentData())
-        )
-        body_row.addWidget(cmb_body, 1)
-        body_lay.addLayout(body_row)
-        outer.addWidget(body_box)
-
-        # ── Experimental / parked features ───────────────────────────────
-        exp_box = QGroupBox("Experimental features")
-        e_lay = QVBoxLayout(exp_box)
-        e_lay.setSpacing(4)
-        e_note = QLabel(
-            "Features that are off by default. Enable here to bring them "
-            "back into the per-experiment UI."
-        )
-        e_note.setWordWrap(True)
-        e_note.setProperty("role", "muted")
-        e_lay.addWidget(e_note)
-        chk_auto_mv = QCheckBox("Enable 'Auto arena from movement'")
-        chk_auto_mv.setToolTip(
-            "Adds the 'Auto — from movement (next run)' option to the "
-            "Define arena dropdown. The arena polygon is built from the "
-            "convex hull of the mouse's path after tracking."
-        )
-        chk_auto_mv.setChecked(
-            bool(self.config.get("enable_auto_movement_arena", False))
-        )
-
-        def _toggle_auto_movement(on):
-            self.config["enable_auto_movement_arena"] = bool(on)
-            self._save_config()
-        chk_auto_mv.toggled.connect(_toggle_auto_movement)
-        e_lay.addWidget(chk_auto_mv)
-        outer.addWidget(exp_box)
-
-        # ── Tracking models (preview, parked) ────────────────────────────
-        models_box = QGroupBox("Tracking models (preview)")
-        m_lay = QVBoxLayout(models_box)
-        m_lay.setSpacing(4)
-        m_note = QLabel(
-            "Alternative tracking models with their default tunings. "
-            "Pick one in the Tracking step's Model drop-down."
-        )
-        m_note.setWordWrap(True)
-        m_note.setProperty("role", "muted")
-        m_lay.addWidget(m_note)
-        btn_models = QPushButton("Open models preview…")
-        btn_models.setFixedHeight(24)
-        btn_models.clicked.connect(self._open_tracking_models_dialog)
-        m_lay.addWidget(btn_models)
-        outer.addWidget(models_box)
-
-        outer.addStretch()
-
-        close_btn = QPushButton("Close")
-        close_btn.setFixedHeight(24)
-        close_btn.setFixedWidth(80)
-        close_btn.clicked.connect(dlg.accept)
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        btn_row.addWidget(close_btn)
-        outer.addLayout(btn_row)
-
-        dlg.resize(420, 280)
-        dlg.exec_()
-
-    def _apply_body_style(self, style):
-        """Persist body-style choice + propagate to any open experiment tabs."""
-        self.config["body_style"] = str(style)
-        self._save_config()
-        # Push into any already-loaded experiment tabs so the change is live.
-        for tab in self._all_experiment_tabs():
-            target = getattr(tab, "embedded_tab", None) or tab
-            cmb = getattr(target, "combo_body_style", None)
-            if cmb is None:
-                continue
-            i = cmb.findData(style)
-            if i >= 0 and i != cmb.currentIndex():
-                cmb.setCurrentIndex(i)
-
-    def _open_tracking_models_dialog(self):
-        pretty = {
-            "mog2": "MOG2 (experimental)", "knn": "KNN (experimental)", "cnt": "CNT (Fast)",
-            "gsoc": "GSOC", "lsbp": "LSBP",
-            "framediff": "Frame Diff (experimental)", "hsv": "HSV Threshold",
-        }
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Tracking models (preview)")
-        outer = QVBoxLayout(dlg)
-        outer.setSpacing(8)
-        outer.setContentsMargins(12, 12, 12, 12)
-
-        note = QLabel(
-            "Pick a model to see its default parameters. To use one, choose "
-            "it in the Tracking step's Model drop-down."
-        )
-        note.setWordWrap(True)
-        note.setProperty("role", "muted")
-        outer.addWidget(note)
-
-        pick_row = QHBoxLayout()
-        pick_row.addWidget(QLabel("Model:"))
-        combo = QComboBox()
-        combo.setFixedHeight(24)
-        for key, label in pretty.items():
-            combo.addItem(label, key)
-        pick_row.addWidget(combo, 1)
-        outer.addLayout(pick_row)
-
-        # Param panel — rebuilt when combo changes.
-        param_host = QGroupBox()
-        param_host.setEnabled(False)
-        param_host.setStyleSheet("QGroupBox { font-size:11px; }")
-        param_layout = QFormLayout(param_host)
-        param_layout.setSpacing(4)
-        param_layout.setContentsMargins(8, 8, 8, 8)
-        outer.addWidget(param_host, 1)
-
-        def _show(idx):
-            # Clear previous rows.
-            while param_layout.rowCount():
-                param_layout.removeRow(0)
-            key = combo.itemData(idx)
-            params = DEFAULT_MODEL_PARAMS.get(key, {})
-            if not params:
-                param_layout.addRow(QLabel("(no tunable parameters)"))
-                return
-            for k, v in params.items():
-                le = QLineEdit(str(v))
-                le.setReadOnly(True)
-                le.setFixedHeight(22)
-                k_lbl = QLabel(k)
-                k_lbl.setStyleSheet("font-size:11px;")
-                param_layout.addRow(k_lbl, le)
-
-        combo.currentIndexChanged.connect(_show)
-        _show(0)
-
-        close_btn = QPushButton("Close")
-        close_btn.setFixedHeight(24)
-        close_btn.setFixedWidth(80)
-        close_btn.clicked.connect(dlg.accept)
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        btn_row.addWidget(close_btn)
-        outer.addLayout(btn_row)
-
-        dlg.resize(380, 320)
-        dlg.exec_()
-
 
     def _pick_output_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Output Folder")

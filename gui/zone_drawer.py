@@ -426,8 +426,9 @@ class ZoneDrawer(QLabel):
         return None
 
     def _current_cell_id(self):
-        """Returns the active cell id ('1'..'16' for grid, 'C' for center
-        mode if inside center polygon, else None)."""
+        """Returns the active cell id ('1'..'16' for grid; in center mode
+        'C' inside the center polygon, 'P' elsewhere in the arena; None
+        outside the arena)."""
         uv = self._body_uv_in_arena()
         if uv is None:
             return None
@@ -448,6 +449,7 @@ class ZoneDrawer(QLabel):
                     return "C"
             except Exception:
                 pass
+            return "P"
         return None
 
     def clear_calibration(self):
@@ -992,6 +994,8 @@ class ZoneDrawer(QLabel):
             bits = ["PERIPHERY"]
             if self._cell_show_timer:
                 bits.append(f"{self._cell_times.get('P', 0.0):.1f}s")
+            if self._cell_show_entries:
+                bits.append(f"#{int(self._cell_entries.get('P', 0))}")
             tag = " · ".join(bits)
             painter.setFont(self._mono(9, True))
             tw = painter.fontMetrics().horizontalAdvance(tag)

@@ -356,7 +356,7 @@ def resolve_token(value, mode="light"):
                 # Appearance colours.
                 return theme.LIGHT[key]
             if mode == theme.mode():
-                return getattr(theme, key)  # live palette (View → Appearance)
+                return getattr(theme, key)  # live palette (Appearance button)
             return (theme.DARK if mode == "dark" else theme.LIGHT)[key]
     return value
 

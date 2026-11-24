@@ -52,8 +52,8 @@ class OpenFieldExperiment(Experiment):
 
     def contribute_to_snapshot(self, host, snapshot):
         """Inject OF-specific per-video keys into the shared snapshot:
-        cell-category map, cage W/H (auto-cal source), arena-from-movement
-        flag + pad %, and the last-picked arena-define mode. Keeping these
+        cell-category map, cage W/H (auto-cal source) and the last-picked
+        arena-define mode. Keeping these
         here (instead of in base ExperimentTab.snapshot_settings) means the
         base stays experiment-agnostic and Y-Maze doesn't have to strip
         them out via filter_video_config."""
@@ -63,11 +63,6 @@ class OpenFieldExperiment(Experiment):
             snapshot["cage_w_cm"] = host.spin_cage_w.value()
         if hasattr(host, "spin_cage_h"):
             snapshot["cage_h_cm"] = host.spin_cage_h.value()
-        snapshot["arena_auto_movement"] = bool(
-            getattr(host, "_arena_auto_movement", False)
-        )
-        if hasattr(host, "spin_arena_pad_pct"):
-            snapshot["arena_pad_pct"] = host.spin_arena_pad_pct.value()
         snapshot["arena_define_mode"] = getattr(host, "_arena_define_mode", None)
 
     def compute_metrics(self, results, settings, fps, px_per_cm):
@@ -88,7 +83,7 @@ class OpenFieldExperiment(Experiment):
             "zone_mode": (host.combo_zone_mode.currentData()
                           if hasattr(host, "combo_zone_mode") else "center_zone"),
             "center_pct": (host.spin_center_pct.value()
-                           if hasattr(host, "spin_center_pct") else 25),
+                           if hasattr(host, "spin_center_pct") else 50),
         }
 
     def apply_extras(self, host, extras):

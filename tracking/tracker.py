@@ -10,6 +10,7 @@ from tracking.preprocessor import (
     apply_preprocessing, get_mask, get_morph_kernel, build_background, match_level,
 )
 from core import logger
+from core.tracking.draw import draw_body_overlay
 from core.video import FPS_UNKNOWN, frame_times, probe, skip_to
 
 
@@ -172,32 +173,6 @@ _DEFAULT_NOSE = (0, 200, 0)
 _DEFAULT_TAIL = (200, 100, 0)
 
 
-def _draw_body(vis, body, style="dot", body_color=_DEFAULT_BODY,
-               nose=None, tail=None,
-               nose_color=_DEFAULT_NOSE, tail_color=_DEFAULT_TAIL):
-    """Render tracking dots. style:
-        "off"  — nothing
-        "dot"  — body centroid only
-        "ends" — body centroid + nose (green) + tail (blue) + axis line
-    """
-    if style in ("dot", "ends") and body is not None:
-        x, y = int(body[0]), int(body[1])
-        cv2.circle(vis, (x, y), 6, body_color, -1)
-        cv2.circle(vis, (x, y), 8, body_color, 2)
-    if style == "ends" and body is not None:
-        if nose is not None and tail is not None:
-            cv2.line(vis, (int(tail[0]), int(tail[1])),
-                     (int(nose[0]), int(nose[1])), body_color, 1, cv2.LINE_AA)
-        if nose is not None:
-            nx, ny = int(nose[0]), int(nose[1])
-            cv2.circle(vis, (nx, ny), 5, nose_color, -1)
-            cv2.circle(vis, (nx, ny), 7, nose_color, 2)
-        if tail is not None:
-            tx, ty = int(tail[0]), int(tail[1])
-            cv2.circle(vis, (tx, ty), 4, tail_color, -1)
-            cv2.circle(vis, (tx, ty), 6, tail_color, 2)
-
-
 class TrackerThread(QThread):
     progress = pyqtSignal(int)
     preview = pyqtSignal(object)
@@ -214,6 +189,7 @@ class TrackerThread(QThread):
                  max_blob_pct: int = 0,
                  proc_scale: float = 1.0,
                  colors: dict = None,
+                 marker_shape: str = "dot", marker_size: int = 5,
                  homography=None, warp_size=None,
                  model_params: dict = None, post_params: dict = None,
                  fps_override: float = 0.0,
@@ -251,6 +227,10 @@ class TrackerThread(QThread):
         self._c_body = c.get("body", _DEFAULT_BODY)
         self._c_nose = c.get("nose", _DEFAULT_NOSE)
         self._c_tail = c.get("tail", _DEFAULT_TAIL)
+        self.marker_shape = marker_shape or "dot"
+        self.marker_size = int(marker_size or 5)
+        # Optional callable → on-screen preview width (keeps marker size fixed on screen).
+        self.display_w_fn = None
         self.homography = homography
         self.warp_size  = warp_size
         self.fps_override = max(0.0, float(fps_override))
@@ -1280,10 +1260,15 @@ class TrackerThread(QThread):
         self._last_preview_time = now
         vis = frame.copy()
         if self.body_style != "off" and body:
-            _draw_body(vis, body, self.body_style,
-                       body_color=self._c_body,
-                       nose=nose, tail=tail,
-                       nose_color=self._c_nose, tail_color=self._c_tail)
+            # Same smooth (anti-aliased) marker as the preview after tracking.
+            r = {"x": body[0], "y": body[1],
+                 "nose_x": nose[0] if nose else None, "nose_y": nose[1] if nose else None,
+                 "tail_x": tail[0] if tail else None, "tail_y": tail[1] if tail else None}
+            cols = {"body": self._c_body, "nose": self._c_nose, "tail": self._c_tail}
+            draw_body_overlay(vis, r, style=self.body_style,
+                              shape=self.marker_shape, size=self.marker_size,
+                              color_fn=cols.get,
+                              display_w=self.display_w_fn() if self.display_w_fn else None)
         self.preview.emit(vis)
 
 

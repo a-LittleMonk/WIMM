@@ -62,12 +62,6 @@ def build_geometry_step(host):
          _mode("square", host._apply_premade_square_arena),
          "Drop a centered square arena; drag the corners to fine-tune."),
     ]
-    # "Auto — from movement (next run)" is gated behind an Extra Features
-    # toggle (off by default). Re-enable from launcher → Settings → Extra
-    # features.
-    if host.config.get("enable_auto_movement_arena", False):
-        items.append(("Auto — from movement (next run)", "movement",
-                      _mode("movement", host._enable_auto_movement_arena), None))
     row, arena_btn, redraw_btn, clear_btn = cu.define_row(
         host, items, on_clear=host._clear_arena, attr="btn_define_arena")
     layout.addLayout(row)
@@ -330,14 +324,7 @@ def _build_object_block(host, obj_id):
 def _set_arena_mode(host, mode_key):
     """Stash the arena define-mode the same way OF's geometry step does
     (so apply_settings / snapshot have a value to read)."""
-    if mode_key != "movement":
-        host._arena_auto_movement = False
     host._arena_define_mode = mode_key
-    if hasattr(host, "_refresh_arena_mode_chip"):
-        try:
-            host._refresh_arena_mode_chip()
-        except Exception:
-            pass
 
 
 def _on_name_changed(host, obj_id, text):

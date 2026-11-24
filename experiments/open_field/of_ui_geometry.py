@@ -35,16 +35,13 @@ def _step_geometry_of(host):
     menu = QMenu(host.btn_define_arena)
     _actions = {}
 
-    def _wire(label, fn, mode_key, clear_movement=True):
+    def _wire(label, fn, mode_key):
         act = menu.addAction(label)
-        _actions[mode_key] = (label, fn, clear_movement)
+        _actions[mode_key] = (label, fn)
 
-        def run(_checked=False, lbl=label, f=fn, mk=mode_key, clr=clear_movement):
-            if clr:
-                host._arena_auto_movement = False
+        def run(_checked=False, lbl=label, f=fn, mk=mode_key):
             host._arena_define_mode = mk
             host.btn_define_arena.setText(lbl)
-            host._refresh_arena_mode_chip()
             f()
         act.triggered.connect(run)
         return act
@@ -56,30 +53,13 @@ def _step_geometry_of(host):
         "Drag the corners to fine-tune."
     )
 
-    # "Auto — from movement (next run)" is gated behind an Extra Features
-    # toggle (off by default). Re-enable from launcher → Settings → Extra
-    # features. The default-assignment code in experiment_tab /
-    # experiment_batch_tab is gated on the same flag.
-    if host.config.get("enable_auto_movement_arena", False):
-        act_movement = _wire("Auto — from movement (next run)",
-                              host._enable_auto_movement_arena,
-                              "movement", clear_movement=False)
-        act_movement.setToolTip(
-            "Don't define an arena now. On the next tracking run, the arena "
-            "will be auto-built from the convex hull of the mouse's path "
-            "(simplified to a 4-sided polygon). Shape grows live as the "
-            "mouse moves."
-        )
     host.btn_define_arena.setMenu(menu)
 
     def _redraw():
         mk = getattr(host, "_arena_define_mode", None) or "manual"
-        label, fn, clr = _actions.get(mk, _actions["manual"])
-        if clr:
-            host._arena_auto_movement = False
+        label, fn = _actions.get(mk, _actions["manual"])
         host._arena_define_mode = mk
         host.btn_define_arena.setText(label)
-        host._refresh_arena_mode_chip()
         fn()
 
     host.btn_redraw_arena = host._btn("Redraw")
@@ -97,28 +77,6 @@ def _step_geometry_of(host):
     arow.addWidget(host.btn_redraw_arena)
     arow.addWidget(host.btn_clear_arena)
     layout.addLayout(arow)
-
-    # Padding — only relevant for auto-movement mode.
-    host._arena_pad_widget = QWidget()
-    pad_row = QHBoxLayout(host._arena_pad_widget)
-    pad_row.setContentsMargins(0, 0, 0, 0)
-    pad_row.addWidget(QLabel("Auto-arena padding:"))
-    host.spin_arena_pad_pct = QDoubleSpinBox()
-    host.spin_arena_pad_pct.setRange(0.0, 50.0)
-    host.spin_arena_pad_pct.setDecimals(1)
-    host.spin_arena_pad_pct.setSingleStep(1.0)
-    host.spin_arena_pad_pct.setSuffix(" %")
-    host.spin_arena_pad_pct.setFixedWidth(80)
-    host.spin_arena_pad_pct.setValue(5.0)
-    host.spin_arena_pad_pct.setToolTip(
-        "Pad the auto-detected arena outward by this fraction of its "
-        "size — mice rarely touch the wall, so without padding the "
-        "arena ends up smaller than the real cage."
-    )
-    pad_row.addWidget(host.spin_arena_pad_pct)
-    pad_row.addStretch()
-    layout.addWidget(host._arena_pad_widget)
-    host._arena_pad_widget.setVisible(False)
 
     # Backwards-compat alias used elsewhere when enabling controls.
     host.btn_arena = host.btn_define_arena
@@ -162,14 +120,10 @@ def _step_geometry_of(host):
 
     attach_info_box(grp, [
         ("Premade square arena", act_square.toolTip()),
-        ("Auto-arena padding", host.spin_arena_pad_pct),
         ("Correct perspective", host.chk_perspective),
         ("Cage shape", host.combo_cage_shape),
-    ] + ([("Auto — from movement (next run)", act_movement.toolTip())]
-         if host.config.get("enable_auto_movement_arena", False) else []))
+    ])
     act_square.setToolTip("")
-    if host.config.get("enable_auto_movement_arena", False):
-        act_movement.setToolTip("")
 
     # ── Zones card ───────────────────────────────────────────────────────
     zg, zl = common_ui.zones_card(host)
@@ -296,9 +250,6 @@ def _on_zone_mode_changed(host):
     mode = host.combo_zone_mode.currentData()
     host.zone_drawer.set_zone_mode(mode)
     host.config["zone_mode"] = mode
-    host.spin_center_pct.blockSignals(True)
-    host.spin_center_pct.setValue(25 if mode == "grid" else 50)
-    host.spin_center_pct.blockSignals(False)
     try:
         from core import logger
         logger.info(

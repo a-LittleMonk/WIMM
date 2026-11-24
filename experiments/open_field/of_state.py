@@ -237,4 +237,8 @@ def _compute_cell_times_through(host, last_idx):
         periph = _periphery_cum_times(host)
         if periph is not None:
             times["P"] = float(periph[n - 1])
+            # Entries: confirmed periphery visits (in arena, outside center).
+            area = host._cell_id_cache["area_mask"][:n]
+            _t, entries["P"] = debounce_bool_runs(
+                area & ~(center_mask[:n] & area), fps, min_dwell)
     return times, entries

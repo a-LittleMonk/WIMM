@@ -138,9 +138,13 @@ def _draw_cell_overlay_cv2(host, frame, active_cell, cell_times, cell_entries,
         _draw_tag(frame, tx, ty,
                   _center_tag_text(host, cell_times, cell_entries, draw_timer, draw_entries),
                   host._bgr("center_zone"), (38, 24, 18), sc)
-        if zd.zone_mode != "grid" and draw_timer:
-            _periph_tag(host, frame, arena,
-                        f"PERIPHERY · {(cell_times or {}).get('P', 0.0):.1f}s", sc)
+        if zd.zone_mode != "grid":
+            bits = ["PERIPHERY"]
+            if draw_timer:
+                bits.append(f"{(cell_times or {}).get('P', 0.0):.1f}s")
+            if draw_entries:
+                bits.append(f"#{int((cell_entries or {}).get('P', 0))}")
+            _periph_tag(host, frame, arena, " · ".join(bits), sc)
 
 
 def _draw_zones_on_frame_cv2(host, frame, draw_arena=True,

@@ -15,7 +15,7 @@ from gui.theme import apply_theme, load_aurora, register_bundled_fonts
 
 def _keep_log_on_disk():
     """WARN / ERROR entries also go to settings/wimm.log, so they survive
-    closing the app (View → Logs only holds this session)."""
+    closing the app (the Logs button only holds this session)."""
     from core import logger
     from core.app_paths import SETTINGS_DIR, ensure_dir
     path = os.path.join(ensure_dir(SETTINGS_DIR), "wimm.log")
@@ -43,7 +43,7 @@ def _report_crash(kind, value, tb):
         from PyQt5.QtWidgets import QMessageBox
         QMessageBox.critical(None, "Unexpected error",
                              f"{value}\n\nThe app keeps running; details are in "
-                             "View → Logs and settings/wimm.log.")
+                             "the Logs button and settings/wimm.log.")
 
 
 def main():

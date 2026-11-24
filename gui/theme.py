@@ -80,7 +80,7 @@ GLASS_DARK = {
 # the panel colour follows the palette (auto_panel()). "accent" is the
 # highlight colour (buttons, selection, sliders, focus); all accent shades
 # are derived from it.
-# Users edit these in View → Appearance; saved under config["aurora"].
+# Users edit these in Appearance button; saved under config["aurora"].
 AURORA_MAX = 6
 AURORA_ANCHORS = [  # (x, y, radius) as fractions of the window
     (0.08, 0.02, 0.72), (0.98, 0.98, 0.78), (0.88, 0.06, 0.42),
@@ -312,7 +312,7 @@ class _SafeSignal:
 
 class _Notifier(QObject):
     _changed = pyqtSignal(str)
-    _aurora_changed = pyqtSignal()  # backdrop palette edited (View → Appearance)
+    _aurora_changed = pyqtSignal()  # backdrop palette edited (Appearance button)
 
     @property
     def changed(self):
@@ -1046,7 +1046,7 @@ def apply_theme(app, new_mode=None):
     Pass `new_mode` ("light" / "dark") to switch tokens first; the
     `notifier.changed` signal is emitted so custom-painted widgets refresh.
     """
-    # Always re-derive: the palette may have changed (View → Appearance).
+    # Always re-derive: the palette may have changed (Appearance button).
     set_mode(new_mode if new_mode is not None else _mode)
     if app.style().objectName().lower() != "fusion":
         app.setStyle("Fusion")

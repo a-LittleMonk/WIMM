@@ -14,7 +14,7 @@ class EPMExperiment(Experiment):
     _OF_ONLY_VIDEO_CONFIG_KEYS = (
         "cage_w_cm", "cage_h_cm", "cage_shape",
         "zone_mode", "center_pct",
-        "arena_define_mode", "arena_pad_pct", "arena_auto_movement",
+        "arena_define_mode",
         "cell_min_dwell", "cell_min_dwell_s", "perspective", "arrow",
     )
 
@@ -289,7 +289,6 @@ class EPMExperiment(Experiment):
         # paintEvent doesn't draw the giant arena + 4×4 grid over the
         # plus-maze view.
         snapshot["arena"] = None
-        snapshot["arena_auto_movement"] = False
         if zd.arena is not None:
             zd.arena = None
             zd.update()
