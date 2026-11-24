@@ -1,0 +1,46 @@
+<!--
+id: output-tab
+title: The Output tab — results of one video
+section: 4. Results
+order: 1
+keywords: output, results, summary, raw data, cell info, video config, units, copy table, numbers, metrics, regions, corner, side, middle
+-->
+<h1>The Output tab</h1>
+<p>Shows the results of the video shown in the panel. Click another video in the Queue
+to see its results. The green <b>Tracked</b> badge means this video has results.</p>
+<p><img src="img/out_summary.png" width="620"></p>
+
+<h2>Summary</h2>
+<p>Every measure, grouped (Recording, Locomotion, the zones of the test …). Use the
+<b>Distance</b>, <b>Speed</b> and <b>Time</b> boxes to show the values in other units
+(cm / mm / m, cm/s … km/h, s / min); the Excel files contain every unit anyway.
+<b>Copy table</b> copies the table for pasting into Excel or a document.
+The measures are explained on each experiment's page and in
+<a href="topic:measures-locomotion">Locomotion</a> / <a href="topic:measures-zones">Zone measures</a>.</p>
+<p>Top right: <b>Move threshold</b> and <b>Time bin</b> show the analysis settings;
+<b>Edit</b> changes them here — results are recomputed instantly, without tracking again.</p>
+
+<h2>Raw data</h2>
+<p>One row per frame: frame number, time (s), X / Y position (px), step distance, speed,
+the zone the mouse is in, and the nose / tail positions. Corrected and interpolated
+frames are counted in the Summary (<i>Corrected Frames (%)</i>).
+Column details: <a href="topic:excel-files">Inside the Excel files</a>. <img src="img/out_rawdata.png" width="620"></p>
+
+<h2>Graphs</h2>
+<p>Trajectory, heatmap, speed over time, speed histogram, zone time, and the test's
+own graphs. → <a href="topic:graphs">Graphs</a></p>
+
+<h2>Cell info (Open Field)</h2>
+<p><img src="img/out_cellinfo.png" width="620"></p>
+<p>The 16 cells of the 4×4 grid, each labelled Corner, Side or Middle (click a cell to
+relabel it; <b>Apply standard 4×4</b> restores the default; <b>Clear all → Custom</b>
+starts empty). <i>Aggregated by region</i> sums time, entries and % time per label.
+Per-cell values need <b>Grid 4×4</b> in <a href="topic:card-zones">Zones</a>.</p>
+
+<h2>Video config</h2>
+<p>Every setting this video was analysed with, and the app version — the same list as
+the <i>Video Config</i> sheet of the Excel file. Use it for the methods section.</p>
+
+<h2>Export to Excel</h2>
+<p>Saves this video's results (Summary, Raw Data, Time Bins, Video Config, Graphs) plus
+CSV copies to a folder you choose. Batches: see <a href="topic:export">Exporting</a>.</p>

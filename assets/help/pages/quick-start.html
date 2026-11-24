@@ -1,0 +1,66 @@
+<!--
+id: quick-start
+title: Quick start — your first analysis
+section: 1. Getting started
+order: 2
+keywords: first, tutorial, begin, beginner, how to start, step by step, new user
+-->
+<h1>Quick start — your first analysis</h1>
+<p>This walks through one Open Field video from start to Excel. Every other
+experiment works the same way; only the arena and zones differ (see
+<a href="topic:welcome">Experiments</a>).</p>
+
+<h2>Step 1 — Open the experiment</h2>
+<p>On the start page, choose the test in <b>Open an experiment</b> and click <b>Open</b>.
+(<b>New experiment → Create</b> designs your own test — see
+<a href="topic:exp-custom">Custom Experiment</a>.)</p>
+<p><img src="img/launcher.png" width="620"></p>
+
+<h2>Step 2 — Add your videos</h2>
+<p>Click <b>+ Add</b> at the top of the Queue, or drag video files onto the Queue
+(.mp4 .avi .mov .mkv .wmv .flv). The first video opens in the preview.</p>
+<p><img src="img/of_empty.png" width="620"></p>
+
+<h2>Step 3 — Check the arena</h2>
+<p>A square arena is placed automatically. Drag its four corners onto the floor of
+your box, or open <b>Arena (03)</b> and choose <b>Manual — click 4 corners</b> to click
+them yourself. The center zone follows the arena automatically.
+→ <a href="topic:card-arena">Arena</a>, <a href="topic:card-zones">Zones</a></p>
+
+<h2>Step 4 — Set the scale</h2>
+<p>Open <b>Scale (05)</b>. Either enter the real cage size (<b>Auto · cage</b>) or click
+<b>Manual line</b> → <b>Draw line</b>, drag a line along something of known length (for
+example one wall) and type its real length in cm. Without a scale, distances are in
+pixels. → <a href="topic:card-scale">Scale</a></p>
+<p><img src="img/of_loaded.png" width="620"></p>
+<p class="cap">The arena outline sits on the inner edges of the walls; the scale (13.1 px/cm)
+comes from the 40 × 40 cm floor size. The red shape is what the tracker detects as the
+mouse.</p>
+
+<h2>Step 5 — Check the detection</h2>
+<p>Scrub through the video with the slider under the preview. The red marker must sit
+on the mouse in every part of the video. If it doesn't, open <b>Detection (06)</b> and
+follow <a href="topic:card-detection">Detection</a>.</p>
+
+<h2>Step 6 — Run</h2>
+<p>Click <b>Run all</b> (bottom left), or the ▶ on one video's row. The row shows the
+progress; when it says <b>Completed</b> the results are ready. A copy of each video's
+results is saved automatically to the backup folder. → <a href="topic:run">Running</a></p>
+<p><img src="img/running.png" width="620"></p>
+
+<h2>Step 7 — Look at the results</h2>
+<p>Open the <b>Output</b> tab: Summary (all numbers), Raw data (every frame), Graphs,
+and the settings used. Open <b>Tracking issues</b> under the preview to check frames
+where the tracking may be wrong. → <a href="topic:output-tab">Output</a>,
+<a href="topic:tracking-issues">Tracking issues</a></p>
+<p><img src="img/out_summary.png" width="620"></p>
+
+<h2>Step 8 — Export</h2>
+<p>In the <b>Export</b> tab, <b>Combined Excel</b> puts every video of the batch in one
+workbook; <b>Export to Excel</b> in the Output tab saves the loaded video alone.
+→ <a href="topic:export">Exporting</a></p>
+
+<div class="tip">Doing a batch? Set everything up on <b>one</b> video, then press <b>Run all</b>:
+every data-affecting setting is taken from the video shown in the panel; only the arena,
+zones, scale line, crop and animal information stay per video.
+→ <a href="topic:batch-rules">Batch rules</a></div>

@@ -114,17 +114,20 @@ def _snake(key, base_len):
     k = str(key)
     if not k or " " in k or "(" in k or k != k.lower():
         return None
+    # speed with explicit cm unit
+    for tail in ("_cm_per_s", "_cmps"):
+        if k.endswith(tail) and "speed" in k:
+            stem = k[:-len(tail)]
+            return _Kind("speed", stem, lambda u: f"{stem}_{_SNAKE[u]}")
+    # other rates ('..._px_per_s') are not times
+    if k.endswith("_per_s"):
+        return None
     # time: '..._s'
     if k.endswith("_s") and len(k) > 2:
         if k.startswith(_NOT_SECONDS_PREFIXES) or k == "arm_s":
             return None
         stem = k[:-2]
         return _Kind("time", stem, lambda u: f"{stem}_{_SNAKE[u]}")
-    # speed with explicit cm unit
-    for tail in ("_cm_per_s", "_cmps"):
-        if k.endswith(tail) and "speed" in k:
-            stem = k[:-len(tail)]
-            return _Kind("speed", stem, lambda u: f"{stem}_{_SNAKE[u]}")
     # distance with explicit cm unit
     if k.endswith("_cm") and "distance" in k:
         stem = k[:-3]
@@ -199,7 +202,7 @@ def _fmt(v):
     s = f"{v:.{d}f}"
     if "." in s:
         s = s.rstrip("0").rstrip(".")
-    return s
+    return "0" if s == "-0" else s  # tiny negatives round to '-0'
 
 
 def display_row(key, value, units, base_len="cm"):

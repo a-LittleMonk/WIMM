@@ -1,0 +1,36 @@
+<!--
+id: batch-rules
+title: What a batch shares and what stays per video
+section: 3. Running the analysis
+order: 2
+keywords: batch, shared settings, per video, settings video, run all, consistency, counterbalancing, same settings
+-->
+<h1>What a batch shares and what stays per video</h1>
+<p>For results that can be compared, every animal of a batch must be analysed the same
+way. <b>Run all</b> therefore takes every setting that changes the numbers from one
+video — the <b>settings video</b> (the one shown in the panel when you press Run all) —
+and only the geometry that differs per recording from each video itself.</p>
+
+<table width="100%">
+<tr><th>Taken from the settings video (same for all)</th><th>Kept per video</th></tr>
+<tr><td valign="top"><ul>
+<li>Detection: sensitivity, white-mouse switch, brightness, contrast, blur, gamma, sharpen, CLAHE, max blob</li>
+<li>Tracking: model, process resolution, frame skip, smoothing, nose detection</li>
+<li>Analysis: move threshold, time bin, min dwell</li>
+<li>FPS override and <b>trim</b> (start and length)</li>
+<li>Zone sizes: center %, cage shape and size, arm width …</li>
+</ul></td>
+<td valign="top"><ul>
+<li>Arena outline and perspective correction</li>
+<li>Zones drawn on the video (maze arms, hub, object places)</li>
+<li>Calibration line and its length</li>
+<li>Crop</li>
+<li>Animal information (ID, group, sex …)</li>
+<li>Per-animal assignments: drug-paired side, stranger side, object roles, platform quadrant, trial type, baited arms (counterbalancing)</li>
+</ul></td></tr>
+</table>
+
+<div class="tip">To check: the <b>Video Config</b> sheet of each export lists every setting
+that video was run with, plus the app version.</div>
+<div class="note">To try different settings on the same video and pick the best, use
+<a href="topic:multi-run">Multi-Run</a>, not separate batches.</div>

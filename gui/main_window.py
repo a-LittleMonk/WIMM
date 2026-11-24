@@ -46,18 +46,13 @@ class _NoScrollFilter(QObject):
 
 # Settings live inside the app folder (settings/mice_tracker.json), never in
 # the user's home folder — every copy of the app keeps its own settings.
-from core.app_paths import CONFIG_PATH, ensure_dir
+from core.app_paths import CONFIG_PATH, ensure_dir, read_json, write_json, notice
 
 
 def load_config():
-    """Read settings/mice_tracker.json (empty dict when missing / unreadable)."""
-    if os.path.exists(CONFIG_PATH):
-        try:
-            with open(CONFIG_PATH) as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {}
+    """Read settings/mice_tracker.json ({} when missing; a damaged file is
+    set aside, not overwritten — see read_json)."""
+    return read_json(CONFIG_PATH)
 
 
 class _FadeOverlay(QWidget):
@@ -164,10 +159,22 @@ class MainWindow(QMainWindow):
         self._no_scroll_filter = _NoScrollFilter()
         QApplication.instance().installEventFilter(self._no_scroll_filter)
         self._build_ui()
+        QTimer.singleShot(0, self.show_notices)
+
+    def show_notices(self):
+        """Tell the user about problems queued with core.app_paths.notice
+        (damaged settings file, unreachable backup folder …)."""
+        from core.app_paths import pop_notices
+        msgs = pop_notices()
+        if msgs:
+            QMessageBox.warning(self, "Mice Tracker", "\n\n".join(msgs))
 
     def _build_ui(self):
-        self.setWindowTitle("Mice Tracker")
-        self.setMinimumSize(900, 560)
+        from core.version import APP_VERSION
+        self.setWindowTitle(f"Mice Tracker {APP_VERSION}")
+        # queue 200 + configuration 260 + preview 420 (their minimums) plus
+        # splitter handles and margins: below this the preview is cut off.
+        self.setMinimumSize(1000, 600)
 
         # The View / Settings menus live inside the app header (redesign v2),
         # so they use their own QMenuBar instead of the window's native one.
@@ -371,7 +378,8 @@ class MainWindow(QMainWindow):
         h.addWidget(b_logs)
         b_help = QPushButton("Help")
         b_help.setFixedHeight(28)
-        b_help.setToolTip("Explanation of every setting, per experiment (F1)")
+        b_help.setToolTip("Help: step-by-step guides, every experiment, result "
+                          "and setting, with search (F1)")
         b_help.clicked.connect(self._open_help)
         h.addWidget(b_help)
         QShortcut(QKeySequence("F1"), self, activated=self._open_help)
@@ -388,7 +396,7 @@ class MainWindow(QMainWindow):
             id(self.nor_tab): "Novel Object",
             id(self.epm_tab): "Elevated Plus",
             **{id(t): REG_TITLES[k] for k, t in self._reg_tabs.items()},
-        }.get(id(current), "Open Field") if current is not None else "Open Field"
+        }.get(id(current)) if current is not None else None   # start page: Contents
         if getattr(self, "_help_dialog", None) is None:
             self._help_dialog = HelpDialog(self.config, self)
         self._help_dialog.show_tab(title)
@@ -645,6 +653,23 @@ class MainWindow(QMainWindow):
 
     def set_tracking_status(self, text):
         self.pill.show_text(text)
+
+    def closeEvent(self, e):
+        """Closing mid-run would hide the window while tracking keeps going
+        (it runs on this thread): ask, and stop the tracker on Yes."""
+        from gui.experiment_batch_tab import ExperimentBatchTab
+        running = ExperimentBatchTab._active_run
+        if running is not None:
+            ans = QMessageBox.question(
+                self, "Tracking in progress",
+                "A video is still being tracked. Stop tracking and quit?\n"
+                "The unfinished video will not be saved.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if ans != QMessageBox.Yes:
+                e.ignore()
+                return
+            running._stop()
+        super().closeEvent(e)
 
     def _show_launcher(self):
         self.stack.setCurrentIndex(0)
@@ -1028,9 +1053,8 @@ class MainWindow(QMainWindow):
         return load_config()
 
     def _save_config(self):
-        ensure_dir(os.path.dirname(CONFIG_PATH))
-        # Write to a temp file first so a crash mid-write can't wipe settings.
-        tmp = CONFIG_PATH + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(self.config, f, indent=2)
-        os.replace(tmp, CONFIG_PATH)
+        try:
+            write_json(CONFIG_PATH, self.config)
+        except OSError as e:   # read-only / synced folder: keep running
+            logger.error(f"Could not save settings ({CONFIG_PATH}): {e}", source="settings")
+            notice(f"Settings could not be saved to {CONFIG_PATH}: {e}")

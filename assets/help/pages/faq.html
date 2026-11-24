@@ -1,0 +1,41 @@
+<!--
+id: faq
+title: Questions and answers
+section: 8. Problems and answers
+order: 2
+keywords: faq, questions, answers, validation, publish, methods, cite, accuracy, compare anymaze, ethovision, human scoring, blinded
+-->
+<h1>Questions and answers</h1>
+
+<h3>Which settings should I report in a paper?</h3>
+<p>The <i>Video Config</i> sheet lists all of them, with the app version. Usually:
+tracking model, sensitivity, smoothing, process resolution, frame skip, min dwell, move
+threshold, zone sizes, scale method and px/cm, and the % of corrected frames.</p>
+
+<h3>How do I know the tracking is right?</h3>
+<p>Check the detection rate (≥ 90 %), the <a href="topic:tracking-issues">tracking issues</a>,
+and watch the trajectory on a few videos. For a study, compare a sample of videos with a
+blinded human scorer (and, if available, another tracking program).</p>
+
+<h3>Can I change settings after tracking?</h3>
+<p>Analysis settings (move threshold, time bin, min dwell) and zone sizes recompute the
+results at once. Detection and tracking settings need the video to be run again.</p>
+
+<h3>Do I have to set up every video?</h3>
+<p>Only its arena (and its own zones / scale line / crop where they differ). Everything
+else comes from the settings video in Run all (<a href="topic:batch-rules">Batch rules</a>).
+Copy shared geometry with <a href="topic:apply-to">Apply to</a>.</p>
+
+<h3>Why don't my zone percentages add up to 100 %?</h3>
+<p>Frames where the mouse was not detected belong to no zone.</p>
+
+<h3>Does the app exclude animals (e.g. too few entries)?</h3>
+<p>No. Flags such as <i>low_activity_flag</i> are for information; you decide.</p>
+
+<h3>Where are my results if I forgot to export?</h3>
+<p>Every run writes a backup Excel file per video to the backup folder
+(<a href="topic:files">Files and folders</a>).</p>
+
+<h3>Can two people analyse on two computers with the same settings?</h3>
+<p>Yes: export the detection preset (<a href="topic:card-detection">Detection → Export…</a>)
+and import it on the other computer; use the same app version.</p>

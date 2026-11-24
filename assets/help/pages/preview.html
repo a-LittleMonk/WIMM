@@ -1,0 +1,51 @@
+<!--
+id: preview
+title: The video preview and player
+section: 2. Setting up a video
+order: 9
+keywords: preview, player, play, pause, scrub, timeline, frame, speed, view, marker, trail, overlay, legend, keyboard, step frame
+-->
+<h1>The video preview and player</h1>
+<p><img src="img/tab_preview.png" width="620"></p>
+
+<h2>What is drawn</h2>
+<ul>
+<li>The arena outline and the zones (with their names, e.g. CENTER 50 %, PERIPHERY).</li>
+<li>The detected mouse (coloured area) and the body marker (red dot).</li>
+<li>The calibration line (yellow, only when the scale is set with <i>Manual line</i>) and a 10 cm scale bar.</li>
+<li>The legend under the video lists what is shown; on the right: the scale (px/cm),
+the tracking model and sensitivity.</li>
+</ul>
+
+<h2>View ▾ (top right)</h2>
+<table width="100%">
+<tr><th>Option</th><th>Meaning</th></tr>
+<tr><td>Marker</td><td>Off, Center, or Center + nose + tail; its size and colour.</td></tr>
+<tr><td>Info tag next to marker</td><td>Animal ID, speed and position beside the marker.</td></tr>
+<tr><td>Bounding ellipse</td><td>An ellipse around the detected body.</td></tr>
+<tr><td>Show trail</td><td>The path behind the mouse; length in frames (0 / All frames = whole path); <i>Fade older segments</i>.</td></tr>
+<tr><td>Smoothing of the drawn path</td><td>Moving average of the displayed trail only (does not change the numbers).</td></tr>
+</table>
+<p>These change only the picture, never the results.</p>
+
+<h2>Player</h2>
+<ul>
+<li>⏮ ◀ ▶ ▶ ⏭: first frame, one frame back, play / pause, one frame forward, last frame.</li>
+<li>0.5× 1× 1.5× 2×: playback speed.</li>
+<li>Time and frame number of the shown frame.</li>
+<li>The timeline: drag to jump. After a run, red marks show frames flagged in
+<a href="topic:tracking-issues">Tracking issues</a>.</li>
+<li><b>Tracking issues (n)</b>: opens the check of suspicious frames.</li>
+</ul>
+
+<h2>Keyboard (click the preview first)</h2>
+<table width="100%">
+<tr><th>Key</th><th>Action</th></tr>
+<tr><td><kbd>←</kbd> / <kbd>→</kbd></td><td>1 frame back / forward</td></tr>
+<tr><td><kbd>Shift</kbd>+<kbd>←</kbd>/<kbd>→</kbd></td><td>10 frames</td></tr>
+<tr><td><kbd>Ctrl</kbd>+<kbd>←</kbd>/<kbd>→</kbd></td><td>100 frames</td></tr>
+<tr><td><kbd>Home</kbd> / <kbd>End</kbd></td><td>first / last frame</td></tr>
+<tr><td><kbd>N</kbd></td><td>next frame where the mouse was not found</td></tr>
+<tr><td><kbd>D</kbd> / <kbd>M</kbd> / <kbd>E</kbd></td><td>Detected area / Show mask / View effects on-off</td></tr>
+</table>
+<p>All shortcuts: <a href="topic:shortcuts">Keyboard shortcuts</a>.</p>

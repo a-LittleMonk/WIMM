@@ -59,6 +59,10 @@ STATUS_RUNNING = "running"
 STATUS_DONE   = "done"
 STATUS_ERROR  = "error"
 
+
+class StoppedByUser(RuntimeError):
+    """The user pressed Stop: the partial track is dropped, not saved."""
+
 STATUS_ICONS = {
     STATUS_NEEDS:   ("⚙", "#8A8F95",    "Needs setup — click row to configure"),
     STATUS_READY:   ("⏳", "#1B2436", "Configured — ready to run"),
@@ -120,6 +124,9 @@ def _px_per_cm_for(s, exp, size):
         return None
     vw, vh = size
     cp1, cp2, cm = s.get("calib_p1"), s.get("calib_p2"), float(s.get("calib_cm") or 0)
+    if mode in ("manual", None) and cp1 and cp2 and cm <= 0:
+        raise RuntimeError("The calibration line has no real length — enter its "
+                           "length in cm in the Scale step.")
     if mode in ("manual", None) and cp1 and cp2 and cm > 0:
         d = ((cp2[0] - cp1[0]) * vw) ** 2 + ((cp2[1] - cp1[1]) * vh) ** 2
         if d > 0:
@@ -129,8 +136,8 @@ def _px_per_cm_for(s, exp, size):
     try:
         return exp.compute_auto_px_per_cm(s, size)
     except Exception as e:
-        logger.warn(f"auto px/cm failed: {e}", source="batch")
-        return None
+        # Falling back to px would mix px and cm animals in one sheet.
+        raise RuntimeError(f"Automatic scale (px/cm) failed: {e}") from e
 
 
 PER_VIDEO_KEYS = frozenset({
@@ -169,6 +176,37 @@ def merge_batch_settings(shared_src, own):
             continue
         merged[k] = copy.deepcopy(v)
     return merged
+
+
+def zone_pixels(arena_norm, center_norm, frame_size, warped):
+    """(arena_px, center_px) in the frame the tracker reports positions
+    in. With perspective on (`warped`) the arena is the whole straightened
+    frame, and the center — built from / drawn on that straightened arena
+    — is scaled by it like the panel does, never warped a second time."""
+    W, H = frame_size
+    to_px = lambda poly: [(int(x * W), int(y * H)) for x, y in poly] if poly else None
+    if warped:
+        return [(0, 0), (W, 0), (W, H), (0, H)], to_px(center_norm)
+    return to_px(arena_norm), to_px(center_norm)
+
+
+def _perspective_wanted(s):
+    """Perspective correction switched on for this video (any test)."""
+    return bool(s.get("perspective") or s.get("ym_perspective")
+                or s.get("epm_perspective"))
+
+
+def check_arena(arena_px, frame_size):
+    """Refuse an arena with (almost) no area — four clicks on one spot or
+    on a line track nothing and give a meaningless auto scale."""
+    if not arena_px or len(arena_px) < 3:
+        return
+    area = 0.5 * abs(sum(x0 * y1 - x1 * y0 for (x0, y0), (x1, y1)
+                         in zip(arena_px, arena_px[1:] + arena_px[:1])))
+    W, H = frame_size
+    if area < 0.001 * W * H:
+        raise RuntimeError("The arena has almost no area (its corners are on one "
+                           "spot or one line). Redraw it.")
 
 
 def derive_center_zone(s, exp_key):
@@ -637,9 +675,17 @@ class TrimCropDialog(QDialog):
             self.lbl_showing.setText(f"Showing: {which} (frame {frame_idx})")
 
     def _on_handle_moved(self, which, frame_idx):
-        # Update labels and show the frame for whichever handle just moved.
+        # Labels follow every move; the frame (an exact seek, ~0.2 s) is
+        # shown once the handle pauses for 60 ms instead of on every
+        # drag event, which queued up seeks and froze the dialog.
         self._update_labels()
-        self._show_frame_at(frame_idx, which)
+        self._pending_frame = (frame_idx, which)
+        if not hasattr(self, "_frame_timer"):
+            self._frame_timer = QTimer(self)
+            self._frame_timer.setSingleShot(True)
+            self._frame_timer.timeout.connect(
+                lambda: self._show_frame_at(*self._pending_frame))
+        self._frame_timer.start(60)
 
     def _nudge(self, which, delta_s):
         """Shift the start or end handle by `delta_s` seconds, frame-quantized.
@@ -1071,6 +1117,11 @@ class ExcelPreviewDialog(QDialog):
 class ExperimentBatchTab(QWidget):
     """Main tab: video-list-centric Open Field workflow."""
 
+    # The tab running a tracker right now, shared by every experiment tab:
+    # tracking runs on the UI thread, so a second run started from another
+    # button would nest inside the first and break Stop.
+    _active_run = None
+
     # Subclasses (Y-Maze) override to embed a different experiment tab.
     embedded_tab_class = OpenFieldTab
 
@@ -1090,6 +1141,10 @@ class ExperimentBatchTab(QWidget):
         self.row_widgets = {}
         self._stop_flag = False
         self._tracker_thread = None
+        # Per-run warnings shown when a run / batch ends.
+        self._low_detection = []
+        self._truncated = []
+        self._failed = []
         # Lock to drop row clicks while a video load is in flight.
         # Prevents stacking up cv2 reads / bg-builder threads on rapid clicks.
         self._loading = False
@@ -1781,10 +1836,13 @@ class ExperimentBatchTab(QWidget):
         out_folder = self._ask_export_folder("Save combined raw data to…")
         if not out_folder:
             return
-        self._prepare_exports()
+        if not self._prepare_exports():
+            return
         from datetime import datetime
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-        out_path = os.path.join(out_folder, f"open_field_raw-{ts}.xlsx")
+        exp_key = getattr(getattr(self, "embedded_tab", None) and self.embedded_tab.experiment,
+                          "key", None) or "experiment"
+        out_path = os.path.join(out_folder, f"{exp_key}_raw-{ts}.xlsx")
         animals = []
         for path, data in self._completed_data.items():
             meta = (self.video_settings.get(path) or {}).get("metadata") or {}
@@ -1804,12 +1862,14 @@ class ExperimentBatchTab(QWidget):
             from gui.notify import show_done
             show_done(self, "Raw data exported",
                       f"{len(animals)} animal(s) in one workbook.", path=out_path)
+            from gui.notify import show_notices
+            show_notices(self)
         except Exception as e:
             import traceback
             traceback.print_exc()
-            self.lbl_export_status.setText(f"Raw-data export failed: {e}")
-            from gui.notify import show_done
-            show_done(self, "Raw-data export failed", str(e), kind="err")
+            from gui.notify import show_done, explain_error
+            self.lbl_export_status.setText(f"Raw-data export failed: {explain_error(e)}")
+            show_done(self, "Raw-data export failed", explain_error(e), kind="err")
 
     # ── Export graph style (preset) ─────────────────────────────────────
     def _chosen_export_preset(self):
@@ -1900,6 +1960,9 @@ class ExperimentBatchTab(QWidget):
                             out[gname] = et._fig_to_pixmap_and_bytes(fig)[1]
                     except Exception as e:
                         logger.warn(f"Export render of '{gname}' failed: {e}", source="graphs")
+                        from core.app_paths import notice
+                        notice(f"The graph '{gname}' could not be drawn ({e}), so it "
+                               "is missing from the export.")
             finally:
                 et._force_fig_mode = None
         return out
@@ -1910,16 +1973,27 @@ class ExperimentBatchTab(QWidget):
         from PyQt5.QtWidgets import QApplication
         shown = self._embedded_loaded_path
         QApplication.setOverrideCursor(Qt.WaitCursor)
+        skipped = []
         try:
             for path in list(self._completed_data):
                 if self._embedded_loaded_path != path:
                     self._load_into_embedded(path, read_only=True)
+                if self._embedded_loaded_path != path:
+                    # Load failed: the panel still shows another video, so
+                    # fn would export that animal's graphs under this name.
+                    skipped.append(path)
+                    continue
                 fn(path)
                 QApplication.processEvents()
         finally:
             if shown and self._embedded_loaded_path != shown:
                 self._load_into_embedded(shown)
             QApplication.restoreOverrideCursor()
+        if skipped:
+            QMessageBox.warning(
+                self, "Some videos skipped",
+                "These videos could not be opened, so their graphs were not "
+                "exported:\n\n" + "\n".join(f"  • {os.path.basename(p)}" for p in skipped))
 
     # ── Keep exports identical to what the app shows ─────────────────────
 
@@ -1949,7 +2023,9 @@ class ExperimentBatchTab(QWidget):
         data = self._completed_data.get(path) if path else None
         et = self.embedded_tab
         if not data or et._raw_results is None or et.raw_df is None:
-            return
+            return False
+        if not getattr(et, "_metrics_ok", True):
+            return False   # recompute failed — keep the cache marked stale
         data["results"] = [dict(r) for r in et._raw_results]
         data["metrics"] = dict(et.metrics or {})
         data["raw_df"] = et.raw_df
@@ -1961,11 +2037,13 @@ class ExperimentBatchTab(QWidget):
         for i, row in enumerate(self._completed):
             if row and row[0] == path:
                 self._completed[i] = (row[0], row[1], dict(data["metrics"]), row[3])
+        return True
 
     def _prepare_exports(self):
         """Before a batch export: save the shown video's edits, then redo
         any video whose numbers or graphs are older than its settings /
-        the current graph style."""
+        the current graph style. False (after telling the user) when a
+        video could not be brought up to date — the export must stop."""
         if not getattr(self, "_read_only", False):
             self._capture_embedded_settings()
         self._sync_completed_from_embedded()
@@ -1974,22 +2052,34 @@ class ExperimentBatchTab(QWidget):
                  if d.get("results") and (d.get("graph_sig") != sig
                                           or d.get("settings_sig") != self._settings_sig(p))]
         if not stale:
-            return
+            return True
         from PyQt5.QtWidgets import QApplication
         shown = self._embedded_loaded_path
+        failed = []
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             for p in stale:
                 if self._embedded_loaded_path == p:
                     self.embedded_tab._recompute_metrics_and_views()
+                    ok = True
                 else:
-                    self._load_into_embedded(p, read_only=True)
-                self._sync_completed_from_embedded()
+                    ok = (self._load_into_embedded(p, read_only=True) is not False
+                          and self._embedded_loaded_path == p)
+                if not (ok and self._sync_completed_from_embedded()):
+                    failed.append(p)
                 QApplication.processEvents()
         finally:
             if shown and self._embedded_loaded_path != shown:
                 self._load_into_embedded(shown)
             QApplication.restoreOverrideCursor()
+        if failed:
+            QMessageBox.warning(
+                self, "Export stopped",
+                "These videos' numbers could not be updated to their current "
+                "settings, so nothing was exported (see View → Logs):\n\n"
+                + "\n".join(f"  • {os.path.basename(p)}" for p in failed))
+            return False
+        return True
 
     def _render_export_pngs_all(self):
         """{path: png map} in the export preset, or {} when cached images match it."""
@@ -2035,7 +2125,8 @@ class ExperimentBatchTab(QWidget):
         out_folder = self._ask_export_folder("Save SVG / PDF graphs to…")
         if not out_folder:
             return
-        self._prepare_exports()
+        if not self._prepare_exports():
+            return
         count = {"files": 0, "videos": 0}
 
         def one(path):
@@ -2056,7 +2147,8 @@ class ExperimentBatchTab(QWidget):
         out_folder = self._ask_export_folder("Save combined Excel to…")
         if not out_folder:
             return
-        self._prepare_exports()
+        if not self._prepare_exports():
+            return
         from datetime import datetime
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         exp = getattr(self.embedded_tab, "experiment", None) if hasattr(
@@ -2100,12 +2192,14 @@ class ExperimentBatchTab(QWidget):
             from gui.notify import show_done
             show_done(self, "Combined Excel saved",
                       f"Results of {len(animals)} animal(s) in one workbook.", path=out_path)
+            from gui.notify import show_notices
+            show_notices(self)
         except Exception as e:
             import traceback
             traceback.print_exc()
-            self.lbl_export_status.setText(f"Combined export failed: {e}")
-            from gui.notify import show_done
-            show_done(self, "Combined export failed", str(e), kind="err")
+            from gui.notify import show_done, explain_error
+            self.lbl_export_status.setText(f"Combined export failed: {explain_error(e)}")
+            show_done(self, "Combined export failed", explain_error(e), kind="err")
 
 
     def _build_ui(self):
@@ -2677,11 +2771,9 @@ class ExperimentBatchTab(QWidget):
         et = getattr(self, "embedded_tab", None)
         if window <= 1 or et is None or not hasattr(et, "_apply_smoothing"):
             return results
-        try:
-            return et._apply_smoothing(results, window)
-        except Exception as e:
-            logger.warn(f"Smoothing skipped: {e}", source="tracking")
-            return results
+        # No fallback to the unsmoothed track: smoothing changes distance,
+        # so a failure must stop the run, not quietly change the numbers.
+        return et._apply_smoothing(results, window)
 
     def _has_arena(self, path):
         """True if `path` has an arena polygon saved OR is queued for
@@ -2796,7 +2888,27 @@ class ExperimentBatchTab(QWidget):
         v.addWidget(bb)
         return dlg.exec_() == QDialog.Accepted
 
-    def _run_all(self):
+    def _claim_run(self):
+        """True and marks this tab as running, or tells the user another
+        run is going and returns False."""
+        if ExperimentBatchTab._active_run is not None:
+            QMessageBox.information(
+                self, "Run in progress",
+                "A video is being tracked. Wait for it to finish, or press "
+                "Stop, before starting another run.")
+            return False
+        ExperimentBatchTab._active_run = self
+        return True
+
+    def _run_all(self, *_):
+        if not self._claim_run():
+            return
+        try:
+            self._run_all_videos()
+        finally:
+            ExperimentBatchTab._active_run = None
+
+    def _run_all_videos(self):
         if not self.videos:
             QMessageBox.warning(self, "Nothing to run", "Add videos first.")
             return
@@ -2843,6 +2955,8 @@ class ExperimentBatchTab(QWidget):
         configured = list(self.videos)
         self._stop_flag = False
         self._low_detection = []
+        self._truncated = []
+        self._failed = []
         # Reset per-batch completion log so the "Batch finished — N video(s)"
         # message + the auto-load-last-completed logic reflect only this
         # batch's runs, not stale entries from prior batches.
@@ -2876,22 +2990,92 @@ class ExperimentBatchTab(QWidget):
             self.lbl_status.setText("Batch stopped by user.")
         else:
             self.lbl_status.setText("Batch complete.")
-        # Surface low-detection-rate warnings, if any.
-        low = getattr(self, "_low_detection", [])
-        if low:
-            lines = "\n  • ".join(
-                f"{os.path.basename(p)} — {r:.1f}% detected" for p, r in low
-            )
-            QMessageBox.warning(
-                self, "Low detection rate",
-                "These videos finished with detection rate under 90% — review "
-                "tracker sensitivity, lighting, or exclusion mask:\n\n"
-                f"  • {lines}"
-            )
+        self._show_run_warnings()
         # Auto-load last completed video into the preview.
         if self._completed:
             last_path = self._completed[-1][0]
             self._load_into_embedded(last_path)
+
+    def _show_run_warnings(self):
+        """One message listing failed, cut-short and low-detection videos
+        of the run that just ended (single video or batch)."""
+        b = os.path.basename
+        parts = []
+        if self._failed:
+            parts.append("These videos failed and have no results:\n" + "\n".join(
+                f"  • {b(p)} — {e}" for p, e in self._failed))
+        if self._truncated:
+            parts.append("These videos stopped decoding early, so their sessions "
+                         "are shorter than the file:\n" + "\n".join(
+                             f"  • {b(p)} — {n} of {m} frames read"
+                             for p, n, m in self._truncated))
+        from core.app_paths import pop_notices
+        parts += pop_notices()
+        if parts:
+            QMessageBox.warning(self, "Check these videos", "\n\n".join(parts))
+        if self._low_detection:
+            self._show_low_detection_help()
+
+    def _show_low_detection_help(self):
+        """Explain a low detection rate and how to improve it. Never changes
+        a setting itself — the user decides."""
+        b = os.path.basename
+        low = sorted(self._low_detection, key=lambda t: t[1])
+        if len(low) == 1:
+            p, r = low[0]
+            head = f"Only {r:.1f}% of the frames of {b(p)} were detected."
+        else:
+            head = ("Only part of the frames were detected in these videos:\n"
+                    + "\n".join(f"  • {b(p)} — {r:.1f}% detected" for p, r in low))
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Low detection rate")
+        box.setText(head + "\n\nFrames where the mouse is not found have no "
+                    "position, so distances, zone times and entries miss them. "
+                    "Aim for 90% or more.")
+        box.setInformativeText(
+            "Check the following in the Detection card (06), on this video:\n\n"
+            "1. Little contrast between mouse and floor (e.g. a white mouse on a "
+            "white or light floor, or a black mouse on a dark floor): turn on "
+            "“White mouse on white floor”.\n\n"
+            "2. Sensitivity slider: move it toward “more sensitive” (a lower "
+            "number) when the mouse is missed; toward “ignores noise” (a higher "
+            "number) when shadows, reflections or bedding are picked up instead.\n\n"
+            "3. Image settings: change Brightness, Contrast and Gamma until the "
+            "mouse stands out clearly from the floor. CLAHE helps with uneven "
+            "lighting, a little Blur removes video noise, and Sharpen helps "
+            "with soft or out-of-focus video.\n\n"
+            "4. Switch on “Detected area” and “Show mask” to see what the "
+            "tracker finds while you change the settings — the mouse should be "
+            "one solid white shape, and nothing else.\n\n"
+            "5. Arena: the mouse must stay inside the arena outline the whole "
+            "time — redraw it if part of the floor is outside. Things inside "
+            "the arena that change (the experimenter's hand, cables, strong "
+            "reflections) can be picked up instead of the mouse.\n\n"
+            "6. Max blob: if it is set too small, a large mouse is rejected.\n\n"
+            "Then run the video again. To compare several settings at once, use "
+            "Multi-Run on this video, and save the best ones as a preset so "
+            "every video from this camera uses them.")
+        box.setStandardButtons(QMessageBox.Ok)
+        box.exec_()
+
+    def _check_tracker_outcome(self, path, thread, results, errors):
+        """Raise instead of passing a stopped, failed or cut-short run on as
+        a finished session. A video that stops decoding early (< 98 % of its
+        frames) is kept but listed in the end-of-batch warning."""
+        if getattr(thread, "_stop_flag", False):  # set by _stop() via thread.stop()
+            raise StoppedByUser("Stopped by user — partial run not saved")
+        if errors:
+            raise RuntimeError(errors[-1])
+        if not results:
+            logger.error("No tracking results returned", source="tracking")
+            raise RuntimeError("No tracking results")
+        expected = int(getattr(thread, "frames_expected", 0) or 0)
+        if expected and len(results) < 0.98 * expected:
+            logger.warn(f"{os.path.basename(path)}: video ended early — "
+                        f"{len(results)} of {expected} frames read", source="tracking")
+            self._truncated.append((path, len(results), expected))
+        return results
 
     def _stop(self):
         self._stop_flag = True
@@ -2902,6 +3086,18 @@ class ExperimentBatchTab(QWidget):
                 pass
 
     def _run_video(self, path, in_batch=False):
+        if in_batch:   # _run_all already holds the run
+            return self._run_one_video(path, in_batch=True)
+        if not self._claim_run():
+            return
+        self.btn_stop.setEnabled(True)
+        try:
+            self._run_one_video(path)
+        finally:
+            self.btn_stop.setEnabled(False)
+            ExperimentBatchTab._active_run = None
+
+    def _run_one_video(self, path, in_batch=False):
         logger.info(
             f"Run requested: {os.path.basename(path)} | batch={in_batch}",
             source="tracking",
@@ -2941,14 +3137,23 @@ class ExperimentBatchTab(QWidget):
         self._read_only = True
         self._apply_read_only_state()
 
+        if not in_batch:
+            self._stop_flag = False
+            self._low_detection, self._truncated, self._failed = [], [], []
         # Start elapsed-time counter.
         self._start_track_timer()
         try:
             self._do_track_and_export(path, s, out_folder)
             if row:
                 row.set_status(STATUS_DONE)
+            self.lbl_status.setText(f"Done: {os.path.basename(path)}")
+        except StoppedByUser as e:
+            self.lbl_status.setText(f"{os.path.basename(path)}: {e}")
+            if row:
+                row.set_status(STATUS_READY)
         except Exception as e:
             self.lbl_status.setText(f"FAILED: {os.path.basename(path)} — {e}")
+            self._failed.append((path, str(e)))
             if row:
                 row.set_status(STATUS_ERROR)
         finally:
@@ -2958,6 +3163,8 @@ class ExperimentBatchTab(QWidget):
             self.progress_video.setValue(100)
             from PyQt5.QtWidgets import QApplication
             QApplication.processEvents()
+        if not in_batch:
+            self._show_run_warnings()
 
     def _do_track_and_export(self, path, s, out_folder):
         cap = cv2.VideoCapture(path)
@@ -2965,9 +3172,11 @@ class ExperimentBatchTab(QWidget):
             raise RuntimeError("Cannot open video")
         full_vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         full_vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        from core.video import probe
+        from core.video import probe, FPS_UNKNOWN
         auto_fps = probe(cap)[0]
         cap.release()
+        if auto_fps <= 0 and not s.get("fps_override"):
+            raise RuntimeError(FPS_UNKNOWN)
 
         # When crop is set, the frame the tracker / panel sees is the cropped
         # one. All normalized coords (arena, center, calibration line) are
@@ -3052,8 +3261,8 @@ class ExperimentBatchTab(QWidget):
             if exp is not None:
                 try:
                     res = exp.build_tracking_homography(s, (vw, vh))
-                except Exception:
-                    res = None
+                except Exception as e:
+                    raise RuntimeError(f"Perspective correction failed: {e}") from e
                 if res is not None:
                     homography, warp_size = res
         if homography is None and s.get("perspective") and not auto_movement:
@@ -3078,28 +3287,20 @@ class ExperimentBatchTab(QWidget):
                 except cv2.error:
                     homography = None
                     warp_size = None
+        if homography is None and _perspective_wanted(s) and not auto_movement:
+            raise RuntimeError(
+                "Perspective correction is on, but it can't be built for this video "
+                "(arena / maze corners missing or invalid). Redraw them or turn "
+                "perspective correction off.")
         # After warp the arena fills the whole warped frame. Otherwise use
         # the user's drawn polygon as-is.
-        if homography is not None:
-            TW, TH = warp_size
-            arena_px  = [(0, 0), (TW, 0), (TW, TH), (0, TH)]
-            # Center polygon was drawn relative to original frame. Project it
-            # through the homography so it lines up with the warped image.
-            if center_norm:
-                pts = _np.array(
-                    [[(nx * vw, ny * vh) for nx, ny in center_norm]],
-                    dtype=_np.float32,
-                )
-                warped = cv2.perspectiveTransform(pts, homography)[0]
-                center_px = [(int(p[0]), int(p[1])) for p in warped]
-            else:
-                center_px = None
-        else:
-            arena_px  = [(int(nx * vw), int(ny * vh)) for nx, ny in arena_norm] if arena_norm else None
-            center_px = [(int(nx * vw), int(ny * vh)) for nx, ny in center_norm] if center_norm else None
+        frame_size = warp_size if homography is not None else (vw, vh)
+        arena_px, center_px = zone_pixels(arena_norm, center_norm, frame_size,
+                                          warped=homography is not None)
+        check_arena(arena_px, frame_size)
         px_per_cm = _px_per_cm_for(
             s, getattr(self.embedded_tab, "experiment", None),
-            warp_size if homography is not None else (vw, vh))
+            frame_size)
 
         from gui.open_field_tab import DEFAULT_COLORS as DC, _hex_to_bgr
         colors = s.get("colors", DC)
@@ -3175,6 +3376,8 @@ class ExperimentBatchTab(QWidget):
             enable_nose=bool(s.get("enable_nose", False)),
         )
         thread.finished_tracking.connect(lambda r: captured.append(r))
+        errors = []
+        thread.error.connect(errors.append)
         thread.progress.connect(self._on_progress)
         thread.preview.connect(self._on_preview)
         # Forward per-frame body coords to the embedded tab's cell-highlight.
@@ -3205,7 +3408,7 @@ class ExperimentBatchTab(QWidget):
             # Disconnect every signal we connected above. Lambdas hold refs
             # to self/et/auto_pts; without disconnect they accumulate across
             # videos in long batches even though `thread` itself is dropped.
-            for sig in (thread.finished_tracking, thread.progress,
+            for sig in (thread.finished_tracking, thread.progress, thread.error,
                         thread.preview, thread.body_pos, thread.nose_pos):
                 try:
                     sig.disconnect()
@@ -3220,9 +3423,7 @@ class ExperimentBatchTab(QWidget):
             f"detected={sum(1 for r in results if r.get('x') is not None)}",
             source="tracking",
         )
-        if not results:
-            logger.error("No tracking results returned", source="tracking")
-            raise RuntimeError("No tracking results")
+        results = self._check_tracker_outcome(path, thread, results, errors)
 
         # Auto-from-movement: commit the final arena from collected points.
         if auto_movement:
@@ -3247,8 +3448,9 @@ class ExperimentBatchTab(QWidget):
         plugin_settings = dict(s)
         plugin_settings["arena"] = arena_px
         plugin_settings["center_zone"] = center_px
-        plugin_settings["video_w"] = vw
-        plugin_settings["video_h"] = vh
+        # Tracked coords live in the warped frame when perspective is on;
+        # zones are normalized to it too (same as the panel's video_w/h).
+        plugin_settings["video_w"], plugin_settings["video_h"] = frame_size
         plugin_settings["movement_threshold"] = float(s.get("movement_thr", 0.0))
         plugin_settings["bin_size_s"] = float(s.get("bin_size", 0.0))
         plugin_settings["cell_min_dwell_s"] = float(
@@ -3298,7 +3500,7 @@ class ExperimentBatchTab(QWidget):
             "bin_df":  bin_df,
             "results": list(results),
             "arena_px": arena_px,
-            "video_size": (vw, vh),
+            "video_size": frame_size,
             "animal_id": meta.get("Animal ID", ""),
         }
         # Load into the embedded tab — this calls _recompute_metrics_and_views
@@ -3321,20 +3523,30 @@ class ExperimentBatchTab(QWidget):
         if backup_folder and os.path.isdir(backup_folder):
             exp = getattr(self.embedded_tab, "experiment", None)
             fkey = getattr(exp, "file_key", None) or exp_key or "open_field"
-            backup_path = os.path.join(backup_folder, f"{name}_{fkey}.xlsx")
+            backup_path = os.path.join(backup_folder,
+                                       f"{self._backup_stem(path)}_{fkey}.xlsx")
             vc = exp.filter_video_config(s) if exp is not None else s
-            export_results(
-                metrics=metrics, raw_df=raw_df, output_path=backup_path,
-                video_name=name, arena=arena_px, video_size=(vw, vh),
-                graph_images=graph_images, bin_df=bin_df, metadata=meta,
-                write_csv=False, video_config=vc,
-                test_name=getattr(exp, "report_title", None) or f"{getattr(exp, 'name', 'Open Field')} Test",
-            )
-            logger.info(
-                f"Backup saved: {os.path.basename(backup_path)} | "
-                f"metrics_keys={len(metrics)} | raw_rows={len(raw_df) if raw_df is not None else 0}",
-                source="backup",
-            )
+            try:
+                export_results(
+                    metrics=metrics, raw_df=raw_df, output_path=backup_path,
+                    video_name=name, arena=arena_px, video_size=frame_size,
+                    graph_images=graph_images, bin_df=bin_df, metadata=meta,
+                    write_csv=False, video_config=vc,
+                    test_name=getattr(exp, "report_title", None) or f"{getattr(exp, 'name', 'Open Field')} Test",
+                )
+                logger.info(
+                    f"Backup saved: {os.path.basename(backup_path)} | "
+                    f"metrics_keys={len(metrics)} | raw_rows={len(raw_df) if raw_df is not None else 0}",
+                    source="backup",
+                )
+            except OSError as e:
+                # The run itself succeeded (results are in the app); only
+                # the backup copy is missing — say so, don't fail the run.
+                logger.error(f"Backup not saved ({backup_path}): {e}", source="backup")
+                from core.app_paths import notice
+                notice(f"The backup of {name} could not be saved to {backup_path} "
+                       f"(is it open in Excel?): {e}. Its results are still in the "
+                       "app — export them before closing.")
 
         # Vector exports — write SVG/PDF for every output graph beside the
         # per-video Excel. Target folder = main output folder (publication
@@ -3347,8 +3559,29 @@ class ExperimentBatchTab(QWidget):
             )
         self._write_vector_graphs(name, backup_folder)
 
+    def _backup_stem(self, path):
+        """Backup file name for `path`: the video name, plus its folder when
+        another queued video has the same name (Day1/m1 vs Day2/m1)."""
+        name = os.path.splitext(os.path.basename(path))[0]
+        twins = [p for p in self.videos
+                 if p != path and os.path.basename(p).lower() == os.path.basename(path).lower()]
+        if twins:
+            parent = os.path.basename(os.path.dirname(os.path.abspath(path))) or "video"
+            return f"{parent}_{name}"
+        return name
+
     # ── Multi-Run helper ────────────────────────────────────────────────
     def _track_for_multirun(self, path, s, progress_cb=None):
+        if ExperimentBatchTab._active_run is not None:
+            raise RuntimeError("Another video is being tracked — wait for it "
+                               "to finish or press Stop.")
+        ExperimentBatchTab._active_run = self
+        try:
+            return self._track_one_variant(path, s, progress_cb)
+        finally:
+            ExperimentBatchTab._active_run = None
+
+    def _track_one_variant(self, path, s, progress_cb=None):
         """Run the tracking pipeline once for a Multi-Run variant.
 
         Pure compute: no _completed_data update, no embedded reload,
@@ -3362,9 +3595,11 @@ class ExperimentBatchTab(QWidget):
             raise RuntimeError("Cannot open video")
         full_vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         full_vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        from core.video import probe
+        from core.video import probe, FPS_UNKNOWN
         auto_fps = probe(cap)[0]
         cap.release()
+        if auto_fps <= 0 and not s.get("fps_override"):
+            raise RuntimeError(FPS_UNKNOWN)
 
         crop = s.get("crop")
         if crop:
@@ -3388,8 +3623,8 @@ class ExperimentBatchTab(QWidget):
         if exp is not None:
             try:
                 res = exp.build_tracking_homography(s, (vw, vh))
-            except Exception:
-                res = None
+            except Exception as e:
+                raise RuntimeError(f"Perspective correction failed: {e}") from e
             if res is not None:
                 homography, warp_size = res
         if homography is None and s.get("perspective"):
@@ -3411,28 +3646,20 @@ class ExperimentBatchTab(QWidget):
                 except cv2.error:
                     homography = None
                     warp_size = None
+        auto_movement = False   # Multi-Run never builds the arena from movement
+        if homography is None and _perspective_wanted(s) and not auto_movement:
+            raise RuntimeError(
+                "Perspective correction is on, but it can't be built for this video "
+                "(arena / maze corners missing or invalid). Redraw them or turn "
+                "perspective correction off.")
 
-        if homography is not None:
-            TW, TH = warp_size
-            arena_px = [(0, 0), (TW, 0), (TW, TH), (0, TH)] if arena_norm else None
-            if center_norm:
-                import numpy as _np
-                pts = _np.array(
-                    [[(nx * vw, ny * vh) for nx, ny in center_norm]],
-                    dtype=_np.float32,
-                )
-                warped = cv2.perspectiveTransform(pts, homography)[0]
-                center_px = [(int(p[0]), int(p[1])) for p in warped]
-            else:
-                center_px = None
-        else:
-            arena_px = ([(int(nx * vw), int(ny * vh)) for nx, ny in arena_norm]
-                        if arena_norm else None)
-            center_px = ([(int(nx * vw), int(ny * vh)) for nx, ny in center_norm]
-                         if center_norm else None)
+        frame_size = warp_size if homography is not None else (vw, vh)
+        arena_px, center_px = zone_pixels(arena_norm, center_norm, frame_size,
+                                          warped=homography is not None)
+        check_arena(arena_px, frame_size)
 
         px_per_cm = _px_per_cm_for(
-            s, exp, warp_size if homography is not None else (vw, vh))
+            s, exp, frame_size)
 
         from gui.open_field_tab import DEFAULT_COLORS as DC, _hex_to_bgr
         colors = s.get("colors", DC)
@@ -3505,20 +3732,26 @@ class ExperimentBatchTab(QWidget):
             enable_nose=bool(s.get("enable_nose", False)),
         )
         thread.finished_tracking.connect(lambda r: captured.append(r))
+        errors = []
+        thread.error.connect(errors.append)
         if progress_cb is not None:
             thread.progress.connect(lambda p: progress_cb(int(p)))
-        thread.run()
+        self._tracker_thread = thread   # so Stop reaches it
+        try:
+            thread.run()
+        finally:
+            self._tracker_thread = None
         results = captured[0] if captured else []
-        if not results:
-            raise RuntimeError("No tracking results")
+        results = self._check_tracker_outcome(path, thread, results, errors)
 
         fps = s.get("fps_override", 0.0) or auto_fps
         # Route through plugin so Y-Maze metrics are produced for Y-Maze runs.
         plugin_settings = dict(s)
         plugin_settings["arena"] = arena_px
         plugin_settings["center_zone"] = center_px
-        plugin_settings["video_w"] = vw
-        plugin_settings["video_h"] = vh
+        # Tracked coords live in the warped frame when perspective is on;
+        # zones are normalized to it too (same as the panel's video_w/h).
+        plugin_settings["video_w"], plugin_settings["video_h"] = frame_size
         plugin_settings["movement_threshold"] = float(s.get("movement_thr", 0.0))
         plugin_settings["bin_size_s"] = float(s.get("bin_size", 0.0))
         plugin_settings["cell_min_dwell_s"] = float(
@@ -3579,7 +3812,7 @@ class ExperimentBatchTab(QWidget):
             "raw_df":     raw_df,
             "bin_df":     bin_df,
             "arena_px":   arena_px,
-            "video_size": (vw, vh),
+            "video_size": frame_size,
             "fps":        fps,
             "graph_pngs": graph_pngs,
         }
@@ -3658,7 +3891,7 @@ class ExperimentBatchTab(QWidget):
         try:
             et._load_video_path(path)
         except Exception as e:
-            self.lbl_status.setText(f"_load_video_path failed: {e}")
+            self.lbl_status.setText(f"Can't open {os.path.basename(path)}: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -3666,8 +3899,8 @@ class ExperimentBatchTab(QWidget):
         # failure via et.video_path, which is only set after a successful read.
         if getattr(et, "video_path", None) != path:
             self.lbl_status.setText(
-                f"_load_video_path silent fail (video_path={getattr(et, 'video_path', None)})"
-            )
+                f"Can't open {os.path.basename(path)} — the file is missing, "
+                "empty or damaged.")
             return False
         # Apply this video's saved settings, or hard defaults for a brand-new
         # video (apply_settings({}) sets every widget to its .get default).
@@ -3677,7 +3910,8 @@ class ExperimentBatchTab(QWidget):
         except Exception as e:
             # Roll back to previous video's settings so the panel doesn't
             # leave half-applied state visible. Surface the error to the user.
-            self.lbl_status.setText(f"apply_settings failed: {e}")
+            self.lbl_status.setText(
+                f"Couldn't apply the saved settings of {os.path.basename(path)}: {e}")
             import traceback
             traceback.print_exc()
             prev = self._embedded_loaded_path
@@ -3717,6 +3951,12 @@ class ExperimentBatchTab(QWidget):
                             et._refresh_arena_mode_chip()
                         except Exception:
                             pass
+                    # The square is a real arena: save it and show the row
+                    # as Ready, not "Needs setup".
+                    if zd.arena and self.video_status.get(path, STATUS_NEEDS) == STATUS_NEEDS:
+                        vs = self.video_settings.setdefault(path, {})
+                        vs["arena"] = list(zd.arena)
+                        self._mark_ready_if_eligible(path, vs)
                 except Exception:
                     pass
             elif (exp_key != "y_maze"
@@ -3889,10 +4129,8 @@ class ExperimentBatchTab(QWidget):
         """
         et = self.embedded_tab
         et._raw_results = [dict(r) for r in results]
-        try:
-            et.tracking_results = et._apply_smoothing(et._raw_results, et.spin_smooth.value())
-        except Exception:
-            et.tracking_results = list(et._raw_results)
+        # Same rule as _smooth_for_metrics: never fall back to unsmoothed.
+        et.tracking_results = et._apply_smoothing(et._raw_results, et.spin_smooth.value())
         try:
             et._on_scrub(et.slider_scrub.value())
         except Exception:
@@ -3960,7 +4198,15 @@ class ExperimentBatchTab(QWidget):
             return  # don't overwrite saved settings while in read-only view
         try:
             snap = self.embedded_tab.snapshot_settings()
-        except Exception:
+        except Exception as e:
+            # The edits on screen can't be saved for this video; its last
+            # saved settings stay in use — the user must know.
+            name = os.path.basename(self._embedded_loaded_path)
+            logger.error(f"Settings of {name} not saved: {e}", source="settings")
+            self.lbl_status.setText(f"Settings of {name} could not be saved: {e}")
+            from core.app_paths import notice
+            notice(f"Your latest changes to {name} could not be saved ({e}); "
+                   "its previously saved settings are used.")
             return
         self.video_settings[self._embedded_loaded_path] = snap
 
@@ -3995,6 +4241,9 @@ class ExperimentBatchTab(QWidget):
             start = app_dir()
         folder = QFileDialog.getExistingDirectory(self, title, start)
         if not folder:
+            return None
+        if not os.path.isdir(folder):   # don't remember a folder that isn't there
+            QMessageBox.warning(self, "Export", f"The folder {folder} doesn't exist.")
             return None
         if folder != self.config.get("output_folder"):
             self.config["output_folder"] = folder

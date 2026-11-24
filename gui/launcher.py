@@ -986,7 +986,7 @@ class ExperimentPicker(QWidget):
 
         # ── New experiment: text + Create on the left, arena sketch on the right
         self.new_card = _Card(clickable=True)
-        self.new_card.setFixedHeight(200)
+        self.new_card.setMinimumHeight(200)   # grows when the text wraps
         self.new_card.setToolTip("Design your own experiment")
         nh = QHBoxLayout(self.new_card)
         nh.setContentsMargins(0, 1, 1, 1)
@@ -996,6 +996,7 @@ class ExperimentPicker(QWidget):
         left.setSpacing(8)
         self.new_kicker = QLabel("CUSTOM DESIGN")
         self.new_title = QLabel("New experiment")
+        self.new_title.setWordWrap(True)      # wrap on narrow windows, never clip
         self.new_hint = QLabel("Draw your zones and lines, choose what to measure, "
                                "and save it under a name.")
         self.new_hint.setWordWrap(True)
@@ -1060,6 +1061,13 @@ class ExperimentPicker(QWidget):
         self.reload()
 
     # ── data
+
+    def resizeEvent(self, event):
+        # The sketch is 240 px wide; on a narrow window it would squeeze the
+        # title and text of the New-experiment card until they clip.
+        super().resizeEvent(event)
+        self.sketch.setVisible(self.new_card.width() >= 560)
+
     def reload(self, select_path=None):
         """Rebuild the list (after a save / delete)."""
         entries = [{"kind": "header", "text": "BUILT-IN TESTS", "count": len(self._builtins)}]

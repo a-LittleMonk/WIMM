@@ -141,7 +141,7 @@ def build_geometry_step(host):
         lambda _: _rebuild_template(host))
     tmpl.addWidget(cu.pct_slider(
         host, "Arm width", host.spin_epm_arm_width, 1, 40, scale=100,
-        tip="Arm width as % of the video width. Rebuilds the arms."))
+        tip="Arm width as % of the shorter video side. Rebuilds the arms."))
     host.spin_epm_center_size = QDoubleSpinBox()
     # Always > 0: arm entries are counted from the center square.
     host.spin_epm_center_size.setRange(0.02, 0.50)
@@ -233,8 +233,8 @@ def build_geometry_step(host):
         ("Adjust…", host.btn_epm_perspective_adjust),
     ])
     attach_info_box(zg, [
-        ("Arm width", "Arm width as % of the video width."),
-        ("Center zone", "Center size as % of the video width; 0 = off."),
+        ("Arm width", "Arm width as % of the shorter video side."),
+        ("Center zone", "Center size as % of the shorter video side; 0 = off."),
         ("Arm labels", "Mark each arm Open or Closed (or a custom name)."),
         ("Colors", "Click a zone to change the colour it is drawn in."),
     ])

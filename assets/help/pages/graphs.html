@@ -1,0 +1,43 @@
+<!--
+id: graphs
+title: Graphs and how to style them
+section: 4. Results
+order: 2
+keywords: graphs, figures, trajectory, heatmap, speed, histogram, zone time, cell time, triplets, habituation, svg, pdf, png, customize, style, preset, publication, chart editor, colors, fonts
+-->
+<h1>Graphs</h1>
+<p><img src="img/out_graphs.png" width="620"></p>
+
+<h2>Which graphs</h2>
+<table width="100%">
+<tr><th>Graph</th><th>Shows</th></tr>
+<tr><td>Trajectory</td><td>The path, with start (green) and end (red) and the zones.</td></tr>
+<tr><td>Heatmap</td><td>Where the mouse spent its time (2 cm bins with a scale).</td></tr>
+<tr><td>Speed</td><td>Speed over the session.</td></tr>
+<tr><td>Speed Histogram</td><td>Distribution of speeds (1 cm/s bins).</td></tr>
+<tr><td>Zone Time</td><td>Time per zone (e.g. center vs periphery, per arm).</td></tr>
+<tr><td>Cell Time</td><td>Time per grid cell (Open Field, Grid 4×4).</td></tr>
+<tr><td>Habituation</td><td>Distance per time bin (needs a Time bin).</td></tr>
+<tr><td>Triplets</td><td>Y-Maze arm-entry triplets.</td></tr>
+</table>
+<p>For each graph: <b>SVG</b>, <b>PDF</b>, <b>PNG</b> save it to a file; <i>Export
+background</i> White or Transparent; <b>Preset</b> chooses a saved graph style;
+<b>Export preview</b> shows exactly how the exported image will look.</p>
+
+<h2>Customize graphs (Ctrl+G)</h2>
+<p><img src="img/customize_graphs.png" width="620"></p>
+<ol>
+<li>Pick the experiment tab at the top and a graph on the left.</li>
+<li>Click any part of the graph (title, axes, legend, colour bar, lines) — its settings
+appear on the right (text, font, size, bold, colour …). Drag titles, legend or colour
+bar to move them; double-click text to edit it.</li>
+<li><b>Apply to all graphs</b> copies a format to every graph; <b>Reset graph</b> /
+<b>Reset position</b> undo changes; <kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Y</kbd> undo / redo.</li>
+<li><b>Save as new</b> stores the style as a preset; <b>Update preset</b> overwrites it.</li>
+<li><b>Show my data</b> previews with your own results instead of the sample.</li>
+</ol>
+<p>The preset chosen under <i>Graph style</i> in the Export tab is used for every
+exported graph. <kbd>F11</kbd> makes the editor full screen.</p>
+<div class="tip">For papers, export SVG or PDF: they stay sharp at any size and can be
+edited in Inkscape or Illustrator. Tick <i>Also save SVG / PDF</i> in the Export tab to
+get them for every video at once.</div>

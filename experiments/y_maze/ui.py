@@ -121,7 +121,7 @@ def build_geometry_step(host):
     host.spin_ym_arm_width.valueChanged.connect(lambda _: _rebuild_template(host))
     tmpl.addWidget(cu.pct_slider(
         host, "Arm width", host.spin_ym_arm_width, 1, 40, scale=100,
-        tip="Arm width as % of the video width. Rebuilds the arms."))
+        tip="Arm width as % of the shorter video side. Rebuilds the arms."))
     host.spin_ym_neutral_size = QDoubleSpinBox()
     # Always > 0: arm entries are counted from the neutral hub.
     host.spin_ym_neutral_size.setRange(0.02, 0.50)
@@ -197,8 +197,8 @@ def build_geometry_step(host):
         ("Correct perspective", host.chk_ym_perspective),
     ])
     attach_info_box(zg, [
-        ("Arm width", "Arm width as % of the video width."),
-        ("Neutral zone", "Hub radius as % of the video width; 0 = off."),
+        ("Arm width", "Arm width as % of the shorter video side."),
+        ("Neutral zone", "Hub radius as % of the shorter video side; 0 = off."),
         ("Colors", "Click a zone to change the colour it is drawn in."),
     ])
     return grp

@@ -129,8 +129,9 @@ def detect_issues(raw_df: pd.DataFrame,
             for i in outside_idx:
                 reasons[i].add(OUTSIDE)
                 severity[i] = max(severity[i], 1.0)   # always max severity
-        except Exception:
-            pass
+        except Exception as e:
+            from core import logger
+            logger.warn(f"'Outside arena' check skipped: {e}", source="issues")
 
     # 4) Gap-after-loss → big jump on re-acquisition.
     if GAP_JUMP in detectors:
@@ -252,6 +253,16 @@ def _interp_run(xs, ys, a, b):
     """Copy of xs/ys with frames a..b (inclusive) replaced by a straight
     line between the nearest valid frames outside the run (held flat at
     the video's start / end). None if there is nothing to anchor on."""
+    v = _interp_values(xs, ys, a, b)
+    if v is None:
+        return None
+    x2, y2 = xs.copy(), ys.copy()
+    x2[a:b + 1], y2[a:b + 1] = v
+    return x2, y2
+
+
+def _interp_values(xs, ys, a, b):
+    """The replacement values for frames a..b (see _interp_run), or None."""
     n = xs.size
     pa = a - 1
     while pa >= 0 and not np.isfinite(xs[pa]):
@@ -261,17 +272,18 @@ def _interp_run(xs, ys, a, b):
         nb += 1
     if pa < 0 and nb >= n:
         return None
-    x2, y2 = xs.copy(), ys.copy()
-    for i in range(a, b + 1):
+    vx = np.empty(b - a + 1)
+    vy = np.empty(b - a + 1)
+    for k, i in enumerate(range(a, b + 1)):
         if pa < 0:
-            x2[i], y2[i] = xs[nb], ys[nb]
+            vx[k], vy[k] = xs[nb], ys[nb]
         elif nb >= n:
-            x2[i], y2[i] = xs[pa], ys[pa]
+            vx[k], vy[k] = xs[pa], ys[pa]
         else:
             t = (i - pa) / float(nb - pa)
-            x2[i] = xs[pa] + t * (xs[nb] - xs[pa])
-            y2[i] = ys[pa] + t * (ys[nb] - ys[pa])
-    return x2, y2
+            vx[k] = xs[pa] + t * (xs[nb] - xs[pa])
+            vy[k] = ys[pa] + t * (ys[nb] - ys[pa])
+    return vx, vy
 
 
 def _local_flags(xs, ys, lo, hi, fps, px_per_cm, speed_thr, accel_thr, arena_path):
@@ -357,11 +369,18 @@ def best_local_fix(xs, ys, center, fps, px_per_cm, speed_thr, accel_thr,
                     hi_t += 1
                 if hi_t - lo_t + 1 > max_gap:
                     break             # would grow an earlier fix past the limit
-            r = _interp_run(xs, ys, a, b)
-            if r is None:
+            v = _interp_values(xs, ys, a, b)
+            if v is None:
                 continue
-            flags, score = _local_flags(r[0], r[1], lo, hi, fps, px_per_cm,
-                                        speed_thr, accel_thr, arena_path)
+            # Try the run in place and undo it — copying the whole track
+            # per candidate made Auto-fix slow on long videos.
+            keep_x, keep_y = xs[a:b + 1].copy(), ys[a:b + 1].copy()
+            xs[a:b + 1], ys[a:b + 1] = v
+            try:
+                flags, score = _local_flags(xs, ys, lo, hi, fps, px_per_cm,
+                                            speed_thr, accel_thr, arena_path)
+            finally:
+                xs[a:b + 1], ys[a:b + 1] = keep_x, keep_y
             # Never create a new problem; must remove >= 90% of the trouble
             # (a partial fix anchored on a still-wrong frame is rejected).
             if not flags <= flags0 or score > 0.1 * score0:

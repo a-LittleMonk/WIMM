@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.path import Path
 
+from core.arm_entries import bridge_gaps
 from core.kinematics import (
     compute_step_distance, compute_basic_kinematics, compute_pauses, time_at,
 )
@@ -46,12 +47,16 @@ def _polygon_centroid(poly_px):
     return (cx, cy)
 
 
-def _debounce_bouts(mask, min_frames):
+def _debounce_bouts(mask, min_frames, lost=None):
     """From a boolean per-frame in-zone mask, return:
        (entries, total_frames, bouts) where bouts is a list of (start, end)
        frame indices for each confirmed bout (length ≥ min_frames).
-    Sub-threshold runs are dropped entirely — no contribution to time."""
+    Sub-threshold runs are dropped entirely — no contribution to time.
+    `lost` (bool per frame): lost-tracking frames inside one bout don't
+    split it."""
     min_frames = max(1, int(min_frames))
+    if lost is not None:
+        mask = np.asarray(bridge_gaps(list(mask), list(lost)), dtype=bool)
     bouts = []
     n = len(mask)
     i = 0
@@ -126,7 +131,8 @@ def compute(results, settings, fps, px_per_cm):
     # ── Arena entries + total time (body, not nose).
     if arena_px and len(arena_px) >= 3:
         in_arena = _point_in_poly_mask(xs, ys, arena_px)
-        entries_arena, frames_arena, _ = _debounce_bouts(in_arena, min_frames)
+        entries_arena, frames_arena, _ = _debounce_bouts(
+            in_arena, min_frames, lost=np.isnan(xs) | np.isnan(ys))
         metrics["arena_entries"] = entries_arena
         metrics["arena_total_time_s"] = round(frames_arena * frame_dur, 3)
 
@@ -159,8 +165,16 @@ def compute(results, settings, fps, px_per_cm):
             facing = ~np.isnan(ang_deg) & (ang_deg <= angle_max_deg)
             in_zone = in_zone & facing
 
-        per_object_in_mask[obj_id] = in_zone
-        entries, total_frames, bouts = _debounce_bouts(in_zone, min_frames)
+        lost = np.isnan(nose_xs) | np.isnan(nose_ys)
+        if angle_enabled:
+            lost = lost | np.isnan(xs) | np.isnan(ys)
+        entries, total_frames, bouts = _debounce_bouts(in_zone, min_frames, lost)
+        # Raw Zone column and bins use the confirmed bouts, so they add up
+        # to the summary.
+        confirmed = np.zeros(len(df), dtype=bool)
+        for b0, b1 in bouts:
+            confirmed[b0:b1] = True
+        per_object_in_mask[obj_id] = confirmed
         total_s = total_frames * frame_dur
 
         bout_lens_s = [(b[1] - b[0]) * frame_dur for b in bouts]
@@ -211,9 +225,12 @@ def compute(results, settings, fps, px_per_cm):
     ]
     # Single Zone column — first-wins assignment (A before B).
     zone_col = [""] * len(df)
+    names = [(objects.get(o) or {}).get("name", OBJECT_LABELS[o]) for o in OBJECT_NAMES]
     for obj_id in OBJECT_NAMES:
         st = objects.get(obj_id) or {}
         label = st.get("name", OBJECT_LABELS[obj_id])
+        if names.count(label) > 1:  # NOL: two identical objects
+            label = f"{label} ({OBJECT_LABELS[obj_id]})"
         mask = per_object_in_mask.get(obj_id)
         if mask is None:
             continue
@@ -252,11 +269,11 @@ def _bin_metrics(per_object_in_mask, objects, fps, bin_size_s, df, unit):
         }
         for obj_id in OBJECT_NAMES:
             mask = per_object_in_mask.get(obj_id)
-            label = (objects.get(obj_id) or {}).get("name", OBJECT_LABELS[obj_id])
+            # keyed by object id: two objects may share a name (NOL)
             if mask is None:
-                row[f"time_{label}_s"] = 0.0
+                row[f"time_{obj_id}_s"] = 0.0
                 continue
-            row[f"time_{label}_s"] = round(
+            row[f"time_{obj_id}_s"] = round(
                 float(np.sum(mask[start:end])) * frame_dur, 3
             )
         if has_df:

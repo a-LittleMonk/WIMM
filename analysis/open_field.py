@@ -4,8 +4,10 @@ import pandas as pd
 import cv2
 from matplotlib.path import Path
 
+from core.arm_entries import bridge_gaps
 from core.kinematics import (
     compute_step_distance, compute_basic_kinematics, compute_pauses, find_runs,
+    session_duration,
 )
 
 
@@ -65,7 +67,7 @@ def compute_metrics(
     if arena:
         df.loc[~in_arena & df["x"].notna(), "zone"] = "outside"
 
-    duration_s = len(df) / fps
+    duration_s = session_duration(df, fps)  # gaps count, like undetected frames
     frame_dur = 1.0 / fps
 
     # Distance / speed / mobility — generic (shared with other assays).
@@ -76,7 +78,10 @@ def compute_metrics(
     # so every report of "Center" agrees. Sub-threshold center frames are
     # treated as border-jitter and reclassified to periphery for time
     # accounting (zone_confirmed). The raw `zone` column is preserved.
-    is_center = df["zone"] == "center_zone"
+    # Lost-tracking frames inside one center visit don't split it.
+    zone_seq = bridge_gaps(df["zone"].tolist(),
+                           (df["zone"] == "undetected").tolist())
+    is_center = pd.Series([z == "center_zone" for z in zone_seq], index=df.index)
     min_frames_center = (
         max(1, int(round(cell_min_dwell_s * fps))) if cell_min_dwell_s > 0 else 1
     )
@@ -103,7 +108,8 @@ def compute_metrics(
     for s, e in center_run_ranges:
         is_confirmed_center[s:e] = True
     df["zone_confirmed"] = df["zone"]
-    sub_threshold_center = is_center.values & ~is_confirmed_center
+    df.loc[is_confirmed_center, "zone_confirmed"] = "center_zone"
+    sub_threshold_center = (df["zone"] == "center_zone").values & ~is_confirmed_center
     df.loc[sub_threshold_center, "zone_confirmed"] = "periphery"
 
     center_dwells = [(e - s) * frame_dur for (s, e) in center_run_ranges]
@@ -240,8 +246,9 @@ def compute_metrics(
             if y_vals[0] > 0:
                 pct_change = 100 * (y_vals[-1] - y_vals[0]) / y_vals[0]
                 metrics["Habituation Last/First (%)"] = round(float(pct_change), 1)
-        except Exception:
-            pass
+        except Exception as e:   # e.g. NaN bins — the cells stay empty
+            from core import logger
+            logger.warn(f"Habituation slope not computed: {e}", source="metrics")
 
     return metrics, raw_df, bin_df
 
@@ -317,21 +324,23 @@ def per_frame_cell_ids(xs, ys, arena):
     dst = np.array([(0, 0), (1, 0), (1, 1), (0, 1)], dtype=np.float32)
     try:
         M = cv2.getPerspectiveTransform(src, dst)
-    except Exception:
-        return out
+    except cv2.error as e:
+        # Every frame would land in no cell and all 16 cells read 0.
+        raise ValueError("The arena corners can't form a 4×4 grid "
+                         "(points on one line?) — redraw the arena.") from e
     xs_arr = np.asarray(xs, dtype=float)
     ys_arr = np.asarray(ys, dtype=float)
-    for i in range(n):
-        x, y = xs_arr[i], ys_arr[i]
-        if np.isnan(x) or np.isnan(y):
-            continue
-        pt = np.array([[[float(x), float(y)]]], dtype=np.float32)
-        uv = cv2.perspectiveTransform(pt, M)[0][0]
-        u, v = float(uv[0]), float(uv[1])
-        if 0.0 <= u <= 1.0 and 0.0 <= v <= 1.0:
-            col = max(0, min(3, int(u * 4)))
-            row = max(0, min(3, int(v * 4)))
-            out[i] = row * 4 + col + 1  # 1..16
+    ok = ~np.isnan(xs_arr) & ~np.isnan(ys_arr)
+    if not ok.any():
+        return out
+    pts = np.stack([xs_arr[ok], ys_arr[ok]], axis=1).astype(np.float32)[:, None, :]
+    uv = cv2.perspectiveTransform(pts, M)[:, 0, :].astype(float)
+    u, v = uv[:, 0], uv[:, 1]
+    inside = (u >= 0.0) & (u <= 1.0) & (v >= 0.0) & (v <= 1.0)
+    col = np.clip((u * 4).astype(int), 0, 3)
+    row = np.clip((v * 4).astype(int), 0, 3)
+    cells = np.where(inside, row * 4 + col + 1, 0)   # 1..16, 0 = outside
+    out[np.where(ok)[0]] = cells
     return out
 
 

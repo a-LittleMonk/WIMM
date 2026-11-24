@@ -42,3 +42,6 @@ backup/
 
 # Local copies of earlier versions
 WIMM old versions/
+
+# In-app Help screenshots (gui/help_dialog.py) are part of the app
+!assets/help/img/*.png

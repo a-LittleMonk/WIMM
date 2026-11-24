@@ -14,6 +14,7 @@ from typing import Callable, List, Optional
 import numpy as np
 import pandas as pd
 
+from core.arm_entries import bridge_gaps
 from core.kinematics import (
     compute_step_distance, compute_basic_kinematics, compute_pauses, time_at,
 )
@@ -77,7 +78,9 @@ def classify(u, v, zones):
 
 
 def confirm(seq, min_frames):
-    """Blank runs shorter than min_frames (None) — the shared dwell rule."""
+    """Blank runs shorter than min_frames (None) — the shared dwell rule.
+    Gaps (None) inside one visit don't split it (see bridge_gaps)."""
+    seq = bridge_gaps(seq, [z is None for z in seq])
     n = len(seq)
     res = [None] * n
     i = 0

@@ -1,0 +1,39 @@
+<!--
+id: card-zones
+title: 04 Zones — center, grid, arms, objects
+section: 2. Setting up a video
+order: 4
+keywords: zones, center zone, periphery, grid, 4x4, cells, colors, arms, objects, chambers, compartments
+-->
+<h1>04 Zones</h1>
+<p><img src="img/card_zones.png" width="300"></p>
+<p>Zones are the areas whose time, entries and latency are measured. In most tests
+they are built from the arena automatically — you only set their size. Each
+experiment has its own zones; see its page:
+<a href="topic:exp-open_field">Open Field</a> · <a href="topic:exp-y_maze">Y-Maze</a> ·
+<a href="topic:exp-nor">Novel Object</a> · <a href="topic:exp-epm">Elevated Plus</a> ·
+<a href="topic:exp-nol">Object Location</a> · <a href="topic:exp-three_chamber">Three Chamber</a> ·
+<a href="topic:exp-cpp">Place Preference</a> · <a href="topic:exp-light_dark">Light–Dark</a> ·
+<a href="topic:exp-zero_maze">Zero Maze</a> · <a href="topic:exp-t_maze">T-Maze</a> ·
+<a href="topic:exp-radial_maze">Radial Arm Maze</a> · <a href="topic:exp-water_maze">Water Maze</a> ·
+<a href="topic:exp-custom">Custom</a>.</p>
+
+<h2>Open Field zones</h2>
+<table width="100%">
+<tr><th>Control</th><th>Meaning</th></tr>
+<tr><td>Center + periphery</td><td>Classic layout: a center zone and the rest of the arena (periphery).</td></tr>
+<tr><td>Grid 4×4</td><td>The arena split into 16 equal cells, with the center zone on top. Adds time and entries per cell (Output → Cell info).</td></tr>
+<tr><td>Center zone (%)</td><td>Size of the center zone as % of the arena's width and height (50 % = the middle half in each direction). <i>Center area</i> shows its real size when a scale is set.</td></tr>
+<tr><td>Arena / Center / Grid</td><td>Click to change the colour each is drawn in.</td></tr>
+</table>
+
+<h2>Which point of the mouse counts</h2>
+<p>Zones are judged by the <b>body centre</b> (the middle of the detected shape). Object
+tests (Novel Object, Object Location, the sniff zones of the Three Chamber) use the
+<b>nose</b>, which needs <i>Nose detection</i> in <a href="topic:card-tracking">Tracking</a>.</p>
+
+<h2>Entering and leaving a zone</h2>
+<p>A visit counts only after the mouse has stayed in the zone for the <b>Min dwell</b>
+time (<a href="topic:card-analysis">Analysis</a>), so the outline flickering at the
+border doesn't create false entries. Short tracking losses inside a visit don't split
+it. Details: <a href="topic:measures-zones">Zone measures</a>.</p>

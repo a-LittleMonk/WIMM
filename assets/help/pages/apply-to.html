@@ -1,0 +1,30 @@
+<!--
+id: apply-to
+title: Copy settings between videos (Apply to…)
+section: 3. Running the analysis
+order: 3
+keywords: apply to, copy settings, paste, other videos, same arena, copy from neighbour, ctrl up, ctrl down
+-->
+<h1>Copy settings between videos (Apply to…)</h1>
+<p>Click the source video in the Queue, then <b>Apply to…</b> at the top of the
+Configuration panel.</p>
+<p><img src="img/apply_to.png" width="520"></p>
+<ol>
+<li><b>Fields</b>: tick what to copy — Detection, Visualization, Smoothing/timing, Trim,
+FPS override, Calibration, Zone mode/cage shape/perspective, Arena/center polygons,
+Exclusion mask, Metadata. <b>Select all</b> / <b>Clear</b>.</li>
+<li><b>Targets</b>: all other videos, only videos without saved settings, or pick
+specific ones from the list.</li>
+<li>Click <b>Apply</b>.</li>
+</ol>
+<div class="tip">Same camera position for several videos? Draw the arena once and copy
+<i>Arena/center polygons</i> and <i>Calibration</i> to the others — then check each
+video quickly, because the box may have moved a little.</div>
+
+<h2>Copy from the video above or below</h2>
+<p><kbd>Ctrl+↑</kbd> / <kbd>Ctrl+↓</kbd> copy the <b>detection settings</b> of the
+previous / next video in the Queue onto the video shown. Its arena, calibration and
+animal information are not touched.</p>
+<p>Remember: for <b>Run all</b> the data-affecting settings come from the settings video
+anyway (<a href="topic:batch-rules">Batch rules</a>); Apply to is mainly for the
+per-video geometry and for single-video runs.</p>

@@ -1,0 +1,48 @@
+<!--
+id: card-detection
+title: 06 Detection — finding the mouse
+section: 2. Setting up a video
+order: 6
+keywords: detection, sensitivity, threshold, white mouse, contrast, brightness, gamma, blur, sharpen, clahe, max blob, preset, mask, detected area, view effects, not detected, low detection
+-->
+<h1>06 Detection</h1>
+<p><img src="img/card_detection.png" width="300"></p>
+<p>Detection decides which pixels are "mouse". The app compares every frame with a
+picture of the empty arena; pixels that differ enough are the mouse. These settings
+are the first thing to adjust when the red marker is not on the mouse.</p>
+
+<h2>Controls</h2>
+<table width="100%">
+<tr><th>Control</th><th>What it does</th></tr>
+<tr><td>Sensitivity</td><td>How different a pixel must be from the empty arena to count. Toward <b>more sensitive</b> (lower number): finds a faint mouse, but also shadows. Toward <b>ignores noise</b> (higher): ignores shadows, may lose a faint mouse. Default 25.</td></tr>
+<tr><td>White mouse on white floor</td><td>For little contrast between mouse and floor (white on white, black on black). Makes detection much more sensitive to small differences.</td></tr>
+<tr><td>Preset ▾ / Reset</td><td>Saved sets of detection settings. <b>Save</b> stores the current settings under a name, <b>Delete</b> removes one, <b>Import… / Export…</b> move presets between computers. <b>Reset</b> returns to the selected preset (the built-in defaults for <i>Default</i>).</td></tr>
+<tr><td>Brightness / Contrast / Gamma</td><td>Adjust the picture before detection so the mouse stands out.</td></tr>
+<tr><td>Blur</td><td>Smooths video noise and fur texture.</td></tr>
+<tr><td>Sharpen</td><td>Helps a soft or out-of-focus video.</td></tr>
+<tr><td>CLAHE</td><td>Local contrast boost; helps with uneven lighting. Off = 0.</td></tr>
+<tr><td>Max blob</td><td>Shapes larger than this % of the frame are rejected (big shadows, a hand). Off = no user limit (a shape larger than 20 % of the arena is still rejected).</td></tr>
+<tr><td>Detected area <kbd>D</kbd></td><td>Colours what the detector finds.</td></tr>
+<tr><td>Show mask <kbd>M</kbd></td><td>Shows the black-and-white detection picture.</td></tr>
+<tr><td>View effects <kbd>E</kbd></td><td>Shows the video with brightness / contrast / … applied.</td></tr>
+<tr><td>Detection overlay</td><td>Colour of the detected area.</td></tr>
+</table>
+
+<h2>Step by step — tuning detection</h2>
+<ol>
+<li>Turn on <b>Detected area</b> and <b>Show mask</b>.</li>
+<li>Scrub to a frame where the mouse is hard to see (dark corner, near a wall, rearing).</li>
+<li>Goal: the mouse is <b>one solid white shape</b> and nothing else is white.</li>
+<li>Mouse missing or in pieces → move Sensitivity toward <i>more sensitive</i>; for low
+contrast turn on <b>White mouse on white floor</b>; raise Contrast or Gamma.</li>
+<li>Shadows, bedding or reflections white too → move Sensitivity toward <i>ignores
+noise</i>; add a little Blur; set Max blob.</li>
+<li>Check several frames from the beginning, middle and end.</li>
+<li>Click <b>Save</b> to keep the settings as a preset for this camera.</li>
+</ol>
+<p><img src="img/low_detection.png" width="440"></p>
+<p class="cap">After a run with less than 90 % of frames detected, the app shows this checklist.
+It never changes settings by itself.</p>
+<div class="tip">To compare several settings on the same video, use
+<a href="topic:multi-run">Multi-Run</a> — it tracks the video once per setting and
+puts the results side by side.</div>

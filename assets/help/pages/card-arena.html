@@ -1,0 +1,52 @@
+<!--
+id: card-arena
+title: 03 Arena — outline the apparatus
+section: 2. Setting up a video
+order: 3
+keywords: arena, corners, draw, outline, premade square, manual, auto, contrast, movement, cage shape, perspective, tilted camera, redraw, template
+-->
+<h1>03 Arena</h1>
+<p><img src="img/card_arena.png" width="300"></p>
+<p>The arena is the outline of the floor the mouse moves on. Only movement inside it
+is tracked, and the zones are built from it. Each video has its own arena.</p>
+
+<h2>Ways to define it</h2>
+<p>Open the drop-down at the top of the card:</p>
+<p><img src="img/arena_menu.png" width="190"></p>
+<table width="100%">
+<tr><th>Option</th><th>What happens</th></tr>
+<tr><td>Premade square</td><td>A centred square (80 % of the shorter video side). New videos get it automatically. Drag its corners onto the real corners.</td></tr>
+<tr><td>Manual — click 4 corners</td><td>Click the four floor corners on the preview, in any order.</td></tr>
+<tr><td>Auto — from contrast (now)</td><td>Finds the floor from its brightness. Check and adjust the result; <i>Auto-arena padding</i> enlarges it slightly, because mice rarely touch the wall.</td></tr>
+<tr><td>Auto — from movement (next run)</td><td>Only when turned on in <a href="topic:app-settings">Extra features</a> (Open Field): the arena is built from where the mouse went during the run.</td></tr>
+</table>
+<p><b>Redraw</b> starts again; <b>✕</b> clears the arena.</p>
+<p>Maze tests use their own shape instead of four corners — a Y, a plus, a ring …
+see each <a href="topic:welcome">experiment page</a>.</p>
+
+<h2>Step by step (Open Field)</h2>
+<ol>
+<li>Show a frame where the corners are clearly visible (scrub with the slider).</li>
+<li>Choose <b>Manual — click 4 corners</b> and click the four corners of the floor
+(the inside of the walls, at floor level).</li>
+<li>Pick <b>Cage shape</b>: Rectangle, Square or Custom.</li>
+<li>Check: the outline should follow the floor edges in the whole video.</li>
+</ol>
+
+<h2>Cage shape and perspective</h2>
+<ul>
+<li><b>Cage shape</b> tells the app the real shape of the floor. It is used to
+straighten a tilted view, to draw graphs, and for the automatic scale
+(<a href="topic:card-scale">Scale</a>). <i>Custom</i> = no automatic scale; draw a
+calibration line.</li>
+<li><b>Correct perspective</b>: when the camera looks at the arena at an angle, the floor
+appears as a trapezoid. Turning this on straightens the video so the floor becomes a
+true rectangle — distances on the far side are then correct. The arena must be
+drawn first. Everything (zones, graphs, numbers) is then measured in the straightened
+picture.</li>
+</ul>
+<div class="warn">If perspective correction is on but can't be built (corners missing or
+invalid), the run stops with a message instead of tracking the tilted video. Redraw
+the corners or turn the correction off.</div>
+<div class="warn">An arena with almost no area (four clicks on one spot, or on one line) is
+refused: "The arena has almost no area … Redraw it."</div>

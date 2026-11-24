@@ -370,15 +370,19 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
                 for k, v in (exp.snapshot_extras(self) or {}).items():
                     out.setdefault(k, v)
             except Exception as e:
-                logger.warn(f"snapshot_extras failed ({getattr(exp, 'key', '?')}): {e}",
-                            source="plugin")
+                # Without them the test's own shapes (arms, objects …) are not
+                # saved and the previous video's would be reused — fail loudly.
+                logger.error(f"snapshot_extras failed ({getattr(exp, 'key', '?')}): {e}",
+                             source="plugin")
+                raise
         if exp is not None and hasattr(exp, "contribute_to_snapshot"):
             try:
                 exp.contribute_to_snapshot(self, out)
             except Exception as e:
-                logger.warn(f"contribute_to_snapshot failed "
-                            f"({getattr(exp, 'key', '?')}): {e}",
-                            source="plugin")
+                logger.error(f"contribute_to_snapshot failed "
+                             f"({getattr(exp, 'key', '?')}): {e}",
+                             source="plugin")
+                raise
         return out
 
     def apply_settings(self, s: dict):
@@ -422,8 +426,10 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             try:
                 exp.apply_extras(self, s)
             except Exception as e:
-                logger.warn(f"apply_extras failed ({getattr(exp, 'key', '?')}): {e}",
-                            source="plugin")
+                # caller (_load_into_embedded) reports it and keeps the old video
+                logger.error(f"apply_extras failed ({getattr(exp, 'key', '?')}): {e}",
+                             source="plugin")
+                raise
         self._update_calib_status()
         if hasattr(self, "_refresh_zones_label"):
             self._refresh_zones_label()
@@ -2483,14 +2489,21 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         from core.video import probe, warm_frame_times
         raw_fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
         self._auto_fps, frame_count = probe(cap)
-        if abs(self._auto_fps - raw_fps) > 0.5:
+        if self._auto_fps > 0 and abs(self._auto_fps - raw_fps) > 0.5:
             logger.warn(f"{os.path.basename(path)}: file reports {raw_fps:g} fps; "
                         f"using {self._auto_fps:.2f} fps measured from frame times",
                         source="video")
         warm_frame_times(path)          # exact scrub jumps (core.video)
         # honor manual override if set
         override = self._fps_override()
-        self.fps = override if override > 0 else self._auto_fps
+        if self._auto_fps <= 0:
+            from core.video import FPS_UNKNOWN
+            logger.warn(f"{os.path.basename(path)}: file reports {raw_fps:g} fps; "
+                        "real rate unknown", source="video")
+            if override <= 0:
+                QMessageBox.warning(self, "Frame rate unknown", FPS_UNKNOWN)
+        # 30 only drives the preview until an override is set; tracking refuses
+        self.fps = override if override > 0 else (self._auto_fps or 30.0)
         self._sync_trail_len()
         self._total_frames = frame_count
         native_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -2721,6 +2734,13 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             self.set_step_status("scale", "warn")
             return
         if mode in ("manual", None):
+            if (self.zone_drawer.calib_p1 and self.zone_drawer.calib_p2
+                    and self.spin_cm.value() <= 0):
+                self.lbl_calib.setText("Enter the real length of the line in cm — "
+                                       "0 is not a length. Runs are refused until then.")
+                theme.set_tone(self.lbl_calib, "err", "font-size:11px;")
+                self.set_step_status("scale", "warn")
+                return
             if self.zone_drawer.calib_p1 and self.zone_drawer.calib_p2:
                 pxcm = self.zone_drawer.get_pixels_per_cm(self.spin_cm.value())
                 if pxcm:
@@ -3058,12 +3078,6 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
     def _compute_homography(self):
         self._H = self._build_homography(self._original_arena)
 
-    def _persistent_homography(self):
-        """Homography from current arena → axis-aligned target, regardless of toggle state."""
-        if self._H is not None:
-            return self._H
-        return self._build_homography(self.zone_drawer.arena)
-
     def _on_cage_shape_changed(self):
         shape = self.combo_cage_shape.currentData()
         self._persist_config("cage_shape", shape)
@@ -3141,70 +3155,24 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         return s
 
     def to_graph_space(self, pts_list):
-        """Video-pixel points -> the (straightened) space the graphs are
-        drawn in; plugins use it so their overlays line up with the track."""
-        H = None if self._perspective_on else self._persistent_homography()
-        if H is None or not pts_list:
-            return pts_list
-        arr = np.array([[[float(p[0]), float(p[1])]] for p in pts_list], dtype=np.float32)
-        w = cv2.perspectiveTransform(arr, H)
-        return [(float(p[0][0]), float(p[0][1])) for p in w]
+        """Video-pixel points -> the space the graphs are drawn in. Graphs
+        use the tracker's own space (see _graph_data), so this is the
+        identity; kept for plugins that call it."""
+        return pts_list
 
     def _graph_data(self):
-        """Returns (results, arena_pixels, center_pixels, px_per_cm) in warped (undistorted) space."""
-        results = self.tracking_results
-        arena = self.zone_drawer.get_arena_pixels()
-        center = self.zone_drawer.get_center_pixels()
-        px_per_cm = self._get_px_per_cm()
-
-        if self._perspective_on or not results:
-            return results, arena, center, px_per_cm
-        H = self._persistent_homography()
-        if H is None:
-            return results, arena, center, px_per_cm
-        warp_pts = self.to_graph_space
-
-        warped_results = []
-        for r in results:
-            nr = dict(r)
-            if nr.get("x") is not None and nr.get("y") is not None:
-                p = np.array([[[float(nr["x"]), float(nr["y"])]]], dtype=np.float32)
-                w = cv2.perspectiveTransform(p, H)[0, 0]
-                nr["x"] = float(w[0])
-                nr["y"] = float(w[1])
-            warped_results.append(nr)
-
-        warped_arena = warp_pts(arena)
-        warped_center = warp_pts(center)
-
-        warped_px_per_cm = px_per_cm
-        if (px_per_cm and self.zone_drawer.calib_p1 and self.zone_drawer.calib_p2
-                and self.spin_cm.value() > 0):
-            p1 = self.zone_drawer.calib_p1
-            p2 = self.zone_drawer.calib_p2
-            calib_pts = warp_pts([
-                (p1[0] * self.video_w, p1[1] * self.video_h),
-                (p2[0] * self.video_w, p2[1] * self.video_h),
-            ])
-            dist = ((calib_pts[1][0] - calib_pts[0][0]) ** 2 +
-                    (calib_pts[1][1] - calib_pts[0][1]) ** 2) ** 0.5
-            warped_px_per_cm = dist / self.spin_cm.value()
-        elif px_per_cm and self.experiment is not None:
-            # Auto scale: measured on the arena as it fills the warped
-            # frame, so px/cm matches the warped positions above.
-            snap = dict(self.snapshot_settings())
-            snap["arena"] = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
-            snap["cage_shape"] = self._cage_shape()
-            v = self.experiment.compute_auto_px_per_cm(snap, self._warp_target_size())
-            if v:
-                warped_px_per_cm = v
-
-        return warped_results, warped_arena, warped_center, warped_px_per_cm
+        """Returns (results, arena_pixels, center_pixels, px_per_cm) in the
+        space the tracker reports — the straightened frame when perspective
+        is on, the raw frame otherwise. Never reshaped when perspective is
+        off: batch and every export use these same positions, so the
+        numbers must match."""
+        return (self.tracking_results, self.zone_drawer.get_arena_pixels(),
+                self.zone_drawer.get_center_pixels(), self._get_px_per_cm())
 
     def _graph_canvas_size(self):
         """Returns (W, H) used by trajectory/heatmap plots — warped target if available."""
-        target = self._warp_target_size()
-        if target is not None and (self._perspective_on or self.zone_drawer.arena is not None):
+        target = self._warp_target_size() if self._perspective_on else None
+        if target is not None:
             return target
         return (self.video_w or 640, self.video_h or 480)
 
@@ -3552,19 +3520,12 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
     # ── presets ───────────────────────────────────────────────────────────
 
     def _load_presets_file(self):
-        if os.path.exists(PRESETS_PATH):
-            try:
-                with open(PRESETS_PATH) as f:
-                    return json.load(f)
-            except Exception as e:
-                logger.warn(f"Presets file unreadable ({PRESETS_PATH}): {e}",
-                            source="presets")
-        return {}
+        from core.app_paths import read_json
+        return read_json(PRESETS_PATH)
 
     def _save_presets_file(self):
-        _ensure_dir(os.path.dirname(PRESETS_PATH))
-        with open(PRESETS_PATH, "w") as f:
-            json.dump(self._presets, f, indent=2)
+        from core.app_paths import write_json
+        write_json(PRESETS_PATH, self._presets)
 
     def _populate_preset_combo(self):
         self.combo_preset.blockSignals(True)
@@ -3927,13 +3888,15 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             from gui.notify import show_done
             show_done(self, "Excel file saved",
                       "CSV copies of the data were saved next to it.", path=out_path)
+            from gui.notify import show_notices
+            show_notices(self)
         except Exception as e:
             theme.set_tone(self.lbl_export, "err", "font-size:11px;")
-            from gui.notify import show_done
+            from gui.notify import show_done, explain_error
             title = ("CSV copy not saved"
                      if str(e).startswith("The Excel file was saved")
                      else "Excel export failed")
-            show_done(self, title, str(e), kind="err")
+            show_done(self, title, explain_error(e), kind="err")
 
     # ── exclusion brush ───────────────────────────────────────────────────
 
@@ -4028,6 +3991,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             self.metrics, self.raw_df, self.bin_df = self.experiment.compute_metrics(
                 results, plugin_settings, self.fps, px_per_cm,
             )
+            self._metrics_ok = True
             if dirty is None:
                 self._populate_graph_tab()
                 self._populate_excel_tab()
@@ -4045,7 +4009,10 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
                     self._populate_tracking_issues_tab()
         except Exception as e:
             import traceback
-            logger.warn(
+            # The shown numbers are now older than the settings: exports
+            # check this flag and refuse to pass them off as current.
+            self._metrics_ok = False
+            logger.error(
                 f"_recompute_metrics_and_views failed: {e}\n{traceback.format_exc()}",
                 source="metrics",
             )

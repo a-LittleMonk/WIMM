@@ -7,9 +7,11 @@ from gui import theme
 
 
 def ndarray_to_pixmap(arr: np.ndarray) -> QPixmap:
-    rgb = arr[:, :, ::-1].copy()
-    h, w, ch = rgb.shape
-    img = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
+    # Qt reads BGR directly — no per-frame channel-swap copy (fromImage
+    # copies the pixels, so `arr` may change afterwards).
+    arr = np.ascontiguousarray(arr)
+    h, w = arr.shape[:2]
+    img = QImage(arr.data, w, h, arr.strides[0], QImage.Format_BGR888)
     return QPixmap.fromImage(img)
 
 
@@ -868,8 +870,13 @@ class ZoneDrawer(QLabel):
         ox, oy, dw, dh = self._get_disp_rect()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        scaled = self._base_pixmap.scaled(dw, dh, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        painter.drawPixmap(ox, oy, scaled)
+        # Smooth scaling costs ~10 ms: redo it only for a new frame or size.
+        key = (self._base_pixmap.cacheKey(), dw, dh)
+        if getattr(self, "_scaled_key", None) != key:
+            self._scaled_key = key
+            self._scaled_pix = self._base_pixmap.scaled(
+                dw, dh, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        painter.drawPixmap(ox, oy, self._scaled_pix)
         show_arena = self.layers.get("arena", True)
         show_zones = self.layers.get("zones", True)
 

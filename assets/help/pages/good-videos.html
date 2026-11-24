@@ -1,0 +1,56 @@
+<!--
+id: good-videos
+title: Recording videos that track well
+section: 1. Getting started
+order: 4
+keywords: camera, recording, lighting, contrast, resolution, frame rate, fps, format, codec, angle, white mouse, black mouse
+-->
+<h1>Recording videos that track well</h1>
+<p>Most tracking problems are decided when the video is recorded. These rules make
+detection reliable and the numbers comparable between animals.</p>
+
+<h2>Camera</h2>
+<ul>
+<li><b>Above the arena, looking straight down.</b> A tilted camera makes the far side
+look smaller, so distances there are too short. If you can't avoid an angle, use
+<b>Correct perspective</b> (<a href="topic:card-arena">Arena</a>).</li>
+<li><b>Fixed.</b> The camera must not move during the session or between animals of one
+batch. The background model assumes a still camera.</li>
+<li><b>The whole arena in the picture</b>, with a little margin, filling as much of the
+frame as possible.</li>
+<li>Same camera position, zoom and lighting for every animal of an experiment.</li>
+</ul>
+
+<h2>Contrast between mouse and floor</h2>
+<ul>
+<li>Black mouse on a white or light floor, or white mouse on a dark floor, tracks best.</li>
+<li>A white mouse on a white floor (or black on black) needs <b>White mouse on white
+floor</b> in <a href="topic:card-detection">Detection</a> and careful checking.</li>
+<li>Even, diffuse light. Avoid strong shadows, reflections on the floor or walls and
+lamps visible in the picture. Infrared lighting works well for dark-phase tests.</li>
+</ul>
+
+<h2>Resolution, frame rate, format</h2>
+<ul>
+<li>720p (1280 × 720) is plenty; 1080p works but is slower. Lower resolutions work if
+the mouse is at least about 20 × 20 pixels.</li>
+<li>25–30 frames per second is normal. The app reads each frame's real time stamp, so
+small dropped-frame gaps are handled correctly.</li>
+<li>Formats: .mp4 .avi .mov .mkv .wmv .flv. If a file reports an impossible frame rate
+(for example 1000 fps) and has no time stamps, the app asks you to set the
+<b>FPS override</b> (<a href="topic:card-video">Video</a>).</li>
+</ul>
+
+<h2>The empty arena</h2>
+<p>The app builds a picture of the empty arena (the "background") from frames spread
+over the video, and finds the mouse as what differs from it. This works even if the
+mouse is present from the start — but objects that are moved during the session,
+a hand that stays in the picture, or a changing light make it harder. Start the
+recording a few seconds before the mouse goes in if you can, and trim that part off
+(<a href="topic:trim-crop">Trim</a>).</p>
+
+<h2>Before a full study</h2>
+<p>Record one or two pilot animals, run them, and check the
+<a href="topic:tracking-issues">tracking issues</a> and the detection rate (aim for
+90 % or more). Fix the set-up now — it is much easier than correcting hundreds of
+videos later.</p>

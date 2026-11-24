@@ -1,0 +1,27 @@
+<!--
+id: exp-light_dark
+title: Light–Dark Box
+section: 5. Experiments
+order: 8
+keywords: light dark box, ldb, anxiety, light side, dark side, transitions, latency to dark, lost frames dark
+-->
+<h1>Light–Dark Box</h1>
+<p>Anxiety-like behaviour: time in the lit compartment, transitions between sides.</p>
+<p><img src="img/exp_light_dark.png" width="620"></p>
+<h2>Set-up, step by step</h2>
+<ol>
+<li><b>Arena (03)</b>: the 4 corners of the whole box (light + dark).</li>
+<li><b>Zones (04)</b>: <i>Dark side</i> size as % of the box length (standard one third);
+<b>Count lost frames as dark</b> — when the camera can't see inside the dark side, frames
+where the mouse isn't found count as dark time.
+<p><img src="img/zones_light_dark.png" width="300"></p></li>
+<li>Scale, check detection on the light side, run.</li>
+</ol>
+<h2>Measures</h2>
+<table width="100%">
+<tr><th>Measure</th><th>Meaning</th></tr>
+<tr><td>Time / % / Entries / Latency / Mean Visit — Light, Dark</td><td>Per side.</td></tr>
+<tr><td><b>Transitions (#)</b></td><td>Number of changes between light and dark.</td></tr>
+</table>
+<div class="warn">With <i>Count lost frames as dark</i> on, a tracking failure on the light side is
+also counted as dark. Check the detection rate and the tracking issues of each video.</div>

@@ -1,0 +1,42 @@
+<!--
+id: card-scale
+title: 05 Scale — from pixels to centimetres
+section: 2. Setting up a video
+order: 5
+keywords: scale, calibration, px/cm, pixels per cm, centimetres, line, draw line, cage size, real length, arm length, units
+-->
+<h1>05 Scale</h1>
+<p><img src="img/card_scale.png" width="300"> &nbsp; <img src="img/card_scale_line.png" width="300"></p>
+<p class="cap">Left: <b>Auto · cage</b> — the 40 × 40 cm floor gives 13.11 px/cm.
+Right: <b>Manual line</b> — a 40 cm line along the bottom wall gives 13.12 px/cm.
+Both ways agree when the arena outline sits on the floor edges.</p>
+<p>The scale converts pixels to centimetres. Without it, every distance and speed is
+in pixels and can't be compared between cameras or set-ups.</p>
+
+<h2>Three choices</h2>
+<table width="100%">
+<tr><th>Choice</th><th>How</th><th>Best for</th></tr>
+<tr><td>Auto · cage</td><td>Enter the real inner size of the floor (cm). The scale = arena size in pixels ÷ real size. Maze tests use <i>Arm length</i> instead (hub to arm tip).</td><td>When the arena outline is exactly on the floor edges.</td></tr>
+<tr><td>Manual line</td><td>Click <b>Draw line</b>, drag a line along something of known length on the floor (a wall, a ruler), type its real length in cm.</td><td>The most direct; use the longest straight edge you can see.</td></tr>
+<tr><td>None (px)</td><td>No scale; results in pixels.</td><td>Only when cm don't matter.</td></tr>
+</table>
+<p>The line below the buttons confirms the result, e.g. <i>Calibrated (line): 13.12 px/cm</i>.
+<b>Clear</b> removes the line.</p>
+
+<h2>Step by step — manual line</h2>
+<ol>
+<li>Select <b>Manual line</b>, click <b>Draw line</b>.</li>
+<li>On the preview, press on one end of a known edge and drag to the other end.</li>
+<li>Type the real length in the cm box (e.g. 40.00 cm).</li>
+<li>Check the px/cm value; the small "10 cm" bar on the preview should look 10 cm long.</li>
+</ol>
+<p><img src="img/scale_line.png" width="620"></p>
+<p class="cap">The yellow line is the calibration line: drawn along the inner edge of the
+bottom wall, whose real length is 40 cm.</p>
+<div class="warn">A real length of 0 is refused: the card shows "Enter the real length of
+the line in cm — 0 is not a length" and runs are refused until you enter it.</div>
+<div class="tip">Draw the line at floor level. A line drawn along the top of a wall is
+closer to the camera and looks longer, so distances on the floor come out too short.</div>
+<div class="note">With <b>Correct perspective</b> on, draw the line on the straightened
+picture. The scale is then valid everywhere on the floor.</div>
+<p>See also <a href="topic:units">Units and calibration</a>.</p>

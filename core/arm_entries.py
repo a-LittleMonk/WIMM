@@ -36,12 +36,33 @@ def point_in_polys(xs, ys, polys, priority_first=None):
     return out
 
 
+def bridge_gaps(seq, gap):
+    """Copy of `seq` where each run of gap frames (gap[i] true) lying
+    between two frames of the same value takes that value, so lost
+    tracking inside one visit doesn't split it. Runs at either end, or
+    between two different values, are left as they are."""
+    out = list(seq)
+    n = len(out)
+    i = 0
+    while i < n:
+        if not gap[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and gap[j]:
+            j += 1
+        if i > 0 and j < n and not gap[i - 1] and out[i - 1] == out[j]:
+            out[i:j] = [out[j]] * (j - i)
+        i = j
+    return out
+
+
 def arm_visits(zone_seq, arms, min_frames):
     """zone_seq: zone per frame (None = no zone / undetected). Returns
     (confirmed, entries, times_frames, seq, events): confirmed zone per
     frame (None included), entries and frame counts per arm, entered arms
     in order, [(frame, arm)]."""
-    visit = list(zone_seq)
+    visit = bridge_gaps(zone_seq, [z is None for z in zone_seq])
     n = len(visit)
     confirmed = [None] * n
     m = max(1, int(min_frames))

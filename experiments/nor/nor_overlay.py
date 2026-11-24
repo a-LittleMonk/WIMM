@@ -119,10 +119,12 @@ def paint_nor_overlay(host, zd, painter, ox, oy, dw, dh):
             name_y  = stats_y - line_h - gap         # one line above stats
         if show_names:
             text = label
-            if role == "novel":
-                text += " (N)"
-            elif role == "familiar":
-                text += " (F)"
+            # First letter of the experiment's own role name: F / N (Novel
+            # Object), S / M (Object Location: Stationary / Moved).
+            names = getattr(getattr(host, "experiment", None), "role_labels", None) or {
+                "familiar": "Familiar", "novel": "Novel"}
+            if role in ("novel", "familiar") and names.get(role):
+                text += f" ({names[role][0]})"
             tw = fm.horizontalAdvance(text)
             x = lx - tw // 2  # centered on anchor x
             painter.setPen(QColor(0, 0, 0, 200))

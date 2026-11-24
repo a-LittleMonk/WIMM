@@ -1,0 +1,34 @@
+<!--
+id: card-tracking
+title: 07 Tracking — model, speed and nose
+section: 2. Setting up a video
+order: 7
+keywords: tracking, model, median bg, mog2, knn, hsv, frame difference, process resolution, frame skip, smoothing, nose detection, tail, live overlay, speed up, faster
+-->
+<h1>07 Tracking</h1>
+<p><img src="img/card_tracking.png" width="300"></p>
+
+<h2>Model</h2>
+<table width="100%">
+<tr><th>Model</th><th>Use</th></tr>
+<tr><td><b>Median BG</b> (default)</td><td>Builds the empty arena from frames sampled over the whole video. Validated; handles a mouse that freezes most of the session, light or dark mice and light flicker. <b>Use this for results.</b></td></tr>
+<tr><td>HSV threshold</td><td>Plain colour / brightness threshold — a dark mouse on a light floor.</td></tr>
+<tr><td>MOG2, KNN, Frame difference</td><td>Experimental. In validation MOG2 overestimated distance by ~50 %, KNN misplaced the mouse in about a third of frames, Frame difference missed a slow or still mouse. Not for results.</td></tr>
+<tr><td>CNT, GSOC, LSBP</td><td>Need the opencv-contrib package; not installed by default.</td></tr>
+</table>
+<p>The ⚙ button shows the model's tuning values. <i>Settings → Extra features → Open models
+preview</i> shows every model's default values.</p>
+
+<h2>Speed and quality</h2>
+<table width="100%">
+<tr><th>Control</th><th>Meaning</th></tr>
+<tr><td>Process res.</td><td>Shrinks frames before detection: Full, 75 %, 50 % (~2× faster), 25 % (~4× faster). Positions are scaled back to full size. Check detection after lowering it — a small mouse may get lost.</td></tr>
+<tr><td>Frame skip</td><td>Analyse every Nth frame and fill the skipped ones by straight lines. Off = every frame (most accurate).</td></tr>
+<tr><td>Smoothing</td><td>Rolling-median filter on the positions after tracking (Off / 3 / 5 / 7 / 9 frames). Removes single-frame jumps; larger values can flatten fast turns.</td></tr>
+<tr><td>Nose detection</td><td>Finds the nose and tail tip every frame. Needed for object tests (on by default for Novel Object / Object Location); costs 1–3 ms per frame.</td></tr>
+<tr><td>Live cell overlay during tracking</td><td>Updates the zone overlay every frame while tracking (slower). Off by default — everything is shown after the run anyway.</td></tr>
+<tr><td>Multi run…</td><td>Opens <a href="topic:multi-run">Multi-Run</a>.</td></tr>
+</table>
+<div class="note">Smoothing changes the path length (distance). Keep it the same for every
+animal of a study — in a batch it is shared automatically
+(<a href="topic:batch-rules">Batch rules</a>).</div>

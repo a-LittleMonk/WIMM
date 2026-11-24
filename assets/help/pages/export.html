@@ -1,0 +1,52 @@
+<!--
+id: export
+title: Exporting results
+section: 4. Results
+order: 5
+keywords: export, excel, combined excel, raw data, csv, svg, pdf, annotated video, render, backup, output folder, download, save results
+-->
+<h1>Exporting results</h1>
+<p><img src="img/tab_export.png" width="620"></p>
+
+<h2>What you can export</h2>
+<table width="100%">
+<tr><th>Export</th><th>Where</th><th>Contains</th></tr>
+<tr><td>One video</td><td>Output tab → <b>Export to Excel</b></td><td>That video's Summary, Raw Data, Time Bins, Video Config, Graphs + CSV copies.</td></tr>
+<tr><td>Combined Excel</td><td>Export tab → <b>Combined Excel</b></td><td>Every completed video: an <i>All Animals</i> sheet (one row per animal, ready for statistics) and one sheet per animal with its results and graphs.</td></tr>
+<tr><td>Raw data</td><td>Export tab → <b>Download raw data</b></td><td>One sheet per animal with its animal information and every frame.</td></tr>
+<tr><td>Vector graphs</td><td>Export tab → <i>Also save SVG / PDF</i>, <b>Export graphs now</b></td><td>Every graph of every video as SVG and/or PDF.</td></tr>
+<tr><td>Annotated video</td><td>Export tab → Annotated video → <b>Render…</b></td><td>A copy of the video with the overlays you tick burned in.</td></tr>
+<tr><td>Automatic backup</td><td>— (after every run)</td><td>One Excel file per video in the backup folder.</td></tr>
+</table>
+<p>Each export asks for the folder (it opens in the last folder used). <b>Graph style</b>
+chooses the graph preset used in exported files.</p>
+
+<h2>Before a batch export</h2>
+<p>The app makes sure each video's numbers and graphs match its current settings. If
+you changed settings after running, those videos are recomputed first. If a video's
+numbers can't be brought up to date, the export stops and names the video — it never
+exports out-of-date numbers. Videos that can't be opened are skipped and listed.</p>
+
+<h2>Annotated video</h2>
+<ol>
+<li>Tick the overlays: arena outline, center zone, grid, exclusion mask, bounding ellipse,
+trail, trail fade, marker info tag, cell highlight / numbers / timer / entries, and
+<i>Apply preprocessing</i> (shows the detection picture).</li>
+<li>Choose Body markers, Trail length and Smooth path.</li>
+<li>Render: <b>Current video</b>, <b>All completed</b> or <b>Pick…</b>, then <b>Render…</b>.
+<b>Stop</b> cancels.</li>
+</ol>
+<p>The video covers the trimmed part. It is useful for presentations and for showing
+reviewers how the tracking looks.</p>
+
+<h2>File names</h2>
+<ul>
+<li>Combined: <code>&lt;experiment&gt;_combined-&lt;date-time&gt;.xlsx</code>; raw data:
+<code>&lt;experiment&gt;_raw-&lt;date-time&gt;.xlsx</code>.</li>
+<li>Backup: <code>&lt;video name&gt;_&lt;experiment&gt;.xlsx</code>. Two queued videos with the
+same file name from different folders get the folder name in front
+(<code>Day1_m1_open_field.xlsx</code>, <code>Day2_m1_open_field.xlsx</code>).</li>
+</ul>
+<div class="warn">A file that is open in Excel can't be overwritten. The message
+"… can't be written — it is probably open in Excel" means: close it and export again.</div>
+<p>What each sheet contains: <a href="topic:excel-files">Inside the Excel files</a>.</p>

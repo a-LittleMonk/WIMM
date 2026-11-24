@@ -1,0 +1,52 @@
+<!--
+id: run
+title: Run one video, Run all, Stop
+section: 3. Running the analysis
+order: 1
+keywords: run, start, run all, batch, stop, cancel, pre-flight, progress, eta, close, backup, tracking, single video
+-->
+<h1>Run one video, Run all, Stop</h1>
+
+<h2>One video</h2>
+<p>Click ▶ on the video's Queue row. It runs with the settings shown in the panel for
+that video. When it finishes, the row says <b>Completed</b> and the status line
+"Done: <i>name</i>".</p>
+
+<h2>All videos (batch)</h2>
+<ol>
+<li>Set everything up on one video and <b>click that video</b> so it is shown in the
+panel — it is the <b>settings video</b>.</li>
+<li>Make sure every video has its own arena (and its own zones, scale line, crop and
+animal information where needed). Rows without an arena say <i>Needs setup</i>.</li>
+<li>Click <b>Run all</b>. A pre-flight check lists what is shared:</li>
+</ol>
+<p><img src="img/preflight.png" width="520"></p>
+<ol start="4">
+<li>Videos are tracked one after another. The Run panel shows the batch progress,
+elapsed time and estimated time left; the header pill shows the current video.</li>
+</ol>
+<p><img src="img/running.png" width="620"></p>
+<p>What is shared and what stays per video: <a href="topic:batch-rules">Batch rules</a>.</p>
+
+<h2>Stop</h2>
+<p><b>Stop</b> ends the run. The video being tracked when you press it is <b>not saved</b>
+— it goes back to <i>Ready</i> and keeps its earlier results, if any. Videos finished
+before it keep their results. Re-run the stopped video later.</p>
+<p>Closing the window during a run asks first; answering Yes stops tracking and closes
+(the unfinished video is not saved).</p>
+
+<h2>One run at a time</h2>
+<p>Only one video can be tracked at a time, in all experiments together. Starting
+another run while one is going shows "Run in progress" — wait, or press Stop.</p>
+
+<h2>After each video</h2>
+<ul>
+<li>The results appear in the Output tab and the video's row says <b>Completed</b>.</li>
+<li>A backup Excel file of the video is saved automatically to the backup folder
+(<a href="topic:files">Files and folders</a>).</li>
+<li>When the run ends, one message lists anything that needs your attention:
+failed videos, videos that ended early, low detection.
+→ <a href="topic:run-messages">Messages after a run</a></li>
+</ul>
+<div class="note">The window answers more slowly while a video is tracked and pauses
+briefly while the results and backup are written. This is normal.</div>

@@ -1,0 +1,49 @@
+<!--
+id: excel-files
+title: What is inside the Excel files
+section: 4. Results
+order: 6
+keywords: excel, sheets, columns, summary, raw data, time bins, video config, graphs, all animals, units, mm, m, km/h, minutes, statistics, spss, prism, r
+-->
+<h1>What is inside the Excel files</h1>
+
+<h2>Single-video file (export and backup)</h2>
+<table width="100%">
+<tr><th>Sheet</th><th>Contents</th></tr>
+<tr><td>Summary</td><td>Title with the test and video name; one row per measure.</td></tr>
+<tr><td>Metadata</td><td>Animal information (only if entered).</td></tr>
+<tr><td>Raw Data</td><td>One row per frame (see below).</td></tr>
+<tr><td>Time Bins</td><td>Per-bin measures (only with a Time bin).</td></tr>
+<tr><td>Video Config</td><td>App version, video resolution and every setting used.</td></tr>
+<tr><td>Graphs</td><td>The graph images.</td></tr>
+</table>
+
+<h2>Combined file</h2>
+<p><b>All Animals</b>: one row per animal, its information first (ID, group, sex …), then
+every measure — paste straight into SPSS, Prism or R. Then one sheet per animal.</p>
+
+<h2>Every unit, side by side</h2>
+<p>Each distance, speed and time is written in all scales next to each other, so you
+never convert by hand:</p>
+<ul>
+<li>Distance: cm, mm, m</li>
+<li>Speed: cm/s, mm/s, m/s, m/min, km/h</li>
+<li>Time: s, min</li>
+</ul>
+<p>Without a scale, distances and speeds are in px and px/s and are not converted.</p>
+
+<h2>Raw Data columns</h2>
+<table width="100%">
+<tr><th>Column</th><th>Meaning</th></tr>
+<tr><td>Frame, Time (s)</td><td>Frame number and its real time in the video.</td></tr>
+<tr><td>X (px), Y (px)</td><td>Body-centre position; empty when the mouse was not found.</td></tr>
+<tr><td>Step Distance, Speed</td><td>Distance from the previous detected frame, and speed (distance ÷ real time between the two frames).</td></tr>
+<tr><td>Zone</td><td>The zone the body is in at that frame (where it is, before the min-dwell rule; object tests: the object the nose is at).</td></tr>
+<tr><td>Arm (Confirmed)</td><td>Y-Maze: the arm after the min-dwell rule — the one used for entries and times.</td></tr>
+<tr><td>Nose / Tail X Y, Nose Confidence</td><td>Nose and tail positions (empty when nose detection is off).</td></tr>
+</table>
+<p>Measure names in the Summary of the maze and object tests are short codes such as
+<code>time_arm_a_s</code> or <code>discrimination_index</code>: the part after the last
+underscore is the unit (<code>_s</code> seconds, <code>_cm</code>, <code>_pct</code> %).
+Each experiment's page explains its measures.</p>
+<p>The same tables are also written as CSV files next to a single-video export.</p>

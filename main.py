@@ -13,8 +13,43 @@ from gui.main_window import MainWindow, load_config
 from gui.theme import apply_theme, load_aurora, register_bundled_fonts
 
 
+def _keep_log_on_disk():
+    """WARN / ERROR entries also go to settings/wimm.log, so they survive
+    closing the app (View → Logs only holds this session)."""
+    from core import logger
+    from core.app_paths import SETTINGS_DIR, ensure_dir
+    path = os.path.join(ensure_dir(SETTINGS_DIR), "wimm.log")
+    try:
+        if os.path.getsize(path) > 2_000_000:          # keep one old file
+            os.replace(path, path + ".old")
+    except OSError:
+        pass
+
+    def write(entry):
+        if entry[1] in ("WARN", "ERROR"):
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(logger.format_entry(entry) + "\n")
+    logger.subscribe(write)
+
+
+def _report_crash(kind, value, tb):
+    """An error escaping a button handler would otherwise end PyQt5 (and a
+    batch held only in memory): log it, tell the user, keep running."""
+    import traceback
+    from core import logger
+    text = "".join(traceback.format_exception(kind, value, tb))
+    logger.error(f"Unexpected error:\n{text}", source="app")
+    if QApplication.instance() is not None:
+        from PyQt5.QtWidgets import QMessageBox
+        QMessageBox.critical(None, "Unexpected error",
+                             f"{value}\n\nThe app keeps running; details are in "
+                             "View → Logs and settings/wimm.log.")
+
+
 def main():
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    _keep_log_on_disk()
+    sys.excepthook = _report_crash
     app = QApplication(sys.argv)
     app.setApplicationName("Mice Tracker")
     register_bundled_fonts()

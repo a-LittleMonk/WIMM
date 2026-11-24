@@ -74,6 +74,8 @@ a = Analysis(
         # Bundled fonts (Instrument Sans, JetBrains Mono, Quicksand Bold +
         # OFL licences) — registered at start-up by gui.theme.
         ('assets/fonts', 'assets/fonts'),
+        # In-app Help: guide pages + screenshots (gui.help_dialog).
+        ('assets/help', 'assets/help'),
     ],
     hiddenimports=hidden_imports,
     hookspath=[],

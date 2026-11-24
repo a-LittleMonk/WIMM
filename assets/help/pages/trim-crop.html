@@ -1,0 +1,33 @@
+<!--
+id: trim-crop
+title: Trim and crop a video
+section: 2. Setting up a video
+order: 10
+keywords: trim, crop, cut, start time, end time, duration, session length, region, first minutes, scissors
+-->
+<h1>Trim and crop a video</h1>
+<p>Click ✂ on a video's Queue row.</p>
+<p><img src="img/trim_dialog.png" width="560"></p>
+
+<h2>Trim — which part of the video is analysed</h2>
+<ol>
+<li>Drag the left handle of the slider to the start (e.g. the moment the mouse is
+released) and the right handle to the end. The picture shows the frame at the handle
+you move.</li>
+<li>Fine-tune with <b>Start −1s / Start +1s</b> and <b>End −1s / End +1s</b>.</li>
+<li>Check <b>Duration</b> in the middle (e.g. exactly 300 s for a 5-minute test).</li>
+<li>Click <b>Save</b>.</li>
+</ol>
+<p>Latencies are reported in the original video's time (the trim start is added back),
+so they can be checked against the video file.</p>
+
+<h2>Crop — which region the tracker sees</h2>
+<p>Drag the yellow corner handles to cut away parts of the picture outside the arena
+(other boxes, the experimenter). Arena, zones and scale are then drawn on the
+cropped picture.</p>
+
+<div class="warn">In <b>Run all</b>, the trim is a shared setting: the trim of the video shown
+in the panel (the settings video) is used for <b>every</b> video of the batch, so all
+sessions have the same start and length. The crop stays per video.
+If your videos need different start times, run them one by one with ▶, or put them
+in separate batches. → <a href="topic:batch-rules">Batch rules</a></div>

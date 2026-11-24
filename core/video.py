@@ -15,13 +15,17 @@ import os
 import cv2
 
 MAX_FPS = 240.0
+FPS_UNKNOWN = ("Can't read this video's frame rate. Set an FPS override "
+               "(Video step) and run again.")
 _TIMES = {}
 
 
 def probe(cap):
     """(fps, frame_count). When the container's fps is impossible (0 or
     above 240), the real rate comes from the first frames' timestamps and
-    the frame count is rescaled to the same duration."""
+    the frame count is rescaled to the same duration. fps is 0.0 when it
+    can't be worked out (impossible value and no usable timestamps) — the
+    caller must then ask for an FPS override, never guess."""
     fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
     n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     if 1.0 <= fps <= MAX_FPS:
@@ -35,7 +39,7 @@ def probe(cap):
         ts.append(cap.get(cv2.CAP_PROP_POS_MSEC))
     cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
     if len(ts) < 2 or ts[-1] <= ts[0]:
-        return (fps if fps > 0 else 30.0), n
+        return 0.0, n
     real = (len(ts) - 1) * 1000.0 / (ts[-1] - ts[0])
     if fps > 0 and n > 0:
         n = int(round(n / fps * real))
@@ -81,10 +85,10 @@ def seek_exact(cap, idx, times):
     to the timestamp of frame idx - 1; jumps earlier when it overshoots.
     Plain jump when no timestamps."""
     idx = int(idx)
-    cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, idx))
     if idx <= 0 or not times or idx > len(times):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, idx))
         return
-    want = times[idx - 1]
+    want = times[idx - 1]   # (the loop below does the jump — no extra one)
     back = 0
     for _attempt in range(5):
         cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, idx - back))
@@ -102,10 +106,16 @@ def seek_exact(cap, idx, times):
     cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
 
 
-def skip_to(cap, idx):
-    """Start reading at frame `idx` by reading from the beginning — always
-    exact, and cheap for the trim offsets used before tracking."""
+def skip_to(cap, idx, path=None):
+    """Start reading at frame `idx`, exactly. With the file's frame times
+    already read (cached_frame_times(path)) this is a timestamp-checked
+    jump; otherwise frames are read from the beginning."""
+    idx = max(0, int(idx))
+    times = cached_frame_times(path) if (path and idx > 0) else None
+    if times and idx <= len(times):
+        seek_exact(cap, idx, times)
+        return
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-    for _ in range(max(0, int(idx))):
+    for _ in range(idx):
         if not cap.grab():
             break

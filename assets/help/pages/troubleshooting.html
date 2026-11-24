@@ -1,0 +1,45 @@
+<!--
+id: troubleshooting
+title: Troubleshooting — every message explained
+section: 8. Problems and answers
+order: 1
+keywords: error, problem, message, failed, can't open, frame rate unknown, fps, perspective, arena no area, calibration, locked, excel open, permission denied, damaged settings, backup folder, run in progress, export stopped, not detected, wrong position, jumps, slow
+-->
+<h1>Troubleshooting — every message explained</h1>
+
+<h2>Messages</h2>
+<table width="100%">
+<tr><th>Message</th><th>Cause</th><th>What to do</th></tr>
+<tr><td>Can't open <i>file</i> — the file is missing, empty or damaged.</td><td>The video can't be read.</td><td>Check the file plays in a video player; re-export it from the camera software; remove it from the Queue.</td></tr>
+<tr><td>Can't read this video's frame rate. Set an FPS override…</td><td>The file reports an impossible rate and has no time stamps.</td><td>Enter the camera's real rate in <a href="topic:card-video">Video → FPS override</a>.</td></tr>
+<tr><td>The arena has almost no area… Redraw it.</td><td>The 4 corners are on one spot or one line.</td><td><a href="topic:card-arena">Redraw the arena</a>.</td></tr>
+<tr><td>Perspective correction is on, but it can't be built…</td><td>Corners missing or invalid.</td><td>Redraw them or turn perspective correction off.</td></tr>
+<tr><td>The calibration line has no real length…</td><td>Real length 0 cm.</td><td>Enter the length in <a href="topic:card-scale">Scale</a>.</td></tr>
+<tr><td>Automatic scale (px/cm) failed…</td><td>The automatic scale couldn't be computed (e.g. maze points missing).</td><td>Fix the maze outline, or draw a calibration line.</td></tr>
+<tr><td>Arena not defined</td><td>The video has no arena.</td><td>Click its row and draw the arena.</td></tr>
+<tr><td>Run in progress</td><td>Another video is being tracked.</td><td>Wait, or press Stop.</td></tr>
+<tr><td>Stopped by user — partial run not saved</td><td>You pressed Stop.</td><td>Run that video again.</td></tr>
+<tr><td>Low detection rate</td><td>Mouse found in &lt; 90 % of frames.</td><td><a href="topic:card-detection">Detection guide</a>.</td></tr>
+<tr><td>These videos stopped decoding early</td><td>The file ends or breaks before its stated length.</td><td>Check / re-export the file.</td></tr>
+<tr><td>… can't be written — it is probably open in Excel…</td><td>The target file is open in another program.</td><td>Close it and export again.</td></tr>
+<tr><td>The backup of <i>video</i> could not be saved…</td><td>The backup file is open or the folder is not writable. The run itself succeeded.</td><td>Close the file; export the video's results before closing the app.</td></tr>
+<tr><td>The backup folder … can't be reached</td><td>Chosen backup folder missing (USB, network).</td><td>Backups went to the default folder; reconnect or choose another folder.</td></tr>
+<tr><td>Export stopped — numbers could not be updated…</td><td>A video's results couldn't be recomputed with its current settings.</td><td>Open that video, check its settings and View → Logs, run it again.</td></tr>
+<tr><td>Some videos skipped — could not be opened</td><td>Video moved or renamed after tracking.</td><td>Put the file back or re-add it.</td></tr>
+<tr><td><i>file</i>.json was damaged and could not be read…</td><td>A settings file was corrupted.</td><td>Defaults are used; the damaged file is kept as <code>.bad-&lt;date&gt;</code>.</td></tr>
+<tr><td>The saved experiment … could not be read</td><td>A custom design file is damaged.</td><td>Recreate the design.</td></tr>
+<tr><td>The graph '…' could not be drawn</td><td>A graph failed; it is missing from the export.</td><td>See View → Logs; the numbers are not affected.</td></tr>
+<tr><td>Unexpected error</td><td>A programming error.</td><td>The app keeps running. Send <code>settings/wimm.log</code> with a description.</td></tr>
+</table>
+
+<h2>Problems without a message</h2>
+<table width="100%">
+<tr><th>Problem</th><th>Try</th></tr>
+<tr><td>The red marker jumps to shadows / the wall</td><td>Sensitivity toward <i>ignores noise</i>, Blur, Max blob; check the arena outline. <a href="topic:card-detection">Detection</a></td></tr>
+<tr><td>The mouse is missed when it stops moving</td><td>Use the Median BG model (default); other models lose a still mouse.</td></tr>
+<tr><td>White mouse not found</td><td>White mouse on white floor; Contrast / Gamma.</td></tr>
+<tr><td>Distances look too small / large</td><td>Check the scale (10 cm bar), perspective, the line at floor level. <a href="topic:units">Units</a></td></tr>
+<tr><td>Many false entries at a zone border</td><td>Increase Min dwell.</td></tr>
+<tr><td>Tracking is slow</td><td>Process res. 50 %, or Frame skip 2; check the detection afterwards. <a href="topic:card-tracking">Tracking</a></td></tr>
+<tr><td>Numbers differ between two runs of the same video</td><td>They shouldn't — compare the Video Config sheets; something in the settings differs.</td></tr>
+</table>

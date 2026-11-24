@@ -271,7 +271,7 @@ def save_experiment(host, exp):
         return None
     path = getattr(host, "_cx_path", None)
     import os
-    if path is None and os.path.exists(library.path_for(name)):
+    if path is None and library.find(name):
         ans = QMessageBox.question(host, "Save experiment",
                                    f"An experiment called '{name}' already exists. Replace it?")
         if ans != QMessageBox.Yes:

@@ -1,0 +1,23 @@
+<!--
+id: corrections
+title: Manual corrections (Ctrl+K)
+section: 4. Results
+order: 4
+keywords: corrections, fix position, manual, next miss, interpolate, clear fixes, ctrl+k, missed frames
+-->
+<h1>Manual corrections (Ctrl+K)</h1>
+<p><b>View → Tracking corrections…</b> or <kbd>Ctrl+K</kbd> opens a small panel for
+working through the video frame by frame:</p>
+<p><img src="img/corrections.png" width="180"></p>
+<table width="100%">
+<tr><th>Button</th><th>Does</th></tr>
+<tr><td>Fix Position</td><td>Then click on the mouse in the preview: this frame's position is set there.</td></tr>
+<tr><td>Clear all fixes</td><td>Removes every hand fix of this video.</td></tr>
+<tr><td>Next miss</td><td>Jumps to the next frame where the mouse was not found (also <kbd>N</kbd>).</td></tr>
+<tr><td>Interpolate</td><td>Fills missed frames by a straight line between the good frames around them.</td></tr>
+<tr><td>Close</td><td>Closes the panel.</td></tr>
+</table>
+<p>Use the arrow keys to move between frames (<a href="topic:preview">Player</a>).
+Fixed frames are kept exactly — smoothing never moves them. For checking a whole video
+efficiently, use <a href="topic:tracking-issues">Tracking issues</a> first: it shows
+only the frames that are probably wrong.</p>

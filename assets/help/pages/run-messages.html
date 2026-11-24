@@ -1,0 +1,25 @@
+<!--
+id: run-messages
+title: Messages after a run
+section: 3. Running the analysis
+order: 5
+keywords: check these videos, low detection, failed, error, ended early, truncated, warning, detection rate, message, popup
+-->
+<h1>Messages after a run</h1>
+<p>When a run (one video or a batch) ends, the app shows what needs attention. Nothing
+is changed automatically — you decide what to do.</p>
+
+<h2>"Check these videos"</h2>
+<table width="100%">
+<tr><th>Part</th><th>Meaning</th><th>What to do</th></tr>
+<tr><td>These videos failed and have no results</td><td>The video couldn't be tracked; the reason is given (e.g. can't open the file, frame rate unknown, arena missing or flat, perspective can't be built).</td><td>Fix the cause (see <a href="topic:troubleshooting">Troubleshooting</a>) and run the video again.</td></tr>
+<tr><td>These videos stopped decoding early</td><td>The video file ended or broke before its stated length — fewer than 98 % of its frames could be read. The results cover only the part read.</td><td>Check the file (play it to the end); re-export it from the camera software if damaged.</td></tr>
+<tr><td>Other notes</td><td>For example a backup that could not be written (file open in Excel), an unreachable backup folder, a damaged settings file.</td><td>Read the note; most say exactly what to do.</td></tr>
+</table>
+
+<h2>"Low detection rate"</h2>
+<p>Shown when the mouse was found in less than 90 % of a video's frames. Frames without
+a position are missing from distances, zone times and entries.</p>
+<p><img src="img/low_detection.png" width="440"></p>
+<p>Follow the checklist in the message; the full guide is on
+<a href="topic:card-detection">Detection</a>. Then run the video again.</p>

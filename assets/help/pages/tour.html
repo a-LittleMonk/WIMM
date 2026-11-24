@@ -1,0 +1,61 @@
+<!--
+id: tour
+title: The main screen
+section: 1. Getting started
+order: 3
+keywords: layout, window, screen, panels, queue, configuration, preview, header, interface, tour
+-->
+<h1>The main screen</h1>
+<p><img src="img/tour.png" width="640"></p>
+
+<h2>1 — Header</h2>
+<ul>
+<li><b>Mice Tracker</b> logo: back to the start page (also <kbd>Ctrl+H</kbd>). Next to it, the name of the current output folder.</li>
+<li><b>View</b> menu: Logs, Tracking corrections, Customize graphs, Appearance, Simple mode.
+<b>Settings</b> menu: Extra features, Refresh app, Set Output Folder, Set Backup Folder.
+→ <a href="topic:app-settings">Menus and app settings</a></li>
+<li><b>Simple / Full</b>: Simple hides the advanced controls; Full shows everything.</li>
+<li>Sun / moon: light or dark theme.</li>
+<li><b>Logs</b>: the app's event log. <b>Help</b>: this window (<kbd>F1</kbd>).</li>
+<li>While a video is tracked, a small pill shows its name and progress.</li>
+</ul>
+
+<h2>2 — Queue</h2>
+<p>The videos of this experiment. The counters show how many are <b>Done</b>,
+<b>Running</b>, <b>Ready</b> and need <b>Attention</b> (no arena, or a failed run).
+Each row shows the video's status; its buttons are ✂ (trim / crop), ▶ (run only this
+video) and ✕ (remove from the list). Click a row to show that video in the panel.</p>
+<p><img src="img/queue_row.png" width="270"></p>
+<table width="100%"><tr><th>Status</th><th>Meaning</th></tr>
+<tr><td>Needs setup</td><td>No arena yet — draw it before running.</td></tr>
+<tr><td>Ready</td><td>Can be run.</td></tr>
+<tr><td>Tracking nn%</td><td>Running now.</td></tr>
+<tr><td>Completed</td><td>Results are ready (and backed up).</td></tr>
+<tr><td>Error</td><td>The last run failed; the reason is shown at the bottom of the Queue and in the end-of-run message.</td></tr>
+</table>
+
+<h2>3 — Configuration</h2>
+<p>Eight cards, top to bottom in the order you use them. Click a card's header to open
+or close it. The dot on the right shows its state: green = done, amber = optional or
+not set, red = must be fixed. <b>Apply to…</b> copies settings to other videos
+(<a href="topic:apply-to">Apply to</a>).</p>
+<p><a href="topic:card-video">01 Video</a> · <a href="topic:card-animal">02 Animal</a> ·
+<a href="topic:card-arena">03 Arena</a> · <a href="topic:card-zones">04 Zones</a> ·
+<a href="topic:card-scale">05 Scale</a> · <a href="topic:card-detection">06 Detection</a> ·
+<a href="topic:card-tracking">07 Tracking</a> · <a href="topic:card-analysis">08 Analysis</a></p>
+
+<h2>4 — Preview, Output and Export</h2>
+<ul>
+<li><b>Preview</b>: the video with the arena, zones and the detected mouse drawn on it;
+player controls and the timeline below. → <a href="topic:preview">Preview and player</a></li>
+<li><b>Output</b>: the results of the shown video. → <a href="topic:output-tab">Output tab</a></li>
+<li><b>Export</b>: Combined Excel, raw data, vector graphs and annotated video. → <a href="topic:export">Exporting</a></li>
+</ul>
+
+<h2>5 — Run panel</h2>
+<p><b>Run all</b> runs every video in the queue; <b>Stop</b> stops the run (the video
+being tracked is not saved). Below: batch progress, elapsed time and the estimated
+time left. → <a href="topic:run">Running</a></p>
+
+<div class="note">The window can be made as small as 1000 × 600; at smaller sizes nothing
+would fit. Drag the borders between the three panels to resize them.</div>

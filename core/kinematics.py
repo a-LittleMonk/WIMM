@@ -24,27 +24,27 @@ def compute_step_distance(df: pd.DataFrame, px_per_cm, fps):
     ys = df["y"].to_numpy(dtype=float, copy=False)
     step_px = np.full(n, np.nan)
     speed_px = np.full(n, np.nan)
-    last_valid = -1
     fps_eff = float(fps) if fps else 0.0
     # Real frame times (tracker reads them from the video) so a dropped-
     # frame gap does not turn into a speed spike.
     ts = (pd.to_numeric(df["timestamp"], errors="coerce").to_numpy(dtype=float)
           if "timestamp" in df.columns else np.full(n, np.nan))
-    for i in range(n):
-        if np.isnan(xs[i]):
-            continue
-        if last_valid >= 0:
-            dx = xs[i] - xs[last_valid]
-            dy = ys[i] - ys[last_valid]
-            d = float(np.sqrt(dx * dx + dy * dy))
-            step_px[i] = d
-            gap = i - last_valid
-            span = ts[i] - ts[last_valid]
-            if span > 0:
-                speed_px[i] = d / span
-            elif fps_eff > 0 and gap > 0:
-                speed_px[i] = d * fps_eff / gap
-        last_valid = i
+    # Each detected frame steps from the previous detected one.
+    valid = np.flatnonzero(~np.isnan(xs))
+    if valid.size > 1:
+        prev, cur = valid[:-1], valid[1:]
+        dx = xs[cur] - xs[prev]
+        dy = ys[cur] - ys[prev]
+        d = np.sqrt(dx * dx + dy * dy)
+        step_px[cur] = d
+        span = ts[cur] - ts[prev]
+        gap = cur - prev
+        with np.errstate(invalid="ignore", divide="ignore"):
+            by_time = span > 0
+            sp = np.where(by_time, d / np.where(by_time, span, 1.0), np.nan)
+            if fps_eff > 0:
+                sp = np.where(by_time, sp, d * fps_eff / gap)
+        speed_px[cur] = sp
 
     if px_per_cm and px_per_cm > 0:
         scale = 1.0 / px_per_cm
@@ -69,6 +69,26 @@ def time_at(df, i, fps):
     return i / fps if fps else 0.0
 
 
+def session_duration(df, fps):
+    """Real session length (s): first to last frame time plus one frame,
+    so a dropped-frame gap in the recording counts. Falls back to
+    frames / fps when the frame times are missing or out of order.
+    Zone times still count observed frames only — where the mouse was
+    during a gap is unknown."""
+    n = len(df)
+    if n == 0 or not fps:
+        return 0.0
+    by_frames = n / fps
+    if "timestamp" not in df.columns:
+        return by_frames
+    ts = pd.to_numeric(df["timestamp"], errors="coerce").to_numpy(dtype=float)
+    if np.isnan(ts).any() or (np.diff(ts) < 0).any():
+        return by_frames
+    real = float(ts[-1] - ts[0]) + 1.0 / fps
+    # only trust it for a real gap, not timestamp jitter
+    return real if real > by_frames + 1.5 / fps else by_frames
+
+
 def compute_basic_kinematics(df: pd.DataFrame, fps, unit, movement_threshold=0.0):
     """Top-level distance / speed / mobility metrics.
 
@@ -82,7 +102,7 @@ def compute_basic_kinematics(df: pd.DataFrame, fps, unit, movement_threshold=0.0
     # Substitute a sentinel so downstream divisions don't crash; metrics
     # will be meaningless but the run completes.
     fps = float(fps) if fps and fps > 0 else 30.0
-    duration_s = len(df) / fps
+    duration_s = session_duration(df, fps)
     total_dist = float(df["step_dist"].sum())
     avg_speed = total_dist / duration_s if duration_s > 0 else 0.0
     max_speed = float(df["speed"].max()) if df["speed"].notna().any() else 0.0

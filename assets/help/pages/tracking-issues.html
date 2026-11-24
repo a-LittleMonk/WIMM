@@ -1,0 +1,54 @@
+<!--
+id: tracking-issues
+title: Tracking issues and Auto-fix
+section: 4. Results
+order: 3
+keywords: tracking issues, flagged frames, glitch, jump, speed spike, accel spike, outside arena, gap jump, auto-fix, interpolate, false positive, quality control, check tracking, errors
+-->
+<h1>Tracking issues and Auto-fix</h1>
+<p>After tracking, the app looks for frames where the position is probably wrong.
+Click <b>Tracking issues (n)</b> under the preview (n = number of flagged frames).
+Red marks on the timeline show the same frames.</p>
+<p><img src="img/tracking_issues.png" width="640"></p>
+
+<h2>What is flagged</h2>
+<table width="100%">
+<tr><th>Detector</th><th>Flags a frame when</th></tr>
+<tr><td>Speed spike</td><td>The step to this frame is faster than <b>Speed &gt;</b> (cm/s). With <b>Auto</b>, the limit is raised for very active animals so normal running is not flagged.</td></tr>
+<tr><td>Accel spike</td><td>Speed changes faster than <b>Accel &gt;</b> (cm/s²) — a typical sign of a one-frame jump.</td></tr>
+<tr><td>Outside arena</td><td>The position is outside the arena outline.</td></tr>
+<tr><td>Gap + jump</td><td>After a stretch where the mouse was lost, it reappears far away.</td></tr>
+</table>
+<p>Click a detector to turn it on or off; <b>Recompute</b> after changing a limit.</p>
+
+<h2>Checking frames</h2>
+<ol>
+<li>Click a row in <b>Flagged frames</b> — the frame is shown, with the detected area /
+mask switches above it. The mini map shows the whole path with the flagged frames in red.</li>
+<li>Decide: is the red dot on the mouse?</li>
+<li>Yes → it was a fast real movement: <b>Mark false-positive</b> (it is then never changed).
+<b>Unmark</b> undoes this.</li>
+<li>No, the detected area is right but the dot is elsewhere → a tracking glitch: fix it
+(below).</li>
+<li>No, the detected area itself is wrong → the detection settings need work
+(<a href="topic:card-detection">Detection</a>); fixing frame by frame won't help.</li>
+</ol>
+
+<h2>Fixing</h2>
+<table width="100%">
+<tr><th>Button</th><th>Does</th></tr>
+<tr><td>Auto-fix &amp; next</td><td>For this flagged frame, tries replacing 1 to <i>Max gap</i> frames around it with a straight line between the good frames, keeps the smallest change that removes the problem without creating a new one, and moves to the next.</td></tr>
+<tr><td>Auto-fix all</td><td>The same for every active flagged frame (you are asked first).</td></tr>
+<tr><td>Fix position</td><td>Click on the mouse in the frame to set the position by hand.</td></tr>
+<tr><td>Remove point</td><td>Marks the shown frame as not detected.</td></tr>
+<tr><td>Interpolate gaps</td><td>Fills missed / removed frames from the good frames around them (up to Max gap).</td></tr>
+<tr><td>Undo fix here / Clear all fixes</td><td>Undo one fix / all fixes.</td></tr>
+<tr><td>Smooth flagged</td><td>Smooths the path through the flagged frames.</td></tr>
+<tr><td>Export CSV</td><td>Saves the list of flagged frames.</td></tr>
+<tr><td>Interpolated ◀ Go to ▶</td><td>Jump between frames that were filled or fixed.</td></tr>
+</table>
+<p>After any fix, the results are recomputed. The Summary reports <i>Interpolated
+Frames</i>, <i>Hand-fixed Frames</i>, <i>Removed Frames</i> and <i>Corrected Frames (%)</i>,
+so the amount of correction is always visible in the exports.</p>
+<div class="warn">Corrections change the data. Report the % of corrected frames in your
+methods, and prefer better detection settings over many manual fixes.</div>

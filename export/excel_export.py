@@ -26,6 +26,7 @@ def _center_align_numbers(ws):
     """Center-align every cell whose value is numeric. Strings, None,
     and booleans are left untouched so existing left-aligned headers
     and labels keep their original look."""
+    shared = {}   # one Alignment per look — a new object per cell is the slow part
     for row in ws.iter_rows():
         for cell in row:
             v = cell.value
@@ -33,14 +34,25 @@ def _center_align_numbers(ws):
                 continue
             if not isinstance(v, (int, float)):
                 continue
+            if not cell.has_style:          # plain cell (most of Raw Data)
+                key = ("center", None, 0, 0)
+                al = shared.get(key)
+                if al is None:
+                    al = shared[key] = Alignment(horizontal="center", vertical="center",
+                                                 wrap_text=None, text_rotation=0, indent=0)
+                cell.alignment = al
+                continue
             old = cell.alignment
-            cell.alignment = Alignment(
-                horizontal="center",
-                vertical=(old.vertical if old and old.vertical else "center"),
-                wrap_text=(old.wrap_text if old else None),
-                text_rotation=(old.text_rotation if old else 0),
-                indent=(old.indent if old else 0),
-            )
+            key = (old.vertical if old and old.vertical else "center",
+                   old.wrap_text if old else None,
+                   old.text_rotation if old else 0,
+                   old.indent if old else 0)
+            al = shared.get(key)
+            if al is None:
+                al = shared[key] = Alignment(horizontal="center", vertical=key[0],
+                                             wrap_text=key[1], text_rotation=key[2],
+                                             indent=key[3])
+            cell.alignment = al
 
 
 def _center_align_workbook(wb):
@@ -48,6 +60,14 @@ def _center_align_workbook(wb):
     Called just before save so every exporter benefits from one place."""
     for ws in wb.worksheets:
         _center_align_numbers(ws)
+
+
+def _graph_missing(what, e):
+    """A graph left out of a workbook: log it and tell the user."""
+    from core import logger
+    from core.app_paths import notice
+    logger.warn(f"Graph {what} not added to the workbook: {e}", source="export")
+    notice(f"The graph {what} could not be added to the Excel file ({e}).")
 
 
 def export_results(
@@ -87,44 +107,45 @@ def export_results(
         if bin_df is not None and not bin_df.empty:
             bin_df.to_excel(writer, sheet_name="Time Bins", index=False)
 
-    wb = load_workbook(output_path)
-    _style_summary(wb["Summary"], video_name, test_name)
-    if "Metadata" in wb.sheetnames:
-        _style_meta(wb["Metadata"])
-    _style_raw(wb["Raw Data"])
-    if "Time Bins" in wb.sheetnames:
-        _style_raw(wb["Time Bins"])
+        # Style in the same pass (saved when the writer closes) instead of
+        # saving, re-opening and saving the whole file again.
+        wb = writer.book
+        _style_summary(wb["Summary"], video_name, test_name)
+        if "Metadata" in wb.sheetnames:
+            _style_meta(wb["Metadata"])
+        _style_raw(wb["Raw Data"])
+        if "Time Bins" in wb.sheetnames:
+            _style_raw(wb["Time Bins"])
 
-    if video_config:
-        _write_video_config_sheet(wb, video_config, video_size, all_units)
+        if video_config:
+            _write_video_config_sheet(wb, video_config, video_size, all_units)
 
-    if not graph_images and video_size:
-        x_vals = raw_df["X (px)"].dropna().values
-        y_vals = raw_df["Y (px)"].dropna().values
-        if len(x_vals) > 1:
-            graph_images = {
-                "Trajectory": _trajectory_png(x_vals, y_vals, arena, video_size),
-                "Heatmap":    _heatmap_png(x_vals, y_vals, arena, video_size),
-            }
+        if not graph_images and video_size:
+            x_vals = raw_df["X (px)"].dropna().values
+            y_vals = raw_df["Y (px)"].dropna().values
+            if len(x_vals) > 1:
+                graph_images = {
+                    "Trajectory": _trajectory_png(x_vals, y_vals, arena, video_size),
+                    "Heatmap":    _heatmap_png(x_vals, y_vals, arena, video_size),
+                }
 
-    if graph_images:
-        ws = wb.create_sheet("Graphs")
-        ws.column_dimensions["A"].width = 4
-        bold = Font(bold=True, size=12)
-        row = 1
-        for name, png in graph_images.items():
-            ws.cell(row=row, column=2, value=name).font = bold
-            row += 1
-            img = XLImage(BytesIO(png))
-            scale = 600.0 / max(img.width, 1)
-            if scale < 1:
-                img.width = int(img.width * scale)
-                img.height = int(img.height * scale)
-            ws.add_image(img, f"B{row}")
-            row += int(img.height / 18) + 3
+        if graph_images:
+            ws = wb.create_sheet("Graphs")
+            ws.column_dimensions["A"].width = 4
+            bold = Font(bold=True, size=12)
+            row = 1
+            for name, png in graph_images.items():
+                ws.cell(row=row, column=2, value=name).font = bold
+                row += 1
+                img = XLImage(BytesIO(png))
+                scale = 600.0 / max(img.width, 1)
+                if scale < 1:
+                    img.width = int(img.width * scale)
+                    img.height = int(img.height * scale)
+                ws.add_image(img, f"B{row}")
+                row += int(img.height / 18) + 3
 
-    _center_align_workbook(wb)
-    wb.save(output_path)
+        _center_align_workbook(wb)
 
     if write_csv:
         base = os.path.splitext(output_path)[0]
@@ -199,7 +220,9 @@ def _style_raw(ws):
     for cell in ws[1]:
         cell.fill = grey
         cell.font = white_bold
-    for col in ws.columns:
+    # Width from the header and the first rows: raw-data columns hold
+    # values of one kind, and scanning 100k+ cells is slow.
+    for col in ws.iter_cols(min_row=1, max_row=min(ws.max_row, 500)):
         length = max((len(str(c.value or "")) for c in col), default=0)
         ws.column_dimensions[get_column_letter(col[0].column)].width = min(length + 4, 22)
 
@@ -302,7 +325,8 @@ def _video_config_rows(settings: dict, video_size, all_units=False) -> list:
                     rows.append((name, units._round(float(value) * f)
                                  if units._is_number(value) else value))
         return rows
-    rows = []
+    from core.version import APP_VERSION
+    rows = [("App version", f"WIMM {APP_VERSION}")]
     if video_size:
         rows.append(("Video resolution", f"{video_size[0]} x {video_size[1]} px"))
 
@@ -462,7 +486,9 @@ def _heatmap_png(x, y, arena, video_size):
         try:
             inside = Path(poly).contains_points(pts).reshape(xx.shape)
             hm_disp = np.where(inside, hm, np.nan)
-        except Exception:
+        except Exception as e:
+            from core import logger
+            logger.warn(f"Heatmap not masked to the arena: {e}", source="export")
             hm_disp = hm
     else:
         hm_disp = hm
@@ -1156,7 +1182,8 @@ def export_multi_run(output_path: str, video_name: str,
                             "Trajectory": _trajectory_png(xs, ys, arena_px, vsize),
                             "Heatmap":    _heatmap_png(xs, ys, arena_px, vsize),
                         }
-                except Exception:
+                except Exception as e:
+                    _graph_missing(f"variant {i} trajectory / heatmap", e)
                     pngs = {}
 
         for name in GRAPH_ORDER:
@@ -1171,7 +1198,8 @@ def export_multi_run(output_path: str, video_name: str,
                     scale = 1.0
                 sw = int(probe.width * scale)
                 sh = int(probe.height * scale)
-            except Exception:
+            except Exception as e:
+                _graph_missing(f"variant {i} {name}", e)
                 continue
             prepared[(i, name)] = (png, sw, sh)
             if sh > slot_max_h[name]:
@@ -1192,7 +1220,8 @@ def export_multi_run(output_path: str, video_name: str,
             scale = IMG_W / float(probe.width) if probe.width > IMG_W else 1.0
             sw = int(probe.width * scale)
             sh = int(probe.height * scale)
-        except Exception:
+        except Exception as e:
+            _graph_missing(f"variant {i} time-bin plot", e)
             continue
         bin_pngs[i] = (png, sw, sh)
         if sh > bin_max_h:
@@ -1242,8 +1271,8 @@ def export_multi_run(output_path: str, video_name: str,
                 img.width = sw
                 img.height = sh
                 cmp_ws.add_image(img, f"{anchor_letter}{row}")
-            except Exception:
-                pass
+            except Exception as e:
+                _graph_missing(f"variant {i} {name}", e)
         # Bin plot last.
         if bin_slot_row is not None and i in bin_pngs:
             png, sw, sh = bin_pngs[i]
@@ -1252,8 +1281,8 @@ def export_multi_run(output_path: str, video_name: str,
                 img.width = sw
                 img.height = sh
                 cmp_ws.add_image(img, f"{anchor_letter}{bin_slot_row}")
-            except Exception:
-                pass
+            except Exception as e:
+                _graph_missing(f"variant {i} time-bin plot", e)
 
     # ── Settings sheet (locked + swept) ──────────────────────────────────
     set_ws = wb.create_sheet("Settings")
@@ -1417,14 +1446,13 @@ def export_combined_raw(output_path: str, animals: list,
                 c.font = white_bold
                 c.fill = grey
             row += 1
-            # Data rows
-            for _, r in raw_df.iterrows():
-                for ci, val in enumerate(r.values, start=1):
-                    ws.cell(row=row, column=ci, value=val)
-                row += 1
+            # Data rows (append is far faster than a cell() per value)
+            for vals in raw_df.itertuples(index=False, name=None):
+                ws.append(list(vals))
+            row += len(raw_df)
             # Column widths (sample first 200 rows for speed)
-            for col in ws.iter_cols(min_row=1, max_col=n_cols):
-                length = max((len(str(c.value or "")) for c in col[:200]), default=0)
+            for col in ws.iter_cols(min_row=1, max_row=min(ws.max_row, 200), max_col=n_cols):
+                length = max((len(str(c.value or "")) for c in col), default=0)
                 ws.column_dimensions[
                     get_column_letter(col[0].column)
                 ].width = min(length + 3, 22)

@@ -10,7 +10,7 @@ from tracking.preprocessor import (
     apply_preprocessing, get_mask, get_morph_kernel, build_background, match_level,
 )
 from core import logger
-from core.video import frame_times, probe, skip_to
+from core.video import FPS_UNKNOWN, frame_times, probe, skip_to
 
 
 class _FramePrefetcher:
@@ -277,6 +277,7 @@ class TrackerThread(QThread):
         self._min_area = 0
         self._max_area = 0
         self._stop_flag = False
+        self.frames_expected = 0
         self._last_preview_time = 0.0
         self._last_pos_emit_time = 0.0
         # Progress emit throttle — only fire when the integer percent
@@ -346,6 +347,9 @@ class TrackerThread(QThread):
             # probe(): fixes impossible container fps / frame counts.
             real_fps, total = probe(cap)
             fps = self.fps_override if self.fps_override > 0 else real_fps
+            if fps <= 0:
+                self.error.emit(FPS_UNKNOWN)
+                return
             fw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             fh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             if self.crop_rect:
@@ -427,6 +431,7 @@ class TrackerThread(QThread):
             SUBTRACTOR_MODELS = {"mog2", "knn", "cnt", "gsoc", "lsbp"}
             # Use trimmed range as effective total
             total = self._end_frame - self._start_frame
+            self.frames_expected = total   # caller checks the video didn't end early
             if total <= 0:
                 self.error.emit("Trim range produces no frames.")
                 return
@@ -529,7 +534,7 @@ class TrackerThread(QThread):
         indices = np.linspace(self._start_frame, self._start_frame + total - 1, n_samples, dtype=int)
         # Forward-only pass: seek once, then grab() to skip frames + read() at targets.
         # Avoids per-sample seeks (each forces H.264 keyframe decode + replay).
-        skip_to(cap, int(indices[0]))   # exact (core.video)
+        skip_to(cap, int(indices[0]), self.video_path)   # exact (core.video)
         current = int(indices[0])
         bg_frames = []
         for i, frame_idx in enumerate(indices):
@@ -556,7 +561,7 @@ class TrackerThread(QThread):
         raw_bg, floor_ref = build_background(bg_frames, self.threshold, self._allowed_mask)
         proc_bg = apply_preprocessing(raw_bg, self.brightness, self.contrast, self.blur, self.gamma, self.sharpen, self.clahe_clip)
 
-        skip_to(cap, self._start_frame)   # exact trim start (core.video)
+        skip_to(cap, self._start_frame, self.video_path)   # exact trim start (core.video)
         self.status_msg.emit(f"Tracking mouse… proc={self._pw}x{self._ph}")
 
         results = []
@@ -701,7 +706,7 @@ class TrackerThread(QThread):
         self.status_msg.emit(f"{label} warming up…")
         n_warmup = min(200, total)
         indices = np.linspace(self._start_frame, self._start_frame + total - 1, n_warmup, dtype=int)
-        skip_to(cap, int(indices[0]))   # exact (core.video)
+        skip_to(cap, int(indices[0]), self.video_path)   # exact (core.video)
         current = int(indices[0])
         for i, frame_idx in enumerate(indices):
             if self._stop_flag:
@@ -723,7 +728,7 @@ class TrackerThread(QThread):
                     subtractor.apply(proc)
             self._emit_progress(int(i / n_warmup * 20))
 
-        skip_to(cap, self._start_frame)   # exact trim start (core.video)
+        skip_to(cap, self._start_frame, self.video_path)   # exact trim start (core.video)
         self.status_msg.emit(f"Tracking mouse ({label})…")
 
         smooth_body = deque(maxlen=5)
@@ -787,7 +792,7 @@ class TrackerThread(QThread):
 
     def _track_framediff(self, cap, fps, total):
         self.status_msg.emit("Frame-diff tracking…")
-        skip_to(cap, self._start_frame)   # exact trim start (core.video)
+        skip_to(cap, self._start_frame, self.video_path)   # exact trim start (core.video)
         prev = None
         diff_thr = int(self.model_params.get("diff_threshold", 25))
         use_running = bool(self.model_params.get("use_running_avg", False))
@@ -865,7 +870,7 @@ class TrackerThread(QThread):
 
     def _track_hsv(self, cap, fps, total):
         self.status_msg.emit("HSV-threshold tracking…")
-        skip_to(cap, self._start_frame)   # exact trim start (core.video)
+        skip_to(cap, self._start_frame, self.video_path)   # exact trim start (core.video)
         ch_idx = {"H": 0, "S": 1, "V": 2}.get(self.model_params.get("channel", "V"), 2)
         mode = self.model_params.get("mode", "otsu")
         manual_thr = int(self.model_params.get("manual_threshold", 80))

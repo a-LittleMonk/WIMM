@@ -121,7 +121,7 @@ def build_scale_step(host):
     host.btn_clear_calib.setEnabled(False)
     host.btn_clear_calib.clicked.connect(host._clear_calib)
     host.spin_cm = QDoubleSpinBox()
-    host.spin_cm.setRange(0.1, 9999)
+    host.spin_cm.setRange(0.0, 9999)   # 0 is refused with a message (no silent change)
     host.spin_cm.setValue(30.0)
     host.spin_cm.setSuffix(" cm")
     host.spin_cm.valueChanged.connect(host._on_calib_cm_changed)

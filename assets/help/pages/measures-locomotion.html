@@ -1,0 +1,30 @@
+<!--
+id: measures-locomotion
+title: Locomotion measures
+section: 6. Measures explained
+order: 1
+keywords: distance, total distance, speed, average speed, max speed, median speed, p90, p99, tortuosity, duration, detection rate, frames detected, mobility, immobility, pause, freezing, corrected frames, interpolated, gap
+-->
+<h1>Locomotion measures</h1>
+<p>Every experiment reports these for the whole (trimmed) session.</p>
+<table width="100%">
+<tr><th>Measure</th><th>How it is computed</th></tr>
+<tr><td>Duration (s)</td><td>Real length of the session: from the first to the last frame's time stamp, plus one frame. A gap in the recording (dropped frames) is included.</td></tr>
+<tr><td>Total Frames, Frames Detected, Detection Rate (%)</td><td>Frames analysed; frames where the mouse was found; their ratio. Aim for ≥ 90 %.</td></tr>
+<tr><td>Total Distance</td><td>Sum of the straight steps between consecutive detected positions. A missed frame is bridged: the step goes from the last detected position to the next one.</td></tr>
+<tr><td>Average Speed</td><td>Total distance ÷ duration.</td></tr>
+<tr><td>Max / Median / P90 / P99 Speed</td><td>From the speed of every step (step distance ÷ real time between the two frames). P90 = 90 % of steps are slower. Max is sensitive to tracking glitches — prefer P99 or median.</td></tr>
+<tr><td>Tortuosity</td><td>Path length ÷ straight-line distance from start to end (≥ 1; higher = more winding). "n/a" when start and end are the same point.</td></tr>
+<tr><td>Mobility / Immobility Time (s)</td><td>Time with speed above / at or below the Move threshold (<a href="topic:card-analysis">Analysis</a>). Undetected frames count as neither.</td></tr>
+<tr><td>Pause Count, Total / Mean / Longest Pause</td><td>Pauses: at least 1 s in a row at or below the Move threshold. A tracking gap ends a pause.</td></tr>
+<tr><td>Interpolated / Hand-fixed / Removed Frames, Corrected Frames (%)</td><td>How much of the path is not the tracker's own output (<a href="topic:tracking-issues">Tracking issues</a>, <a href="topic:corrections">corrections</a>).</td></tr>
+</table>
+
+<h2>Smoothing and frame skip</h2>
+<p>Positions are first cleaned by the Smoothing filter (<a href="topic:card-tracking">Tracking</a>);
+skipped frames (Frame skip) are filled by straight lines. Both change distance a little,
+so keep them the same for every animal.</p>
+
+<h2>Units</h2>
+<p>cm with a scale, px without. The exports add every other unit
+(<a href="topic:units">Units</a>).</p>

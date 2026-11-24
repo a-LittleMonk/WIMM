@@ -1,0 +1,22 @@
+<!--
+id: card-analysis
+title: 08 Analysis — immobility, time bins, min dwell
+section: 2. Setting up a video
+order: 8
+keywords: analysis, move threshold, immobility, mobility, freezing, pause, time bin, bins, min dwell, minimum dwell, entry rule, recompute
+-->
+<h1>08 Analysis</h1>
+<p><img src="img/card_analysis.png" width="300"></p>
+<p>These settings change how the measures are computed from the tracked path. Changing
+them recomputes the results at once — the video is <b>not</b> tracked again.</p>
+<table width="100%">
+<tr><th>Control</th><th>Meaning</th></tr>
+<tr><td>Move threshold</td><td>Speed (cm/s, or px/s without a scale) at or below which the mouse counts as <b>immobile</b>. Gives Mobility / Immobility time, and pauses: a pause is at least 1 s in a row at or below the threshold. Off = no mobility measures.</td></tr>
+<tr><td>Time bin</td><td>Splits the session into bins (e.g. 60 s or 300 s) and adds a <i>Time Bins</i> sheet: distance, speed and zone times per bin. Off = no bins.</td></tr>
+<tr><td>Min dwell</td><td>How long the mouse must stay in a zone, cell or arm before it counts as an entry — and before that time counts toward the zone. Default 0.2 s; mazes often use 0.5 s.</td></tr>
+</table>
+<div class="tip">Typical values: Move threshold 2 cm/s; Time bin 60 s (habituation) or
+300 s; Min dwell 0.2–0.5 s. State them in your methods section — they are also
+written into every export's <i>Video Config</i> sheet.</div>
+<p>Details of how each measure is computed: <a href="topic:measures-locomotion">Locomotion</a>,
+<a href="topic:measures-zones">Zones</a>.</p>

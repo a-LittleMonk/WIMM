@@ -282,9 +282,45 @@ STATUS_STYLE = {}
 _mode = "light"
 
 
+class _SafeSignal:
+    """A theme signal whose slots may belong to widgets Qt has deleted
+    (e.g. the experiment screens Help builds to read their settings text).
+    Such a slot raises "wrapped C/C++ object … has been deleted" on every
+    theme change; it is skipped instead. Any other error still surfaces."""
+
+    def __init__(self, sig):
+        self._sig = sig
+
+    def connect(self, fn, *args, **kwargs):
+        import inspect
+        if not inspect.isfunction(fn):
+            # Bound methods: Qt disconnects them when their widget is
+            # deleted, and trims the arguments to what the slot takes.
+            return self._sig.connect(fn, *args, **kwargs)
+
+        def call(*a):
+            try:
+                fn(*a)
+            except RuntimeError as e:
+                if "has been deleted" not in str(e):
+                    raise
+        return self._sig.connect(call, *args, **kwargs)
+
+    def emit(self, *a):
+        self._sig.emit(*a)
+
+
 class _Notifier(QObject):
-    changed = pyqtSignal(str)
-    aurora_changed = pyqtSignal()  # backdrop palette edited (View → Appearance)
+    _changed = pyqtSignal(str)
+    _aurora_changed = pyqtSignal()  # backdrop palette edited (View → Appearance)
+
+    @property
+    def changed(self):
+        return _SafeSignal(self._changed)
+
+    @property
+    def aurora_changed(self):
+        return _SafeSignal(self._aurora_changed)
 
 
 notifier = _Notifier()

@@ -59,6 +59,25 @@ def _reveal(path):
         QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
 
 
+def show_notices(parent):
+    """Show (once) the problems queued with core.app_paths.notice — e.g. a
+    graph that could not be drawn and is missing from an export."""
+    from core.app_paths import pop_notices
+    msgs = pop_notices()
+    if msgs:
+        from PyQt5.QtWidgets import QMessageBox
+        QMessageBox.warning(parent, "Please check", "\n\n".join(msgs))
+
+
+def explain_error(e):
+    """Export error in plain words: a locked file gets the usual cause."""
+    if isinstance(e, PermissionError):
+        name = os.path.basename(getattr(e, "filename", "") or "") or "The file"
+        return (f"{name} can't be written — it is probably open in Excel or "
+                "another program. Close it and export again.")
+    return str(e)
+
+
 def show_done(parent, title, message="", path=None, folder=None, kind="ok"):
     """Show the completion popup (blocks until closed, like a message box)."""
     host = parent.window() if parent is not None else None

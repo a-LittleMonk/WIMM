@@ -28,13 +28,18 @@ def _changed():
 
 
 def _slug(name):
-    s = re.sub(r"[^A-Za-z0-9 _-]+", "", name).strip().replace(" ", "_")
+    # Keep letters of any script (Persian, accents …); drop only what a
+    # Windows file name can't hold.
+    s = re.sub(r"[^\w \-]+", "", name).strip().replace(" ", "_")
     return s[:60] or "experiment"
+
+
+_reported = set()   # unreadable files already reported this session
 
 
 def list_saved(folder=None):
     """[(name, path)] of saved experiments, sorted by name. Unreadable
-    files are skipped."""
+    files are skipped, and reported once."""
     folder = folder or LIB_DIR
     out = []
     if not os.path.isdir(folder):
@@ -45,10 +50,26 @@ def list_saved(folder=None):
         path = os.path.join(folder, fn)
         try:
             name, _z, _m = load(path)
-        except (OSError, ValueError):
+        except (OSError, ValueError) as e:
+            if path not in _reported:
+                _reported.add(path)
+                from core import logger
+                from core.app_paths import notice
+                logger.warn(f"Saved experiment unreadable ({path}): {e}", source="custom")
+                notice(f"The saved experiment {fn} could not be read, so it is not "
+                       f"listed: {e}")
             continue
         out.append((name, path))
     return sorted(out, key=lambda t: t[0].lower())
+
+
+def find(name, folder=None):
+    """Path of the saved experiment called `name` (case-insensitive), or None."""
+    key = (name or "").strip().lower()
+    for n, p in list_saved(folder):
+        if n.strip().lower() == key:
+            return p
+    return None
 
 
 def load(path):
@@ -62,7 +83,17 @@ def load(path):
 
 
 def path_for(name, folder=None):
-    return os.path.join(folder or LIB_DIR, _slug(name) + ".json")
+    """File for `name`: the existing one if an experiment of that name is
+    saved, else a free file name — two names that reduce to the same text
+    ('Test' / 'Test!') never share a file."""
+    existing = find(name, folder)
+    if existing:
+        return existing
+    base = os.path.join(folder or LIB_DIR, _slug(name))
+    path, n = base + ".json", 2
+    while os.path.exists(path):
+        path, n = f"{base}-{n}.json", n + 1
+    return path
 
 
 def save(name, zones, measures, path=None, folder=None):

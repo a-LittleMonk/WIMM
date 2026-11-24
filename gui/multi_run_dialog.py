@@ -414,9 +414,17 @@ class MultiRunDialog(QDialog):
                 base = None
         if base is None:
             base = dict(self.batch_tab.video_settings.get(path) or {})
-        if not base.get("arena"):
+        # EPM / Y-Maze have no arena: their arms are the zones (the
+        # variant run builds the tracker region from them).
+        exp = getattr(et, "experiment", None) if et is not None else None
+        needs_arena = getattr(exp, "fam", "open_field") in ("open_field", "nor", "box")
+        if needs_arena and not base.get("arena"):
             QMessageBox.warning(self, "Multi-Run",
                                 "Define an arena for this video before sweeping.")
+            return
+        if not needs_arena and not self.batch_tab._has_arena(path):
+            QMessageBox.warning(self, "Multi-Run",
+                                "Draw the maze arms for this video before sweeping.")
             return
 
         swept = [(key, label) for key, label, _vals in plan]
@@ -498,6 +506,8 @@ class MultiRunDialog(QDialog):
             )
             self.lbl_status.setText(f"Saved: {out_path}")
             logger.info(f"Multi-Run wrote {out_path}", source="multirun")
+            from gui.notify import show_notices
+            show_notices(self)
             from gui.notify import show_done
             show_done(self, "Multi-run complete",
                       f"{len(variants)} variant(s) compared in one workbook.", path=out_path)

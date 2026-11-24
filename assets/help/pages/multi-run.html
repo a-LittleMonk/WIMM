@@ -1,0 +1,35 @@
+<!--
+id: multi-run
+title: Multi-Run — find the best settings
+section: 3. Running the analysis
+order: 4
+keywords: multi-run, multirun, sweep, compare settings, best settings, parameter, variants, combinations, validation
+-->
+<h1>Multi-Run — find the best settings</h1>
+<p>Multi-Run tracks the <b>loaded video</b> several times, each time with a different
+value of one or more settings, and writes all results side by side in one Excel file.
+Use it to find the right settings for a camera / set-up before analysing a study.</p>
+<p>Open it with <b>Multi run…</b> in the <a href="topic:card-tracking">Tracking</a> card.</p>
+<p><img src="img/multirun.png" width="520"></p>
+
+<h2>Step by step</h2>
+<ol>
+<li>Load the video you want to test (click it in the Queue) and set it up completely.</li>
+<li>Open Multi run…, pick a <b>Variable</b> (e.g. Sensitivity, Tracking model,
+Smoothing, FPS override …) and tick its <b>Values</b>.</li>
+<li>Pick another variable and tick its values, if you want to vary two at once.</li>
+<li><b>Combine</b>: <i>All combinations</i> runs every pairing; the sweep plan shows the
+list of runs. <b>Remove</b> / <b>Clear all</b> edit the plan.</li>
+<li>Choose the <b>Output folder</b> and click <b>Run sweep</b>.</li>
+</ol>
+<p>Every setting you don't vary stays as it is in the panel. The video is tracked once
+per run, so many combinations take a while. <b>Stop</b> finishes the current run and
+skips the rest.</p>
+
+<h2>The result file</h2>
+<p><code>multirun_&lt;video&gt;_&lt;variable&gt;_&lt;date-time&gt;.xlsx</code> holds a
+<b>Sweep Compare</b> sheet (each measure in one row, one column per variant, with each
+variant's graphs), one sheet per variant with its results, and a <b>Settings</b> sheet (the varied values and every fixed setting, plus the app version).</p>
+<div class="tip">Good practice: pick the settings whose results agree best with a human
+scorer on a few test videos, save them as a detection preset, and use them for the
+whole study.</div>

@@ -1,0 +1,43 @@
+<!--
+id: card-video
+title: 01 Video — add, check, frame rate, trim
+section: 2. Setting up a video
+order: 1
+keywords: add video, open, load, drag drop, file, fps, frame rate, fps override, resolution, trim, formats
+-->
+<h1>01 Video</h1>
+<p><img src="img/card_video.png" width="300"></p>
+
+<h2>Adding videos</h2>
+<ol>
+<li>Click <b>+ Add</b> at the top of the Queue and pick one or more files, <i>or</i> drag
+files from Windows Explorer onto the Queue.</li>
+<li>Supported: .mp4 .avi .mov .mkv .wmv .flv. Paths with spaces or non-English
+letters work.</li>
+<li>Click a video in the Queue to show it in the panel. The 🗑 button at the top of the
+Queue removes all videos; ✕ on a row removes one.</li>
+</ol>
+<div class="note">A video that is missing, empty or damaged stays in the Queue with the
+message "Can't open … — the file is missing, empty or damaged." Remove it or replace
+the file.</div>
+
+<h2>What the card shows</h2>
+<table width="100%">
+<tr><th>Field</th><th>Meaning</th></tr>
+<tr><td>File</td><td>The video's file name.</td></tr>
+<tr><td>Resolution</td><td>Width × height in pixels.</td></tr>
+<tr><td>Frame rate</td><td>Frames per second. <i>detected</i> = read from the file (when the file reports an impossible value, it is measured from the frames' time stamps).</td></tr>
+<tr><td>FPS override</td><td><b>Auto</b> (0) uses the detected rate. Type a value only when you know the file's rate is wrong. All times and speeds use this rate.</td></tr>
+<tr><td>Trim</td><td>The part of the video that is analysed (start → end, in seconds). Set it with ✂ on the Queue row — <a href="topic:trim-crop">Trim and crop</a>.</td></tr>
+</table>
+
+<div class="warn">If the app says <b>"Can't read this video's frame rate. Set an FPS
+override"</b>, the file reports an impossible rate and has no usable time stamps. It
+refuses to guess (a wrong rate makes every time and speed wrong). Enter the real rate
+of your camera in <b>FPS override</b> and run again.</div>
+
+<h2>Recording gaps</h2>
+<p>Some recorders drop frames. The app reads every frame's real time stamp, so a gap
+keeps its real length: duration and average speed include it, and no false speed
+spike appears across it. Zone times only count frames where the mouse was seen.
+See <a href="topic:measures-locomotion">Locomotion measures</a>.</p>

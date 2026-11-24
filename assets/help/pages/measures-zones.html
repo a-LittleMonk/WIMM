@@ -1,0 +1,37 @@
+<!--
+id: measures-zones
+title: Zone measures — time, entries, latency, visits
+section: 6. Measures explained
+order: 2
+keywords: zone, time in zone, entries, entry, latency, visit, dwell, min dwell, percentage, lost frames, border, flicker, time bins, bins
+-->
+<h1>Zone measures</h1>
+
+<h2>The min-dwell rule</h2>
+<p>When the mouse sits on a zone border, the detected centre jumps back and forth across
+it. To avoid counting each jump as an entry, a visit counts only after the body (or nose)
+has stayed in the zone for at least <b>Min dwell</b> (<a href="topic:card-analysis">Analysis</a>).
+Shorter blips are ignored — they count neither as an entry nor as time in that zone.</p>
+
+<h2>Lost tracking inside a visit</h2>
+<p>When the mouse is briefly not detected while inside a zone (one dark frame, a moment
+just outside a narrow arm's outline) and then found again in the <b>same</b> zone, the
+visit continues — it is not split into several entries. A gap between two
+<b>different</b> zones is never filled.</p>
+
+<h2>The measures</h2>
+<table width="100%">
+<tr><th>Measure</th><th>Meaning</th></tr>
+<tr><td>Time in zone (s)</td><td>Time of confirmed visits.</td></tr>
+<tr><td>% Time in zone</td><td>Time ÷ session duration × 100 (tests that compare two areas say so on their page, e.g. EPM % of arm time).</td></tr>
+<tr><td>Entries (#)</td><td>Number of confirmed visits.</td></tr>
+<tr><td>Latency (s)</td><td>Time of the first confirmed entry, in the original video's time (trim start added back). "never" if none.</td></tr>
+<tr><td>Mean visit / dwell (s)</td><td>Average length of one visit.</td></tr>
+<tr><td>Sequence</td><td>Zones in the order entered.</td></tr>
+</table>
+<div class="note">Frames where the mouse was not detected belong to no zone, so the zone
+percentages of a session can add up to a little less than 100 %.</div>
+
+<h2>Time bins</h2>
+<p>With a Time bin, the <i>Time Bins</i> sheet repeats distance, speed, zone times and
+entries for each bin; the bins add up to the session totals.</p>

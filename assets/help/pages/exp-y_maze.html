@@ -1,0 +1,44 @@
+<!--
+id: exp-y_maze
+title: Y-Maze (spontaneous alternation)
+section: 5. Experiments
+order: 2
+keywords: y-maze, ymaze, spontaneous alternation, arms, triplets, working memory, same arm return, sar, neutral zone, hub, arm entries
+-->
+<h1>Y-Maze</h1>
+<p>Spontaneous alternation (working memory): a mouse that remembers where it has been
+tends to enter the three arms in turn.</p>
+<p><img src="img/exp_y_maze.png" width="620"></p>
+
+<h2>Set-up, step by step</h2>
+<ol>
+<li><b>Arena (03)</b> → <b>Y template</b>: a Y appears. Drag the hub (centre) and the three
+arm tips onto your maze. <i>Manual</i> lets you draw arms A, B, C and the neutral zone
+yourself.</li>
+<li><b>Zones (04)</b>: <i>Arm width</i> (% of the shorter video side) so each arm covers the runway;
+<i>Neutral zone</i> = the hub circle (0 = off).
+<p><img src="img/zones_y_maze.png" width="300"></p></li>
+<li><b>Scale (05)</b>: <i>Arm length</i> = real hub-to-tip length in cm (automatic scale), or a line.</li>
+<li><b>Analysis (08)</b>: Min dwell — 0.5 s is common for arm entries.</li>
+<li>Check detection and run.</li>
+</ol>
+
+<h2>How entries are counted</h2>
+<p>An arm entry counts when the confirmed position changes to an arm (after the min
+dwell). A confirmed visit to the neutral zone ends the arm visit, so A → hub → A is
+two entries of A. Short blips, time just outside the drawn arm, and lost tracking
+inside a visit don't end it.</p>
+
+<h2>Measures</h2>
+<table width="100%">
+<tr><th>Measure</th><th>Meaning</th></tr>
+<tr><td>entry_sequence</td><td>Arms entered, in order (e.g. A B C A …).</td></tr>
+<tr><td>total_entries</td><td>All arm entries.</td></tr>
+<tr><td>alternations, alternation_denominator, <b>alternation_pct</b></td><td>Every run of 3 consecutive entries is a triplet; it is an alternation when all three arms differ (ABC, BCA …). % = alternations ÷ (entries − 2) × 100.</td></tr>
+<tr><td>triplets_all / acceptable / unacceptable (+ counts)</td><td>The triplets themselves, for checking by hand.</td></tr>
+<tr><td>sar_count</td><td>Same-arm returns: entering the arm just left (A → A).</td></tr>
+<tr><td>first_arm, latency_first_entry_s</td><td>First arm entered and when.</td></tr>
+<tr><td>low_activity_flag</td><td>True when fewer than 8 entries (for your information; nothing is excluded).</td></tr>
+<tr><td>entries / time / pct_entries / pct_time / mean_dwell per arm (a, b, c), neutral zone</td><td>Per-arm values.</td></tr>
+<tr><td>Locomotion, mobility, pauses</td><td><a href="topic:measures-locomotion">Locomotion measures</a></td></tr>
+</table>

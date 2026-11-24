@@ -1,0 +1,42 @@
+<!--
+id: exp-open_field
+title: Open Field
+section: 5. Experiments
+order: 1
+keywords: open field, oft, locomotion, anxiety, center, periphery, thigmotaxis, grid, cells, habituation, exploration
+-->
+<h1>Open Field</h1>
+<p>Locomotion and anxiety-like behaviour: how much the mouse moves and how much it
+avoids the open center of the arena.</p>
+<p><img src="img/of_loaded.png" width="620"></p>
+
+<h2>Set-up, step by step</h2>
+<ol>
+<li>Add the videos; the first one opens with a premade square arena.</li>
+<li><b>Arena (03)</b>: drag the corners onto the floor corners (or <i>Manual — click 4
+corners</i>). Cage shape Rectangle / Square. Tilted camera → <i>Correct perspective</i>.
+→ <a href="topic:card-arena">Arena</a></li>
+<li><b>Zones (04)</b>: <i>Center + periphery</i> or <i>Grid 4×4</i>; set the center size
+(commonly 50 %). → <a href="topic:card-zones">Zones</a></li>
+<li><b>Scale (05)</b>: cage size or a calibration line. → <a href="topic:card-scale">Scale</a></li>
+<li>Check detection, then <b>Run all</b>.</li>
+<li>Optional: <b>Analysis (08)</b> Move threshold (e.g. 2 cm/s) for mobility and pauses;
+Time bin (e.g. 60 s) for habituation.</li>
+</ol>
+
+<h2>Measures</h2>
+<table width="100%">
+<tr><th>Measure</th><th>Meaning</th></tr>
+<tr><td>Total Distance, Average / Max / Median / P90 / P99 Speed, Tortuosity, Duration, detection and correction counts</td><td>See <a href="topic:measures-locomotion">Locomotion measures</a>.</td></tr>
+<tr><td>Time in Center Zone / Periphery (s), %</td><td>Time with the body in the center zone / the rest of the arena.</td></tr>
+<tr><td>Center Zone Entries (#)</td><td>Visits to the center lasting at least the min dwell.</td></tr>
+<tr><td>Latency to First Center Zone Entry (s)</td><td>Video time of the first such visit ("never" if none).</td></tr>
+<tr><td>Mean / Longest Center Zone Dwell (s)</td><td>Average and longest center visit.</td></tr>
+<tr><td>Mean Inter-Entry Interval (s)</td><td>Average time between leaving the center and the next entry.</td></tr>
+<tr><td>Thigmotaxis Band, Time (s), %</td><td>Time within a band along the walls (2 cm by default) — wall-hugging.</td></tr>
+<tr><td>Mobility / Immobility Time, Pause count …</td><td>With a Move threshold.</td></tr>
+<tr><td>Habituation Slope (cm/min), First- / Last-Bin Distance, Last/First (%)</td><td>With a Time bin: the trend of distance over the bins (negative = the mouse calms down).</td></tr>
+<tr><td>Per cell / region (Grid 4×4)</td><td>Time and entries for each of the 16 cells and for Corner / Side / Middle (Output → Cell info).</td></tr>
+</table>
+<div class="tip">Percentages use the whole session (including frames where the mouse was not
+detected), so Center % + Periphery % can be slightly below 100 %.</div>

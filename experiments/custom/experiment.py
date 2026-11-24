@@ -98,27 +98,21 @@ def line_pts(z):
 def crossings(u, v, a, b):
     """Frames (indices) where the path crosses segment a→b. Undetected
     frames are bridged: each step runs from the last detected point."""
-    def side(px, py):
-        return (b[0] - a[0]) * (py - a[1]) - (b[1] - a[1]) * (px - a[0])
-
-    hits = []
-    last = None            # last point clearly on one side (points on the line wait)
-    for i in range(len(u)):
-        if np.isnan(u[i]) or np.isnan(v[i]):
-            continue
-        s2 = side(u[i], v[i])
-        if s2 == 0:
-            continue
-        if last is not None:
-            p, q = (u[last], v[last]), (u[i], v[i])
-            if side(*p) * s2 < 0:
-                # the move must also pass between the line's two ends
-                def side2(px, py):
-                    return (q[0] - p[0]) * (py - p[1]) - (q[1] - p[1]) * (px - p[0])
-                if side2(*a) * side2(*b) <= 0:
-                    hits.append(i)
-        last = i
-    return hits
+    u = np.asarray(u, float)
+    v = np.asarray(v, float)
+    s = (b[0] - a[0]) * (v - a[1]) - (b[1] - a[1]) * (u - a[0])
+    # steps run between consecutive points clearly on one side (undetected
+    # frames and points exactly on the line are skipped)
+    idx = np.flatnonzero(np.isfinite(s) & (s != 0))
+    if idx.size < 2:
+        return []
+    p, q = idx[:-1], idx[1:]
+    px, py, qx, qy = u[p], v[p], u[q], v[q]
+    changed = s[p] * s[q] < 0
+    # the move must also pass between the line's two ends
+    sa = (qx - px) * (a[1] - py) - (qy - py) * (a[0] - px)
+    sb = (qx - px) * (b[1] - py) - (qy - py) * (b[0] - px)
+    return [int(i) for i in q[changed & (sa * sb <= 0)]]
 
 
 def _unique_labels(zones):
@@ -141,6 +135,10 @@ def check_design(design):
     for z in design["zones"]:
         if not isinstance(z, dict) or z.get("shape") not in SHAPES:
             raise ValueError("A zone in the file has an unknown shape.")
+        for k in ("x", "y", "x2", "y2", "r", "w", "h"):
+            v = z.get(k)
+            if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float))):
+                raise ValueError(f"Zone '{z.get('name')}' has a non-numeric {k}: {v!r}.")
         if z["shape"] == "polygon":
             pts = z.get("pts")
             if not (isinstance(pts, list) and len(pts) >= 3

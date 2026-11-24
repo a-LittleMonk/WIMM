@@ -1,0 +1,41 @@
+<!--
+id: exp-nor
+title: Novel Object Recognition
+section: 5. Experiments
+order: 3
+keywords: novel object, nor, recognition, objects, familiar, novel, discrimination index, di, preference, exploration, nose, sniffing, bouts, angle
+-->
+<h1>Novel Object Recognition</h1>
+<p>Recognition memory: a mouse that remembers the familiar object explores the novel
+one more. Exploration = the <b>nose</b> inside an object's interaction zone.</p>
+<p><img src="img/exp_nor.png" width="620"></p>
+
+<h2>Set-up, step by step</h2>
+<ol>
+<li><b>Arena (03)</b>: premade square or 4 corners.</li>
+<li><b>Zones (04)</b>, for Object A and Object B:
+<ul><li><b>Name</b> (shown on the video and in Excel), <b>Role</b> Familiar / Novel (needed for the discrimination index).</li>
+<li><b>Place</b>, then click the object's centre on the preview.</li>
+<li><b>Shape</b> (circle, square, triangle, custom with <i>Corners</i>) and <b>Size</b> in cm (diameter / side).</li>
+<li><b>Pad</b>: how far around the object counts (cm; 2 cm is common).</li></ul>
+<p><img src="img/zones_nor.png" width="300"></p></li>
+<li>Optional: <b>Require nose facing object</b> with a <i>Max angle</i> (45° default):
+frames count only when the head points at the object — rejects passing by.</li>
+<li><b>Scale (05)</b> is needed so sizes in cm are right. <b>Nose detection</b> is on by default.</li>
+<li>Check that the nose marker is at the snout, then run.</li>
+</ol>
+
+<h2>Measures</h2>
+<table width="100%">
+<tr><th>Measure</th><th>Meaning</th></tr>
+<tr><td>object_a/b_total_time_s</td><td>Exploration time (nose in the zone, visits ≥ min dwell; lost frames inside a visit don't split it).</td></tr>
+<tr><td>object_a/b_entries, bouts_count, mean_bout_s, longest_bout_s</td><td>Number and length of exploration bouts.</td></tr>
+<tr><td>object_a/b_latency_first_s</td><td>Video time of the first bout.</td></tr>
+<tr><td>familiar_time_s, novel_time_s</td><td>Time at the object with that role.</td></tr>
+<tr><td><b>discrimination_index</b></td><td>(novel − familiar) ÷ (novel + familiar). +1 = only novel, 0 = no preference, −1 = only familiar. Empty when there was no exploration.</td></tr>
+<tr><td>preference_pct_novel</td><td>novel ÷ (novel + familiar) × 100.</td></tr>
+<tr><td>arena_entries, arena_total_time_s</td><td>Time the body was inside the arena.</td></tr>
+<tr><td>Locomotion, pauses</td><td><a href="topic:measures-locomotion">Locomotion measures</a></td></tr>
+</table>
+<div class="note">Object roles stay with each video in Run all, so you can counterbalance which
+side holds the novel object.</div>

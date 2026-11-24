@@ -34,6 +34,9 @@ def backup_dir(config=None):
     chosen = ((config or {}).get("backup_folder") or "").strip()
     if chosen and os.path.isdir(chosen):
         return chosen
+    if chosen:
+        notice(f"The backup folder {chosen} can't be reached (unplugged or "
+               f"offline?), so backups go to {BACKUP_DIR} instead.")
     return ensure_dir(BACKUP_DIR)
 
 
@@ -41,3 +44,54 @@ def ensure_dir(path):
     """Create `path` (and parents) if missing; returns it."""
     os.makedirs(path, exist_ok=True)
     return path
+
+
+# ── Problems the user must hear about (shown at start-up / end of a run) ──
+_notices = []
+
+
+def notice(text):
+    """Queue a message for the next dialog the app shows the user."""
+    if text not in _notices:
+        _notices.append(text)
+
+
+def pop_notices():
+    out = list(_notices)
+    _notices.clear()
+    return out
+
+
+def read_json(path):
+    """Contents of a JSON settings file, {} when missing. A damaged file is
+    renamed to <name>.bad-<time> (never overwritten by the next save) and
+    the user is told."""
+    import json
+    import time
+    from core import logger
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        bad = f"{path}.bad-{time.strftime('%Y%m%d-%H%M%S')}"
+        try:
+            os.replace(path, bad)
+            kept = f"It was kept as {os.path.basename(bad)}."
+        except OSError:
+            kept = "It could not be renamed."
+        logger.error(f"Settings file unreadable ({path}): {e}", source="settings")
+        notice(f"{os.path.basename(path)} was damaged and could not be read, so "
+               f"defaults are used. {kept}")
+        return {}
+
+
+def write_json(path, data):
+    """Write via a temp file so a crash mid-write can't empty the file."""
+    import json
+    ensure_dir(os.path.dirname(path))
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, path)

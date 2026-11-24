@@ -1,0 +1,30 @@
+<!--
+id: exp-water_maze
+title: Morris Water Maze
+section: 5. Experiments
+order: 12
+keywords: water maze, morris, mwm, platform, quadrant, target quadrant, probe trial, training, escape latency, path length, thigmotaxis, spatial learning
+-->
+<h1>Morris Water Maze</h1>
+<p>Spatial learning (training: finding the hidden platform) and memory (probe: platform removed).</p>
+<p><img src="img/exp_water_maze.png" width="620"></p>
+<h2>Set-up, step by step</h2>
+<ol>
+<li><b>Arena (03)</b>: the 4 corners of the square around the pool edge.</li>
+<li><b>Zones (04)</b>: <b>Platform quadrant</b> (NE, NW, SW, SE) and <i>Platform
+position</i> (distance from the centre, % of the radius); <i>Wall zone</i> width;
+<b>Trial type</b> Training or Probe. Quadrant and trial type stay per video in Run all.
+<p><img src="img/zones_water_maze.png" width="300"></p></li>
+<li>Scale (pool diameter), check detection on the water, run.</li>
+</ol>
+<h2>Measures</h2>
+<table width="100%">
+<tr><th>Measure</th><th>Meaning</th></tr>
+<tr><td>Time / % / Entries / Latency / Mean Visit — NE, NW, SW, SE quadrant, Platform, Wall zone</td><td>Per zone. Platform entries = platform crossings in a probe trial.</td></tr>
+<tr><td><b>Latency to Platform</b></td><td>Escape latency (training).</td></tr>
+<tr><td><b>Path Length to Platform</b></td><td>Distance swum until the platform was first reached ("never" if not).</td></tr>
+<tr><td><b>Time / % Time in Target Quadrant</b></td><td>% of the time spent in the four quadrants.</td></tr>
+<tr><td>Mean Distance to Platform (cm)</td><td>Average distance from the platform position (useful in probe trials).</td></tr>
+<tr><td>Wall zone time</td><td>Thigmotaxis.</td></tr>
+<tr><td>Trial Type</td><td>Training / Probe.</td></tr>
+</table>

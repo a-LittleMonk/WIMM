@@ -68,18 +68,35 @@ def build_background(frames, threshold=25, region=None):
     for more than ~80 % of the video."""
     ref = float(np.median([floor_level(f, region) for f in frames]))
     stack = np.stack([match_level(f, ref, region) for f in frames])
-    med = np.median(stack, axis=0)
-    sub = stack[:, ::2, ::2].astype(np.float32)
-    big = np.abs(sub - med[::2, ::2]) > threshold        # pixels that change
+    med = _by_rows(stack, lambda s: np.median(s, axis=0))
     # Mouse colour: compare changing pixels with the LOCAL floor (median
     # blurred wider than a mouse). The real mouse differs strongly from
     # it; the "ghost" a frozen mouse leaves in the median is empty floor
     # and barely differs — so the sum follows the real mouse.
     k = max(3, int(min(med.shape) / 6)) | 1
     local = cv2.blur(med.astype(np.float32), (k, k))[::2, ::2]
-    light_mouse = float((sub - local)[big].sum()) >= 0 if big.any() else True
-    bg = np.percentile(stack, 20 if light_mouse else 80, axis=0)
+    medh = med[::2, ::2]
+    total, any_big = 0.0, False
+    for f in stack:   # one frame at a time: no stack-sized float temporaries
+        sub = f[::2, ::2].astype(np.float32)
+        big = np.abs(sub - medh) > threshold             # pixels that change
+        if big.any():
+            any_big = True
+            total += float((sub - local)[big].sum())
+    light_mouse = total >= 0 if any_big else True
+    q = 20 if light_mouse else 80
+    bg = _by_rows(stack, lambda s: np.percentile(s, q, axis=0))
     return bg.astype(np.uint8), ref
+
+
+def _by_rows(stack, fn, rows=64):
+    """fn(stack) along the frame axis, computed in bands of rows — same
+    result, but numpy's float64 copy is one band, not the whole stack
+    (1.4 GB for 120 frames of 1080p)."""
+    out = np.empty(stack.shape[1:], dtype=np.float64)
+    for r in range(0, stack.shape[1], rows):
+        out[r:r + rows] = fn(stack[:, r:r + rows])
+    return out
 
 
 def apply_preprocessing(gray: np.ndarray, brightness: int, contrast: float, blur: int,

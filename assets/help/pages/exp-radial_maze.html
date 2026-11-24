@@ -1,0 +1,30 @@
+<!--
+id: exp-radial_maze
+title: Radial Arm Maze
+section: 5. Experiments
+order: 11
+keywords: radial arm maze, ram, 8-arm, working memory errors, reference memory errors, baited arms, spatial memory
+-->
+<h1>Radial Arm Maze</h1>
+<p>Spatial working and reference memory in an 8-arm maze.</p>
+<p><img src="img/exp_radial_maze.png" width="620"></p>
+<h2>Set-up, step by step</h2>
+<ol>
+<li><b>Arena (03)</b>: the 4 corners of the square around the arm tips.</li>
+<li><b>Zones (04)</b>: <i>Arm width</i> (% of the tip-to-tip diameter); <i>Centre size</i>;
+<i>Rotation</i> — arm 1 starts at the top, arms are numbered clockwise;
+<b>Baited arms</b> (optional) to count reference-memory errors — stays per video in Run all.
+<p><img src="img/zones_radial_maze.png" width="300"></p></li>
+<li>Scale, check detection, run.</li>
+</ol>
+<h2>Measures</h2>
+<table width="100%">
+<tr><th>Measure</th><th>Meaning</th></tr>
+<tr><td>Time / % / Entries / Latency / Mean Visit — Centre, Arm 1 … 8</td><td>Per zone.</td></tr>
+<tr><td>Total Arm Entries, Arm Entry Sequence</td><td>All arm entries, in order.</td></tr>
+<tr><td><b>Working Memory Errors</b></td><td>Re-entries into a baited arm already visited.</td></tr>
+<tr><td><b>Reference Memory Errors</b></td><td>Entries into never-baited arms (empty when every arm is baited).</td></tr>
+<tr><td>Entries Before First Repeat</td><td>How many entries until the first re-entry.</td></tr>
+<tr><td>Different Arms in First 8 Entries</td><td>Distinct arms among the first 8 entries.</td></tr>
+<tr><td>Time to Visit All Arms (s)</td><td>When every baited arm had been visited.</td></tr>
+</table>

@@ -195,6 +195,9 @@ class GraphsMixin:
                 except Exception as e:
                     logger.warn(f"Graph '{name}' failed to build: {e}",
                                    source="graphs")
+                    from core.app_paths import notice
+                    notice(f"The graph '{name}' could not be drawn ({e}), so it is "
+                           "missing from the Output tab and exports.")
                     continue
                 if fig is None:
                     # Builder declined this graph (no data, missing zone
@@ -208,6 +211,9 @@ class GraphsMixin:
                 except Exception as e:
                     logger.warn(f"Graph '{name}' failed to rasterize: {e}",
                                    source="graphs")
+                    from core.app_paths import notice
+                    notice(f"The graph '{name}' could not be drawn ({e}), so it is "
+                           "missing from the Output tab and exports.")
                     continue
                 # On-screen figure follows the app theme; the PNG bytes
                 # embedded in Excel / saved beside it use the export look
@@ -219,6 +225,9 @@ class GraphsMixin:
                         _p, png = self._fig_to_pixmap_and_bytes(fig_l)
                 except Exception as e:
                     logger.warn(f"Export render of '{name}' failed: {e}", source="graphs")
+                    from core.app_paths import notice
+                    notice(f"The graph '{name}' could not be drawn ({e}), so it is "
+                           "missing from the Output tab and exports.")
                 finally:
                     self._force_fig_mode = None
                 self._graph_pixmaps[name] = pix
