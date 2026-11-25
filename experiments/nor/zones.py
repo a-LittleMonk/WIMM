@@ -2,7 +2,7 @@
 
 Two objects (A, B) inside a square arena. Each object has:
   - footprint polygon (shape = circle / square / triangle / custom)
-  - interaction zone = footprint scaled outward by `padding_cm`
+  - interaction zone = every point within `padding_cm` of the footprint
 
 The arena outline is shown but never filled (per spec). Only the
 interaction zones get a live fill when the nose is inside.
@@ -187,8 +187,54 @@ def build_zone_norm(footprint_norm, state, px_per_cm, video_size):
         padding_px = (padding_cm / 5.0) * base * 0.08
     else:
         padding_px = padding_cm * px_per_cm
+    if _is_convex(poly_px):
+        return _px_to_norm(_offset_convex(poly_px, padding_px), vw, vh)
+    # shortcut: a concave custom outline is scaled around its centre, so its
+    # padding is only approximate; offset it exactly if custom shapes matter.
     factor = (mean_r + padding_px) / mean_r
     return _px_to_norm(_scale_polygon(poly_px, factor), vw, vh)
+
+
+def _signed_area(poly):
+    return sum(poly[i][0] * poly[i - 1][1] - poly[i - 1][0] * poly[i][1]
+               for i in range(len(poly))) / 2.0
+
+
+def _is_convex(poly):
+    n = len(poly)
+    if n < 3:
+        return False
+    signs = set()
+    for i in range(n):
+        (x0, y0), (x1, y1), (x2, y2) = poly[i - 1], poly[i], poly[(i + 1) % n]
+        c = (x1 - x0) * (y2 - y1) - (y1 - y0) * (x2 - x1)
+        if abs(c) > 1e-9:
+            signs.add(c > 0)
+    return len(signs) == 1
+
+
+def _offset_convex(poly, d, step_deg=5.0):
+    """Every point within `d` of a convex polygon: each side pushed out by
+    exactly d, joined by round corners. (Scaling around the centre would
+    give squares / triangles less than d along their sides.)"""
+    sgn = -1.0 if _signed_area(poly) > 0 else 1.0     # outward side of each edge
+    n = len(poly)
+    normals = []
+    for i in range(n):
+        (x0, y0), (x1, y1) = poly[i], poly[(i + 1) % n]
+        L = math.hypot(x1 - x0, y1 - y0) or 1.0
+        normals.append((sgn * (y1 - y0) / L, -sgn * (x1 - x0) / L))
+    out = []
+    for i in range(n):
+        x, y = poly[i]
+        a0 = math.atan2(normals[i - 1][1], normals[i - 1][0])
+        a1 = math.atan2(normals[i][1], normals[i][0])
+        turn = (a1 - a0 + math.pi) % (2 * math.pi) - math.pi    # corner turn, < 180°
+        k = max(1, int(math.ceil(abs(math.degrees(turn)) / step_deg)))
+        for j in range(k + 1):
+            a = a0 + turn * j / k
+            out.append((x + d * math.cos(a), y + d * math.sin(a)))
+    return out
 
 
 def empty_footprint_zone(obj_id, color):

@@ -82,6 +82,29 @@ def test_nor_footprint_and_halo_sizes_in_cm():
     assert build_zone_norm(fp, dict(st, padding_cm=0), 10.0, (400, 400)) == fp
 
 
+@pytest.mark.parametrize("shape", ["circle", "square", "triangle"])
+def test_nor_zone_edge_is_exactly_padding_from_the_object(shape):
+    """2 cm padding = 2 cm along every side, not only at the corners
+    (scaling a square around its centre gave ~1.4 cm on the sides)."""
+    from experiments.nor.zones import build_footprint_norm, build_zone_norm
+    st = {"shape": shape, "size_cm": 4.4, "center_norm": (0.5, 0.5), "padding_cm": 2}
+    fp = [(x * 400, y * 400) for x, y in build_footprint_norm(st, 13.5, (400, 400))]
+    z = [(x * 400, y * 400) for x, y in build_zone_norm(
+        [(x / 400, y / 400) for x, y in fp], st, 13.5, (400, 400))]
+
+    def dist_to_outline(px, py):
+        best = 1e9
+        for (ax, ay), (bx, by) in zip(fp, fp[1:] + fp[:1]):
+            t = max(0.0, min(1.0, ((px - ax) * (bx - ax) + (py - ay) * (by - ay))
+                             / ((bx - ax) ** 2 + (by - ay) ** 2)))
+            best = min(best, math.hypot(px - ax - t * (bx - ax), py - ay - t * (by - ay)))
+        return best
+    for (ax, ay), (bx, by) in zip(z, z[1:] + z[:1]):   # along every zone edge, not just its corners
+        for t in (0.0, 0.25, 0.5, 0.75):
+            p = (ax + t * (bx - ax), ay + t * (by - ay))
+            assert dist_to_outline(*p) == pytest.approx(27.0, abs=0.05)   # 2 cm x 13.5 px/cm
+
+
 # 6. Smoothing keeps manual fixes and missing frames, and never edits its input.
 def test_smoothing_moving_average_keeps_corrections_and_gaps():
     from gui.output.corrections_mixin import CorrectionsMixin

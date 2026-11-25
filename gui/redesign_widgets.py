@@ -620,9 +620,10 @@ class MeasurementsPanel(QScrollArea):
             self._hero_tiles.append(tile)
         # key rows -------------------------------------------------------
         rows = []
+        band = metrics.get("Thigmotaxis Band")          # the band actually used
         wanted = (("Mean speed", ("average speed", "mean speed")),
                   ("Latency to center", ("latency",)),
-                  ("Thigmotaxis (5 cm band)", ("thigmotaxis %",)))
+                  (f"Thigmotaxis ({band} band)" if band else "Thigmotaxis", ("thigmotaxis %",)))
         for label, needles in wanted:
             k = self._find(metrics, needles)
             if k is not None and k not in used:
