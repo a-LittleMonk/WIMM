@@ -63,8 +63,10 @@ class _FitLabel(QLabel):
         if self._src is None or self._src.isNull():
             super().clear()
             return
+        # Shrink to fit, never enlarge: an enlarged figure looks blurry.
+        box = self.size().boundedTo(self._src.size())
         super().setPixmap(self._src.scaled(
-            self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+            box, Qt.KeepAspectRatio, Qt.SmoothTransformation
         ))
 
     def resizeEvent(self, e):
@@ -1965,7 +1967,6 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         # right: figure panel
         right = OutPanel("")
         right.bar.show()
-        right.setMaximumWidth(820)
         self._graph_title = right.title
         b_cust = right.add_button("Customize…  Ctrl+G", lambda: self._open_graph_style_dialog())
         b_cust.setToolTip("Edit per-graph colors, widths, labels, colormap, grid, and presets")
@@ -2302,7 +2303,6 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self._build_unit_selectors(self._summary_panel)
         self._summary_panel.add_button("Copy table", lambda: copy_table_all(self._table_summary, False))
         self._summary_panel.body.addWidget(self._table_summary)
-        self._summary_panel.setMaximumWidth(880)
         self._summary_panel.hide()
         sv.addWidget(self._summary_panel, 0)
         sv.addStretch(1)
@@ -2350,7 +2350,6 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self._table_video_config.verticalHeader().setDefaultSectionSize(28)
         vc_panel = OutPanel()
         vc_panel.body.addWidget(self._table_video_config)
-        vc_panel.setMaximumWidth(720)
         vc_wrap = QWidget()
         vcv = QVBoxLayout(vc_wrap)
         vcv.setContentsMargins(0, 0, 0, 0)

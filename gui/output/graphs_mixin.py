@@ -1828,7 +1828,8 @@ class GraphsMixin:
     def _fig_to_pixmap_and_bytes(fig):
         import matplotlib.pyplot as plt
         buf = BytesIO()
-        fig.savefig(buf, format="png", dpi=120, bbox_inches="tight",
+        # 200 dpi (= EXPORT_DPI): sharp when shown large on a wide screen
+        fig.savefig(buf, format="png", dpi=200, bbox_inches="tight",
                     facecolor=fig.get_facecolor())
         png_bytes = buf.getvalue()
         pix = QPixmap()
