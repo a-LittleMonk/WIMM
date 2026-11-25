@@ -132,6 +132,11 @@ def compute(results, settings, fps, px_per_cm):
         "frames_detected":   basic.get("Frames Detected", 0),
         "total_frames":      basic.get("Total Frames", 0),
         "detection_rate_pct": basic.get("Detection Rate (%)", 0.0),
+        # Track corrections (same counts as Open Field / box tests).
+        "interpolated_frames": basic.get("Interpolated Frames", 0),
+        "hand_fixed_frames":   basic.get("Hand-fixed Frames", 0),
+        "removed_frames":      basic.get("Removed Frames", 0),
+        "corrected_frames_pct": basic.get("Corrected Frames (%)", 0.0),
         "unit":           unit,
         # Blank (not 0 %) when there are < 3 entries — no triplet exists.
         "alternation_pct": round(alt_pct, 2) if alt_denom > 0 else None,
@@ -331,3 +336,7 @@ BATCH_SCHEMA = [
         "pause_count", "pause_total_s",
     ]),
 ]
+BATCH_SCHEMA.append(("Tracking Corrections", [
+    "interpolated_frames", "hand_fixed_frames", "removed_frames",
+    "corrected_frames_pct",
+]))

@@ -28,13 +28,13 @@ frames count only when the head points at the object — rejects passing by.</li
 <h2>Measures</h2>
 <table width="100%">
 <tr><th>Measure</th><th>Meaning</th></tr>
-<tr><td>object_a/b_total_time_s</td><td>Exploration time (nose in the zone, visits ≥ min dwell; lost frames inside a visit don't split it).</td></tr>
-<tr><td>object_a/b_entries, bouts_count, mean_bout_s, longest_bout_s</td><td>Number and length of exploration bouts.</td></tr>
-<tr><td>object_a/b_latency_first_s</td><td>Video time of the first bout.</td></tr>
-<tr><td>familiar_time_s, novel_time_s</td><td>Time at the object with that role.</td></tr>
-<tr><td><b>discrimination_index</b></td><td>(novel − familiar) ÷ (novel + familiar). +1 = only novel, 0 = no preference, −1 = only familiar. Empty when there was no exploration.</td></tr>
-<tr><td>preference_pct_novel</td><td>novel ÷ (novel + familiar) × 100.</td></tr>
-<tr><td>arena_entries, arena_total_time_s</td><td>Time the body was inside the arena.</td></tr>
+<tr><td>Exploration of Object A / B</td><td>Exploration time (nose in the zone, visits ≥ min dwell; lost frames inside a visit don't split it).</td></tr>
+<tr><td>Approaches to Object A / B, Exploration Bouts, Mean Bout, Longest Bout</td><td>Number and length of exploration bouts.</td></tr>
+<tr><td>Latency to Object A / B</td><td>Video time of the first bout.</td></tr>
+<tr><td>Time at Familiar Object, Time at Novel Object</td><td>Time at the object with that role.</td></tr>
+<tr><td><b>Discrimination Index</b></td><td>(novel − familiar) ÷ (novel + familiar). +1 = only novel, 0 = no preference, −1 = only familiar. Empty when there was no exploration.</td></tr>
+<tr><td>% Preference for Novel Object</td><td>novel ÷ (novel + familiar) × 100.</td></tr>
+<tr><td>Arena Entries, Time in Arena</td><td>Time the body was inside the arena.</td></tr>
 <tr><td>Locomotion, pauses</td><td><a href="topic:measures-locomotion">Locomotion measures</a></td></tr>
 </table>
 <div class="note">Object roles stay with each video in Run all, so you can counterbalance which

@@ -85,6 +85,10 @@ def export_results(
     all_units: bool = True,
     test_name: str = "Open Field Test",
 ):
+    # Readable measure names in every experiment ('time_arm_a_s' ->
+    # 'Time in Arm A (s)'), before the other scales are added.
+    _r = _readable_result({"metrics": metrics, "bin_df": bin_df})
+    metrics, bin_df = _r["metrics"], _r["bin_df"]
     # Every distance / speed / time value is written in all scales side
     # by side (cm, mm, m · cm/s … km/h · s, min) so the examiner can pick.
     if all_units:
@@ -560,6 +564,23 @@ def _bin_dist_png(bin_df):
 
 # ───────────────────────── Combined batch export ──────────────────────────
 
+def _readable_result(res):
+    """Copy of a {metrics, bin_df, …} dict with readable measure names
+    (export.labels) — Y-Maze / EPM / NOR / Object Location compute
+    snake_case keys; the other tests are unchanged by this."""
+    if not res:
+        return res
+    from export.labels import readable_metrics, readable_columns
+    res = dict(res)
+    m = res.get("metrics") or {}
+    base = m.get("unit") if isinstance(m.get("unit"), str) and m.get("unit") else "cm"
+    if m:
+        res["metrics"] = readable_metrics(m)
+    if res.get("bin_df") is not None:
+        res["bin_df"] = readable_columns(res["bin_df"], base)
+    return res
+
+
 def _expand_result(res):
     """All-scales copy of a {metrics, raw_df, bin_df, …} dict."""
     if not res:
@@ -834,6 +855,11 @@ def export_combined(output_path: str, animals: list, schema=None,
     column right after it (see core.units).
     """
     from openpyxl import Workbook
+    from export.labels import readable_schema
+    calibrated = any((a.get("metrics") or {}).get("unit", "cm") == "cm"
+                     for a in animals) or not animals
+    animals = [_readable_result(a) for a in animals]
+    schema = readable_schema(schema, "cm" if calibrated else "px")
     # Master sheet: every scale as adjacent columns. Per-animal sheets:
     # one metric per row with all its scales across the row.
     base_schema = schema
@@ -1065,6 +1091,7 @@ def export_multi_run(output_path: str, video_name: str,
         # Single-variable variant from an older caller.
         return {swept_keys[0]: v.get("label", v.get("value", ""))} if swept_keys else {}
 
+    variants = [dict(v, result=_readable_result(v.get("result"))) for v in variants]
     if all_units:
         variants = [dict(v, result=_expand_result(v.get("result")))
                     for v in variants]

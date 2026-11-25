@@ -99,6 +99,8 @@ class YMazeExperiment(Experiment):
             "mobility_time_s", "immobility_time_s",
             "tortuosity",
             "frames_detected", "total_frames", "detection_rate_pct",
+            "interpolated_frames", "hand_fixed_frames", "removed_frames",
+            "corrected_frames_pct",
             "unit",
             "entry_rule", "min_dwell_s",
             "latency_first_entry_s",

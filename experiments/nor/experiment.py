@@ -127,6 +127,8 @@ class NORExperiment(Experiment):
             "mean_speed", "max_speed", "median_speed",
             "mobility_time_s", "immobility_time_s",
             "frames_detected", "total_frames", "detection_rate_pct",
+            "interpolated_frames", "hand_fixed_frames", "removed_frames",
+            "corrected_frames_pct",
             "unit",
             "min_dwell_s", "angle_enabled", "angle_max_deg",
             "object_a_name", "object_a_role",
