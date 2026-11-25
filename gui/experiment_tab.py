@@ -84,6 +84,20 @@ _LEGACY_PROC_SCALES  = [1.0, 0.75, 0.5, 0.25]
 _LEGACY_BODY_STYLES  = ["off", "dot", "ends"]
 
 
+def set_nose_marker_option(combo, on):
+    """Offer "Center + nose + tail" in a body-marker list only while nose
+    detection is on (without it there is no nose / tail to draw)."""
+    i = combo.findData("ends")
+    if i < 0:
+        return
+    combo.view().setRowHidden(i, not on)
+    item = getattr(combo.model(), "item", lambda _i: None)(i)
+    if item is not None:
+        item.setEnabled(on)   # also skipped by the mouse wheel / arrow keys
+    if not on and combo.currentData() == "ends":
+        combo.setCurrentIndex(combo.findData("dot"))
+
+
 def _migrate_combo_value(value, legacy_list, default):
     """Accept either the new direct value or a legacy int index; return
     the canonical value. Out-of-range ints fall back to `default`."""
@@ -425,6 +439,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
                              source="plugin")
                 raise
         self._update_calib_status()
+        self._sync_nose_marker_option()
         if hasattr(self, "_refresh_zones_label"):
             self._refresh_zones_label()
         if hasattr(self, "_update_run_button"):
@@ -433,6 +448,12 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
             self._update_preview()
         except Exception as e:
             logger.warn(f"apply_settings update_preview: {e}", source="ui")
+
+    def _sync_nose_marker_option(self, *_):
+        """View ▾ marker list: "Center + nose + tail" only with nose detection on."""
+        if hasattr(self, "combo_body_style"):
+            on = hasattr(self, "chk_enable_nose") and self.chk_enable_nose.isChecked()
+            set_nose_marker_option(self.combo_body_style, on)
 
     def _apply_settings_body(self, s: dict):
         self.slider_brightness.setValue(s.get("brightness", 0))
@@ -1547,6 +1568,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         self.combo_body_style.addItem("Center + nose + tail", "ends")
         self.combo_body_style.setCurrentIndex(1)
         self.combo_body_style.currentIndexChanged.connect(self._on_body_marker_changed)
+        self._sync_nose_marker_option()   # nose switch may already exist
 
         self.combo_marker_shape = QComboBox()
         for key, label in MARKER_SHAPES:

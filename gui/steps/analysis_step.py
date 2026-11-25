@@ -151,6 +151,8 @@ def build_analysis_step(host):
         "the nose heading)."
     )
     layout.addWidget(host.chk_enable_nose)
+    host.chk_enable_nose.toggled.connect(host._sync_nose_marker_option)
+    host._sync_nose_marker_option()
 
     # Live overlay toggle — controls per-frame painting of body/cells (or
     # arms) during tracking. Label comes from the plugin so each experiment

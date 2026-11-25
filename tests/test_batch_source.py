@@ -71,3 +71,19 @@ def test_copy_fields_keeps_each_animal_id():
     assert out["metadata"] == {"Animal ID": "m7", "Group": "Drug", "Sex": "M"}
     out["arena"][0][0] = 0.5
     assert src["arena"][0][0] == 0.1                # deep copy
+
+
+def test_nose_marker_option_only_with_nose_detection():
+    from PyQt5.QtWidgets import QApplication, QComboBox
+    from gui.experiment_tab import set_nose_marker_option
+    app = QApplication.instance() or QApplication([])
+    c = QComboBox()
+    for label, data in (("Off", "off"), ("Center", "dot"), ("Center + nose + tail", "ends")):
+        c.addItem(label, data)
+    c.setCurrentIndex(2)
+    set_nose_marker_option(c, False)            # Y-maze / open field: no nose
+    assert c.view().isRowHidden(2) and c.currentData() == "dot"
+    set_nose_marker_option(c, True)             # NOR / nose detection on
+    assert not c.view().isRowHidden(2)
+    c.setCurrentIndex(2)
+    assert c.currentData() == "ends"

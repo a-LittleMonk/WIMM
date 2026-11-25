@@ -2372,6 +2372,14 @@ class ExperimentBatchTab(QWidget):
                         rt.setTabText(i, "Preview")
                 # Add the Export tab.
                 rt.addTab(self._build_export_tab(), "Export")
+                # Annotated-video marker list: same nose rule as View ▾.
+                from gui.experiment_tab import set_nose_marker_option
+                nose = getattr(self.embedded_tab, "chk_enable_nose", None)
+                if nose is not None:
+                    sync = lambda *_: set_nose_marker_option(
+                        self.combo_export_body_style, nose.isChecked())
+                    nose.toggled.connect(sync)
+                    sync()
         except Exception:
             import traceback
             traceback.print_exc()
