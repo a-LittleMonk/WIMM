@@ -566,7 +566,7 @@ class ExperimentTab(ScrubMixin, CorrectionsMixin, IssuesMixin,
         if hasattr(self, "spin_smooth_window"):
             self.spin_smooth_window.setValue(int(s["smooth_window"])
                                              if s.get("smooth_window") is not None
-                                             else 1)   # Off when unsaved
+                                             else 3)   # app default when unsaved (analysis_step)
         if hasattr(self, "chk_enable_nose"):
             # Per-video flag wins; missing snapshot → plugin default.
             if "enable_nose" in s:

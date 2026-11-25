@@ -122,7 +122,7 @@ def build_analysis_step(host):
     host.spin_smooth_window.setSingleStep(2)
     host.spin_smooth_window.setSpecialValueText("Off")
     host.spin_smooth_window.setSuffix(" frames")
-    host.spin_smooth_window.setValue(1)   # Off by default
+    host.spin_smooth_window.setValue(3)   # 3: one-frame jitter otherwise inflates distance / speed
     host.spin_smooth_window.setToolTip(
         "Rolling-median window applied to body/nose/tail coords after "
         "tracking. Kills single-frame jerks without blurring real motion.\n"
