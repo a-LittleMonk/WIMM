@@ -22,16 +22,11 @@ class SubTabHeader(QWidget):
         h = QHBoxLayout(self)
         h.setContentsMargins(12, 0, 12, 0)
         h.setSpacing(2)
+        self._btn_row = QHBoxLayout()
+        self._btn_row.setSpacing(2)
+        h.addLayout(self._btn_row)
         self._btns = []
-        for i in range(tabs.count()):
-            b = QPushButton(tabs.tabText(i))
-            b.setCheckable(True)
-            b.setProperty("subtab", True)
-            b.setCursor(Qt.PointingHandCursor)
-            b.setFocusPolicy(Qt.NoFocus)
-            b.clicked.connect(lambda _=False, k=i: tabs.setCurrentIndex(k))
-            h.addWidget(b)
-            self._btns.append(b)
+        self.refresh()
         h.addStretch(1)
         self._right = QHBoxLayout()
         self._right.setSpacing(12)
@@ -41,6 +36,29 @@ class SubTabHeader(QWidget):
         tabs.currentChanged.connect(self._sync)
         self._sync(tabs.currentIndex())
 
+
+    def refresh(self):
+        """Rebuild the buttons from the tabs. Call after inserting or
+        removing a tab, or the buttons open the wrong pages."""
+        for b in self._btns:
+            self._btn_row.removeWidget(b)
+            b.deleteLater()
+        self._btns = []
+        tabs = self._tabs
+        for i in range(tabs.count()):
+            b = QPushButton(tabs.tabText(i))
+            b.setCheckable(True)
+            b.setProperty("subtab", True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setFocusPolicy(Qt.NoFocus)
+            b.clicked.connect(lambda _=False, k=i: self._open(k))
+            self._btn_row.addWidget(b)
+            self._btns.append(b)
+        self._sync(tabs.currentIndex())
+
+    def _open(self, k):
+        self._tabs.setCurrentIndex(k)
+        self._sync(k)            # clicking the open tab must not un-highlight it
 
     def _sync(self, idx):
         for i, b in enumerate(self._btns):

@@ -19,6 +19,7 @@ class YMazeTab(OpenFieldTab):
             tab = self.experiment.build_results_tabs(self, self._excel_tabs)
             if tab is not None and hasattr(self, "_excel_tabs"):
                 self._excel_tabs.insertTab(1, tab, "Y-Maze")
+                self._out_header.refresh()
         except Exception:
             pass
         # Live per-zone tracking state — arms + the neutral hub. Updated

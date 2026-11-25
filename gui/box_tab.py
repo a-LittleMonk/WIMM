@@ -24,6 +24,7 @@ class BoxTab(OpenFieldTab):
             tab = exp.build_results_tabs(self, self._excel_tabs)
             if tab is not None and hasattr(self, "_excel_tabs"):
                 self._excel_tabs.insertTab(1, tab, exp.results_title)
+                self._out_header.refresh()
         except Exception:
             pass
         self._reset_live()

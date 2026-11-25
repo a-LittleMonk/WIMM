@@ -28,6 +28,7 @@ class NORTab(OpenFieldTab):
             if tab is not None and hasattr(self, "_excel_tabs"):
                 self._excel_tabs.insertTab(
                     1, tab, getattr(self.experiment, "results_title", "NOR"))
+                self._out_header.refresh()
         except Exception:
             pass
         # Live per-object tracking state. Mirrors the YM pattern: pending
