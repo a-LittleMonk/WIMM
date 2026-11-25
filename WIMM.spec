@@ -93,7 +93,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='MiceTracker',
+    name='WIMM',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -117,5 +117,5 @@ coll = COLLECT(
         "python3.dll", "python313.dll",
         "Qt5Core.dll", "Qt5Gui.dll", "Qt5Widgets.dll",
     ],
-    name='MiceTracker',
+    name='WIMM',
 )

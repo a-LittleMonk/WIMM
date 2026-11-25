@@ -75,7 +75,17 @@ zone-based and test-specific measures.
 
 ## Installation (Windows)
 
-Requirements: Python 3 (tested with Python 3.12).
+### Option 1: ready-to-run app (no Python needed)
+
+1. Download **`WIMM-1.0.0-windows.zip`** from the [Releases](../../releases) page.
+2. Unzip it anywhere.
+3. Double-click **`WIMM.exe`** in the `WIMM` folder.
+
+Windows may show a "Windows protected your PC" warning because the app is not code-signed. Click **More info → Run anyway**.
+
+### Option 2: run from source
+
+Requirements: Python 3 (tested with Python 3.12), ticked "Add python.exe to PATH" during installation, and internet access on the first run.
 
 1. Download or clone this repository.
 2. Double-click **`Run WIMM.bat`**.
