@@ -6,13 +6,21 @@ order: 2
 keywords: batch, shared settings, per video, settings video, run all, consistency, counterbalancing, same settings
 -->
 <h1>What a batch shares and what stays per video</h1>
-<p>For results that can be compared, every animal of a batch must be analysed the same
-way. <b>Run all</b> therefore takes every setting that changes the numbers from one
-video — the <b>settings video</b> (the one shown in the panel when you press Run all) —
-and only the geometry that differs per recording from each video itself.</p>
+<p>For results that can be compared, every animal of a batch should be analysed the same
+way. One video in the Queue is the <b>source</b>, marked with a filled <b>★</b> (the first
+video you add; click ★ on another row to change it). Every other video follows the
+source's settings, except the geometry that differs per recording.</p>
+<p><b>Changing a setting on one video.</b> If you change a shared setting (for example the
+sensitivity) while another video is shown, that video keeps <b>its own</b> value; it no
+longer follows the source for that setting. Later changes on the source still reach all
+the other settings of that video. <a href="topic:apply-to">Apply to</a> from the source
+makes the chosen settings follow the source again.</p>
+<p>Before anything runs, <b>Run all</b> shows the source and lists every video that uses
+its own settings, as <i>source value → this video's value</i>. Press <b>Run all</b> to
+continue or <b>Cancel</b> to change them.</p>
 
 <table width="100%">
-<tr><th>Taken from the settings video (same for all)</th><th>Kept per video</th></tr>
+<tr><th>Taken from the ★ source (unless changed on a video)</th><th>Kept per video</th></tr>
 <tr><td valign="top"><ul>
 <li>Detection: sensitivity, white-mouse switch, brightness, contrast, blur, gamma, sharpen, CLAHE, max blob</li>
 <li>Tracking: model, process resolution, frame skip, smoothing, nose detection</li>

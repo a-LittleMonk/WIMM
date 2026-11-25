@@ -79,6 +79,8 @@ _ICONS = {
     "popout":   ('<path d="M9 2.5h4.5V7M13.5 2.5L8 8M11.5 9.5v4h-9v-9h4"/>', "stroke", 1.4),
     "logo":     ('<rect x="3.5" y="3.5" width="9" height="9" rx="1.2"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/>',
                  "stroke", 1.5),
+    "star":     ('<path d="M8 1.8l1.9 3.9 4.3.6-3.1 3 .7 4.3L8 11.6l-3.8 2 .7-4.3-3.1-3 4.3-.6z"/>', "stroke", 1.3),
+    "star_fill": ('<path d="M8 1.8l1.9 3.9 4.3.6-3.1 3 .7 4.3L8 11.6l-3.8 2 .7-4.3-3.1-3 4.3-.6z"/>', "fill", 0),
     "search":   ('<circle cx="7" cy="7" r="4.5"/><path d="M13.5 13.5l-3.3-3.3"/>', "stroke", 1.5),
     # Launcher arena icons — top-down schematics of each apparatus, drawn on
     # a 24-unit grid (4th tuple item = viewBox size).

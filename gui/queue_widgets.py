@@ -106,7 +106,7 @@ class VideoRow(QFrame):
     """One video in the queue."""
     status_changed = pyqtSignal()
 
-    def __init__(self, path, on_edit, on_run, on_remove, on_trim, parent=None):
+    def __init__(self, path, on_edit, on_run, on_remove, on_trim, on_source=None, parent=None):
         super().__init__(parent)
         self.path = path
         self.status = NEEDS
@@ -154,6 +154,14 @@ class VideoRow(QFrame):
         acts = QHBoxLayout()
         acts.setContentsMargins(0, 0, 0, 0)
         acts.setSpacing(1)
+        self.is_source = False
+        self.btn_source = IconButton("star", 12, "FAINT", "ACCENT", "Make this the source video", 22)
+        if on_source is not None:
+            self.btn_source.clicked.connect(lambda: on_source(self.path))
+            self.btn_source.setCursor(Qt.ArrowCursor)
+            acts.addWidget(self.btn_source)
+        else:
+            self.btn_source.hide()
         self.btn_trim = IconButton("trim", 12, "FAINT", "TEXT", "Trim — set start time and duration", 22)
         self.btn_run = IconButton("play", 11, "FAINT", "ACCENT", "Run this video", 22)
         self.btn_remove = IconButton("x", 11, "FAINT", "ERR", "Remove", 22, "danger")
@@ -214,6 +222,16 @@ class VideoRow(QFrame):
         self.animal_id = aid or ""
         self.lbl_aid.setText(self.animal_id)
         self.lbl_aid.setVisible(bool(self.animal_id))
+
+    def set_source(self, on):
+        """★ filled on the batch's source video."""
+        self.is_source = bool(on)
+        b = self.btn_source
+        b._tone = "ACCENT" if self.is_source else "FAINT"
+        b.set_icon_name("star_fill" if self.is_source else "star")
+        b.setToolTip("Source video — the other videos follow its settings, "
+                     "except the ones you changed on them" if self.is_source
+                     else "Make this the source video")
 
     def set_selected(self, on):
         self.selected = bool(on)

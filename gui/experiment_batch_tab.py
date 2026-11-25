@@ -166,16 +166,72 @@ PER_VIDEO_KEYS = frozenset({
 
 
 def merge_batch_settings(shared_src, own):
-    """Settings one video runs with in a batch: its own per-video keys plus
-    every other key from `shared_src` (deep-copied so videos never share
-    mutable objects)."""
+    """Settings one video runs with when it has no own changes: its
+    per-video keys plus every other key from `shared_src`."""
+    return follow_source(shared_src, own, set())
+
+
+def _same(a, b):
+    """Equality that also works for numpy arrays inside settings."""
+    try:
+        return bool(a == b)
+    except Exception:
+        import json
+        return json.dumps(a, sort_keys=True, default=str) == json.dumps(b, sort_keys=True, default=str)
+
+
+def shared_changes(before, after):
+    """Batch-wide keys whose value the user changed on one video. A key the
+    video had no saved value for is not an edit (new video, defaults)."""
+    return {k for k in set(before or {}) & set(after or {})
+            if k not in PER_VIDEO_KEYS and not _same(before[k], after[k])}
+
+
+def follow_source(src, own, own_keys):
+    """A video's settings with the source applied: its per-video keys and
+    its own (user-changed) keys stay; everything else comes from `src`."""
     import copy
-    merged = dict(own or {})
-    for k, v in (shared_src or {}).items():
-        if k in PER_VIDEO_KEYS:
+    out = dict(own or {})
+    for k, v in (src or {}).items():
+        if k in PER_VIDEO_KEYS or k in own_keys:
             continue
-        merged[k] = copy.deepcopy(v)
-    return merged
+        out[k] = copy.deepcopy(v)
+    return out
+
+
+# Shown in the run popup next to the source value. Display-only settings
+# (colours, trail, markers) don't change the numbers and are not listed.
+SETTING_LABELS = {
+    "threshold": "Sensitivity", "low_contrast": "Low contrast", "brightness": "Brightness",
+    "contrast": "Contrast", "blur": "Blur", "gamma": "Gamma", "sharpen": "Sharpen",
+    "clahe": "CLAHE", "max_blob": "Max blob", "proc_scale": "Processing scale",
+    "model": "Tracking model", "model_params": "Model settings",
+    "post_params": "Post-processing", "smooth": "Smoothing",
+    "movement_thr": "Movement threshold", "bin_size": "Time bin",
+    "trim_start": "Trim start (s)", "trim_duration": "Trim duration (s)",
+    "fps_override": "Frame rate override", "zone_mode": "Zone mode",
+    "cage_shape": "Cage shape", "center_pct": "Center size (%)", "calib_mode": "Scale mode",
+}
+DISPLAY_ONLY_KEYS = frozenset({
+    "body_style", "marker_shape", "marker_size", "marker_tag", "ellipse", "trail",
+    "trail_len", "trail_fade", "brush_radius", "colors", "overlay_alpha",
+})
+
+
+def batch_differences(source, paths, settings, own_keys):
+    """[(path, [(key, source value, video value)])] — every video whose own
+    settings differ from the source's, for the run popup."""
+    src = settings.get(source) or {}
+    out = []
+    for p in paths:
+        if p == source:
+            continue
+        s = settings.get(p) or {}
+        rows = [(k, src.get(k), s.get(k)) for k in sorted(own_keys.get(p) or ())
+                if k not in DISPLAY_ONLY_KEYS and k in s and not _same(src.get(k), s[k])]
+        if rows:
+            out.append((p, rows))
+    return out
 
 
 def zone_pixels(arena_norm, center_norm, frame_size, warped):
@@ -1131,8 +1187,13 @@ class ExperimentBatchTab(QWidget):
         if tab_class is not None:
             self.embedded_tab_class = tab_class
         self.setAcceptDrops(True)
-        # path -> snapshot dict (set once configured)
+        # path -> snapshot dict (set once configured). Always what the video
+        # runs with: the ★ source's values plus its own changes.
         self.video_settings = {}
+        # The ★ source video; every other video follows its settings ...
+        self._source_path = None
+        # ... except these batch-wide keys the user changed on that video.
+        self._own_keys = {}
         # path -> last-known status
         self.video_status = {}
         # ordered list of video paths (matches list order)
@@ -2448,9 +2509,16 @@ class ExperimentBatchTab(QWidget):
         self.videos.append(path)
         self.video_status[path] = STATUS_NEEDS
         self.video_settings.setdefault(path, {})
+        self._own_keys[path] = set()
         row = VideoRow(path, self._on_edit, self._on_run, self._on_remove,
-                       self._on_trim)
+                       self._on_trim, self._set_source)
         self.row_widgets[path] = row
+        if self._source_path is None:
+            self._source_path = path
+        else:   # a new video starts with the source's settings
+            self.video_settings[path] = follow_source(
+                self.video_settings.get(self._source_path), self.video_settings[path], set())
+        row.set_source(path == self._source_path)
         # insert before stretch
         row.status_changed.connect(self._refresh_queue_stats)
         self.list_layout.insertWidget(self.list_layout.count() - 2, row)
@@ -2467,6 +2535,11 @@ class ExperimentBatchTab(QWidget):
         was_loaded = self._embedded_loaded_path == path
         self.videos.remove(path)
         self.video_status.pop(path, None)
+        self._own_keys.pop(path, None)
+        if self._source_path == path:   # the first remaining video takes over as ★ source
+            self._source_path = None
+            if self.videos:
+                self._set_source(self.videos[0])
         self.video_settings.pop(path, None)
         self._completed_data.pop(path, None)
         # Drop this video from the completed-runs list too, so the
@@ -2511,7 +2584,10 @@ class ExperimentBatchTab(QWidget):
         if old_crop != s["crop"]:
             for k in ("arena", "center_zone", "center", "exclusion_mask"):
                 s.pop(k, None)
+        is_source = self._note_own_changes(path, self.video_settings.get(path), s)
         self.video_settings[path] = s
+        if is_source:
+            self._propagate_source()
         # Push into the embedded panel if this video is loaded.
         if self._embedded_loaded_path == path:
             try:
@@ -2564,6 +2640,53 @@ class ExperimentBatchTab(QWidget):
         finally:
             self._loading = False
 
+    def _set_source(self, path):
+        """Make `path` the ★ source. Its own changes become the batch
+        values; other videos keep the settings they changed themselves."""
+        if path not in self.videos or self._tracker_thread is not None:
+            return
+        self._capture_embedded_settings()
+        self._source_path = path
+        self._own_keys[path] = set()
+        for p, row in self.row_widgets.items():
+            row.set_source(p == path)
+        self._propagate_source()
+        self.lbl_status.setText(f"★ Source: {os.path.basename(path)} — the other videos "
+                                "follow its settings, except the ones you changed on them.")
+
+    def _propagate_source(self):
+        """Copy the source's batch-wide settings to every other video, except
+        each video's own changes; refresh the panel if its video changed."""
+        src = self._source_path
+        if not src:
+            return
+        changed_loaded = False
+        for p in self.videos:
+            if p == src:
+                continue
+            new = follow_source(self.video_settings.get(src), self.video_settings.get(p),
+                                self._own_keys.get(p, set()))
+            if p == self._embedded_loaded_path and shared_changes(self.video_settings.get(p), new):
+                changed_loaded = True
+            self.video_settings[p] = new
+        if changed_loaded:   # show the new values without saving them as edits
+            was_loading = self._loading
+            self._loading = True
+            try:
+                self.embedded_tab.apply_settings(self.video_settings[self._embedded_loaded_path])
+            except Exception:
+                pass
+            finally:
+                self._loading = was_loading
+
+    def _note_own_changes(self, path, before, after):
+        """Record the batch-wide settings the user changed on a non-source
+        video (they stay with that video); on the source, pass them on."""
+        if path == self._source_path:
+            return True
+        self._own_keys.setdefault(path, set()).update(shared_changes(before, after))
+        return False
+
     def _copy_from_neighbor(self, direction):
         """Ctrl+↑/↓ — clone the prev/next row's settings onto the current
         video. Detection knobs only; arena/calibration/metadata stay scoped
@@ -2597,7 +2720,10 @@ class ExperimentBatchTab(QWidget):
             full = self.embedded_tab.snapshot_settings()
         except Exception:
             return
+        is_source = self._note_own_changes(cur, self.video_settings.get(cur), full)
         self.video_settings[cur] = full
+        if is_source:
+            self._propagate_source()
         self._mark_ready_if_eligible(cur, full)
         self.lbl_status.setText(
             f"Copied detection settings from '{os.path.basename(nbr_path)}'"
@@ -2838,6 +2964,31 @@ class ExperimentBatchTab(QWidget):
         v.addWidget(bb)
         return dlg.exec_() == QDialog.Accepted
 
+    def _source_note(self, src, merged):
+        """Popup text: the ★ source, and every video whose own settings
+        differ from it (source value → this video's value)."""
+        import html
+        import json
+
+        def fmt(v):
+            t = json.dumps(v, default=str) if isinstance(v, (dict, list)) else str(v)
+            return html.escape(t if len(t) <= 40 else t[:37] + "…")
+
+        name = html.escape(os.path.basename(src))
+        text = (f"★ Source: <b>{name}</b>. Every video uses its settings; the arena, "
+                "zones, calibration line, exclusion mask, crop, animal info and "
+                "per-animal assignments stay per video.")
+        diffs = batch_differences(src, self.videos, merged, self._own_keys)
+        if not diffs:
+            return text + "<br><br>No video has its own settings — all match the source."
+        text += "<br><br><b>These videos use their own settings:</b>"
+        for p, rows in diffs:
+            items = "".join(
+                f"<li>{html.escape(SETTING_LABELS.get(k, k.replace('_', ' ').capitalize()))}: "
+                f"source {fmt(a)} → this video <b>{fmt(b)}</b></li>" for k, a, b in rows)
+            text += f"<br>{html.escape(os.path.basename(p))}<ul style='margin:2px 0'>{items}</ul>"
+        return text + "Continue?"
+
     def _claim_run(self):
         """True and marks this tab as running, or tells the user another
         run is going and returns False."""
@@ -2862,37 +3013,25 @@ class ExperimentBatchTab(QWidget):
         if not self.videos:
             QMessageBox.warning(self, "Nothing to run", "Add videos first.")
             return
-        # One settings source for the whole batch: the video currently shown
-        # in the panel. Everything that affects the data comes from it; only
-        # per-video geometry (arena, zones, calibration line, mask, crop,
-        # animal info) stays with each video.
-        src = self._embedded_loaded_path
-        if not src or src not in self.videos:
-            QMessageBox.information(
-                self, "Pick the settings video",
-                "Click the video whose settings the whole batch should use, "
-                "then press Run all again."
-            )
-            return
+        # One ★ source for the whole batch. Every video runs with its
+        # settings, except per-video geometry (arena, zones, calibration line,
+        # mask, crop, animal info) and the settings the user changed on that
+        # video — those differences are listed below before anything runs.
+        src = self._source_path if self._source_path in self.videos else self.videos[0]
         if not getattr(self, "_read_only", False):
             self._capture_embedded_settings()
-        try:
-            shared = dict(self.embedded_tab.snapshot_settings())
-        except Exception:
-            shared = dict(self.video_settings.get(src) or {})
+        shared = dict(self.video_settings.get(src) or {})
         exp_key = self._experiment_key()
         merged = {}
         for p in self.videos:
             own = self.video_settings.get(p) or {}
-            merged[p] = derive_center_zone(merge_batch_settings(shared, own), exp_key)
+            keep = set() if p == src else self._own_keys.get(p, set())
+            merged[p] = derive_center_zone(follow_source(shared, own, keep), exp_key)
         # Pre-flight: per-video readiness check on the settings that will run.
         report = [(p, *self._preflight_video(p, merged[p])) for p in self.videos]
         note = None
         if len(self.videos) > 1:
-            note = (f"All videos will use the settings of <b>{os.path.basename(src)}</b>. "
-                    "Only the arena, zones, calibration line, exclusion mask, crop, "
-                    "animal info and per-animal assignments (e.g. paired side, "
-                    "object roles, platform quadrant) stay per video.")
+            note = self._source_note(src, merged)
         if not self._show_preflight_dialog(report, note=note):
             return
         for p in self.videos:
@@ -3965,16 +4104,32 @@ class ExperimentBatchTab(QWidget):
                     else:
                         existing[k] = v
             self.video_settings[tgt] = existing
+            # Copied from the ★ source → the video follows the source again;
+            # copied from another video → those values are its own.
+            own = self._own_keys.setdefault(tgt, set())
+            copied = {k for k in fields if k in src_snap and k not in PER_VIDEO_KEYS}
+            if tgt == self._source_path:
+                pass
+            elif src == self._source_path:
+                own -= copied
+            else:
+                own |= copied
             self._mark_ready_if_eligible(tgt, existing)
+        if self._source_path in targets:
+            self._propagate_source()
         # If the currently-loaded video was a target, re-apply so the panel
         # reflects the new state.
         if self._embedded_loaded_path in targets:
+            was_loading = self._loading
+            self._loading = True   # copied values are not edits made on this video
             try:
                 self.embedded_tab.apply_settings(
                     self.video_settings.get(self._embedded_loaded_path) or {}
                 )
             except Exception:
                 pass
+            finally:
+                self._loading = was_loading
         self.lbl_status.setText(
             f"Applied {len(fields)} field(s) to {len(targets)} video(s)."
         )
@@ -4092,7 +4247,11 @@ class ExperimentBatchTab(QWidget):
             notice(f"Your latest changes to {name} could not be saved ({e}); "
                    "its previously saved settings are used.")
             return
-        self.video_settings[self._embedded_loaded_path] = snap
+        path = self._embedded_loaded_path
+        is_source = self._note_own_changes(path, self.video_settings.get(path), snap)
+        self.video_settings[path] = snap
+        if is_source:
+            self._propagate_source()
 
     # Legacy no-ops — kept so existing callers don't break.
 
