@@ -73,6 +73,8 @@ a = Analysis(
          'assets/logo-package-v4/png'),
         # Bundled fonts (Instrument Sans, JetBrains Mono, Quicksand Bold +
         # OFL licences) — registered at start-up by gui.theme.
+        # Window / taskbar icon (main.py).
+        ('assets/wimm.ico', 'assets'),
         ('assets/fonts', 'assets/fonts'),
         # In-app Help: guide pages + screenshots (gui.help_dialog).
         ('assets/help', 'assets/help'),
@@ -99,6 +101,7 @@ exe = EXE(
     strip=False,
     upx=True,
     console=False,
+    icon='assets/wimm.ico',
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

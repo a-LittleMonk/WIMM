@@ -50,12 +50,19 @@ def main():
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     _keep_log_on_disk()
     sys.excepthook = _report_crash
+    if sys.platform == "win32":
+        # Own taskbar identity, so Windows shows the WIMM icon instead of
+        # python.exe's when started from Run WIMM.bat.
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("WIMM.app")
     app = QApplication(sys.argv)
     app.setApplicationName("Mice Tracker")
+    from PyQt5.QtGui import QIcon
+    app.setWindowIcon(QIcon(os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "wimm.ico")))
     register_bundled_fonts()
     config = load_config()
     load_aurora(config)
-    apply_theme(app, config.get("theme", "dark"))   # first start: dark · Graphite
+    apply_theme(app, config.get("theme", "light"))   # first start: light · Mist
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())

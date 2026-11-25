@@ -108,7 +108,7 @@ AURORA_PRESETS = {
         "Graphite": {"accent": "#F2B35B", "base": "#0A0B0D", "colors": [["#2A2F38", 0.50], ["#1B2230", 0.50]]},
     },
 }
-AURORA_DEFAULT_PRESET = {"light": "Lilac daylight", "dark": "Graphite"}
+AURORA_DEFAULT_PRESET = {"light": "Mist", "dark": "Graphite"}
 
 
 def copy_spec(spec):
