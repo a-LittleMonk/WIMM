@@ -78,7 +78,7 @@ zone-based and test-specific measures.
 Requirements: Python 3 (tested with Python 3.12).
 
 1. Download or clone this repository.
-2. Double-click **`Run MiceTracker.bat`**.
+2. Double-click **`Run WIMM.bat`**.
    On the first run it creates a virtual environment (`.venv`) and installs the dependencies, which takes a minute. After that, the app starts straight away.
 
 Or from a terminal:
