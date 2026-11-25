@@ -1,30 +1,42 @@
 <!--
 id: apply-to
-title: Copy settings between videos (Apply to…)
+title: Copy arena and zones to other videos · Reset to ★
 section: 3. Running the analysis
 order: 3
-keywords: apply to, copy settings, paste, other videos, same arena, copy from neighbour, ctrl up, ctrl down
+keywords: apply to, copy, copy arena, copy zones, same camera, metadata, animal information, reset to source, reset, star, ctrl up, ctrl down
 -->
-<h1>Copy settings between videos (Apply to…)</h1>
-<p>Click the source video in the Queue, then <b>Apply to…</b> at the top of the
-Configuration panel.</p>
-<p><img src="img/apply_to.png" width="520"></p>
+<h1>Copy arena and zones to other videos</h1>
+<p>Detection and analysis settings never need copying: every video follows the
+<b>★ source</b> automatically (<a href="topic:batch-rules">Batch rules</a>). What stays
+per video — the things you draw and the animal information — can be copied with
+<b>Copy arena and zones…</b> at the top of the Configuration panel.</p>
 <ol>
-<li><b>Fields</b>: tick what to copy — Detection, Visualization, Smoothing/timing, Trim,
-FPS override, Calibration, Zone mode/cage shape/perspective, Arena/center polygons,
-Exclusion mask, Metadata. <b>Select all</b> / <b>Clear</b>.</li>
-<li><b>Targets</b>: all other videos, only videos without saved settings, or pick
-specific ones from the list.</li>
-<li>Click <b>Apply</b>.</li>
+<li>Click the video to copy <b>from</b> in the Queue.</li>
+<li>Click <b>Copy arena and zones…</b> and tick what to copy:
+<ul>
+<li>Arena outline and perspective</li>
+<li>Maze arms, hub and object places</li>
+<li>Calibration line (scale)</li>
+<li>Exclusion mask</li>
+<li>Animal information (Group, Sex, Date, Trial, Notes) — each video keeps its own
+<b>Animal ID</b></li>
+<li>Per-animal assignments (paired side, object roles, platform quadrant …)</li>
+</ul></li>
+<li>Choose the videos to copy <b>to</b>: all other videos (default), only videos without
+an arena yet, or pick them from the list.</li>
+<li>Click <b>Copy</b>. If a video already has some of these drawn, you are asked first.</li>
 </ol>
-<div class="tip">Same camera position for several videos? Draw the arena once and copy
-<i>Arena/center polygons</i> and <i>Calibration</i> to the others — then check each
-video quickly, because the box may have moved a little.</div>
+<div class="tip">Same camera position for several videos? Draw the arena once and copy it
+with the calibration line to the others — then check each video quickly, because the box
+may have moved a little.</div>
+
+<h2>Reset to ★</h2>
+<p>If you changed a setting (for example the sensitivity) on a video that is not the
+source, that video keeps its own value. <b>Reset to ★</b> undoes those changes on the
+video shown, so it follows the ★ source again. Its arena, zones and animal information
+are not touched.</p>
 
 <h2>Copy from the video above or below</h2>
 <p><kbd>Ctrl+↑</kbd> / <kbd>Ctrl+↓</kbd> copy the <b>detection settings</b> of the
-previous / next video in the Queue onto the video shown. Its arena, calibration and
-animal information are not touched.</p>
-<p>Settings copied <b>from the ★ source</b> make the target videos follow the source again
-for those settings. Settings copied from any other video become the targets' <b>own</b>
-values, and the Run all check lists them (<a href="topic:batch-rules">Batch rules</a>).</p>
+previous / next video in the Queue onto the video shown. They become that video's own
+settings and are listed before Run all.</p>

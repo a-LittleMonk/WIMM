@@ -52,3 +52,22 @@ def test_batch_differences_lists_only_real_differences():
     own = {"a.mp4": {"threshold"}, "b.mp4": {"threshold"}, "c.mp4": set()}
     diffs = batch_differences("src.mp4", ["src.mp4", "a.mp4", "b.mp4", "c.mp4"], settings, own)
     assert diffs == [("a.mp4", [("threshold", 25, 30)])]
+
+
+def test_copy_groups_hold_only_per_video_settings():
+    from gui.experiment_batch_tab import APPLY_FIELD_GROUPS, APPLY_DEFAULTS_ON, PER_VIDEO_KEYS
+    keys = {k for _, ks in APPLY_FIELD_GROUPS for k in ks}
+    assert keys <= PER_VIDEO_KEYS                 # shared settings follow the ★ source instead
+    assert "metadata" in keys
+    assert APPLY_DEFAULTS_ON <= {label for label, _ in APPLY_FIELD_GROUPS}
+
+
+def test_copy_fields_keeps_each_animal_id():
+    from gui.experiment_batch_tab import copy_fields
+    src = {"arena": ARENA_A, "metadata": {"Animal ID": "m1", "Group": "Drug", "Sex": "M"}}
+    tgt = {"arena": ARENA_B, "metadata": {"Animal ID": "m7", "Group": ""}}
+    out = copy_fields(src, tgt, {"arena", "metadata"})
+    assert out["arena"] == ARENA_A
+    assert out["metadata"] == {"Animal ID": "m7", "Group": "Drug", "Sex": "M"}
+    out["arena"][0][0] = 0.5
+    assert src["arena"][0][0] == 0.1                # deep copy

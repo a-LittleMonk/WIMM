@@ -72,35 +72,45 @@ STATUS_ICONS = {
 }
 
 
-# Maps a user-facing field-group label → list of snapshot_settings() keys.
-# Order matters — listed top-down in the Apply-To dialog.
+# "Copy arena & zones to…": the per-video settings a user may want to copy
+# (same camera position, same group …). Shared settings need no copying —
+# the other videos follow the ★ source. Label → keys, listed top-down.
 APPLY_FIELD_GROUPS = [
-    ("Detection (sliders / threshold / model)",
-        ["threshold", "low_contrast", "brightness", "contrast", "blur", "gamma", "sharpen",
-         "clahe", "max_blob", "proc_scale", "model", "model_params", "post_params"]),
-    ("Visualization (overlays / colors)",
-        ["body_style", "ellipse", "trail", "trail_len",
-         "brush_radius", "colors", "overlay_alpha"]),
-    ("Smoothing & timing",
-        ["smooth", "movement_thr", "bin_size"]),
-    ("Trim",
-        ["trim_start", "trim_duration"]),
-    ("FPS override",
-        ["fps_override"]),
-    ("Calibration (px/cm line)",
+    ("Arena outline and perspective",
+        ["arena", "original_arena", "perspective", "arena_define_mode", "center_zone", "center"]),
+    ("Maze arms, hub and object places",
+        ["arms_norm", "center_norm", "arm_kinds", "arm_custom_names",
+         "epm_endpoints", "epm_hub", "epm_original_endpoints", "epm_original_hub",
+         "epm_homography", "epm_warp_size", "epm_perspective",
+         "neutral_norm", "ym_endpoints", "ym_hub", "ym_original_endpoints",
+         "ym_original_hub", "ym_perspective", "objects_norm"]),
+    ("Calibration line (scale)",
         ["calib_p1", "calib_p2", "calib_cm"]),
-    ("Zone mode / cage shape / perspective",
-        ["zone_mode", "cage_shape", "perspective", "center_pct"]),
-    ("Arena & center polygons",
-        ["arena", "center_zone"]),
     ("Exclusion mask",
         ["exclusion_mask"]),
-    ("Metadata (Animal ID / Group / Sex / …)",
+    ("Animal information (Group, Sex, Date … — not the Animal ID)",
         ["metadata"]),
+    ("Per-animal assignments (paired side, object roles, quadrant …)",
+        ["box_assign"]),
 ]
-# Defaults — only Detection is on. Per-video stuff stays off so the user
-# explicitly opts in to overwriting arena / metadata / etc.
-APPLY_DEFAULTS_ON = {"Detection (sliders / threshold / model)"}
+APPLY_DEFAULTS_ON = {"Arena outline and perspective", "Maze arms, hub and object places",
+                     "Calibration line (scale)"}
+
+
+def copy_fields(src, target, keys):
+    """Target settings with `keys` copied from `src` (deep copies). Animal
+    information is copied without the Animal ID — each animal keeps its own."""
+    import copy
+    out = dict(target or {})
+    for k in keys:
+        if k not in src:
+            continue
+        v = copy.deepcopy(src[k])
+        if k == "metadata":
+            v = dict(v or {})
+            v["Animal ID"] = (out.get("metadata") or {}).get("Animal ID", "")
+        out[k] = v
+    return out
 
 # Batch rule: every setting that changes the data is shared by the whole
 # batch (taken from the video the user set up). Only what is drawn on /
@@ -811,8 +821,9 @@ class ApplyToDialog(QDialog):
 
         root = QVBoxLayout(self)
         hdr = QLabel(
-            f"Source: <b>{os.path.basename(src_path)}</b> — "
-            "choose which fields to copy and which videos receive them."
+            f"Copy from <b>{os.path.basename(src_path)}</b> — useful when the videos were "
+            "filmed from the same camera position. Detection and analysis settings are "
+            "not here: every video already follows the ★ source."
         )
         hdr.setWordWrap(True)
         root.addWidget(hdr)
@@ -847,9 +858,9 @@ class ApplyToDialog(QDialog):
         tl = QVBoxLayout(targets_box)
         self._target_group = QButtonGroup(self)
         self._rb_all = QRadioButton("All other videos")
-        self._rb_unconfigured = QRadioButton("Unconfigured videos only (no saved settings)")
+        self._rb_unconfigured = QRadioButton("Videos without an arena yet")
         self._rb_pick = QRadioButton("Pick specific videos…")
-        self._rb_unconfigured.setChecked(True)
+        self._rb_all.setChecked(True)
         for rb in (self._rb_all, self._rb_unconfigured, self._rb_pick):
             self._target_group.addButton(rb)
             tl.addWidget(rb)
@@ -861,7 +872,8 @@ class ApplyToDialog(QDialog):
                 continue
             it = QListWidgetItem(os.path.basename(p))
             it.setData(Qt.UserRole, p)
-            tagged = "configured" if p in self._video_settings else "unconfigured"
+            tagged = ("has an arena" if (self._video_settings.get(p) or {}).get("arena")
+                      else "no arena yet")
             it.setToolTip(f"{p}\n[{tagged}]")
             self._pick_list.addItem(it)
         tl.addWidget(self._pick_list, 1)
@@ -870,7 +882,7 @@ class ApplyToDialog(QDialog):
 
         # Buttons
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        bb.button(QDialogButtonBox.Ok).setText("Apply")
+        bb.button(QDialogButtonBox.Ok).setText("Copy")
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
         root.addWidget(bb)
@@ -891,7 +903,8 @@ class ApplyToDialog(QDialog):
             return [p for p in self._all_paths if p != self._src_path]
         if self._rb_unconfigured.isChecked():
             return [p for p in self._all_paths
-                    if p != self._src_path and p not in self._video_settings]
+                    if p != self._src_path
+                    and not (self._video_settings.get(p) or {}).get("arena")]
         # pick mode
         out = []
         for i in range(self._pick_list.count()):
@@ -2394,10 +2407,14 @@ class ExperimentBatchTab(QWidget):
         mv.setContentsMargins(0, 0, 0, 0)
         mv.setSpacing(4)
         ch = PaneHeader("config", "Configuration")
-        self.btn_apply_to = ch.add_right(IconTextButton("copy", "Apply to…", 12, height=26))
+        self.btn_reset_source = ch.add_right(IconTextButton("reset", "Reset to ★", 12, height=26))
+        self.btn_reset_source.setToolTip(
+            "Undo the settings you changed on this video, so it follows the ★ source again.")
+        self.btn_reset_source.clicked.connect(self._reset_to_source)
+        self.btn_apply_to = ch.add_right(IconTextButton("copy", "Copy arena and zones…", 12, height=26))
         self.btn_apply_to.setToolTip(
-            "Copy selected fields from this video's panel to other videos."
-        )
+            "Copy this video's arena, zones, calibration line, mask or animal "
+            "information to other videos (same camera position).")
         self.btn_apply_to.clicked.connect(self._open_apply_to_dialog)
         # ch sits on top of the Configuration pane (see the splitter below).
         if self._config_scroll is not None:
@@ -4040,23 +4057,20 @@ class ExperimentBatchTab(QWidget):
         return True
 
     def _open_apply_to_dialog(self):
-        """Open the Apply-To dialog. Source = currently loaded video."""
+        """Copy arena / zones / calibration / mask / animal information from
+        the video shown to other videos. Copied values are per-video
+        settings, so the ★ source rule is not affected."""
         src = self._embedded_loaded_path
         if not src:
             QMessageBox.information(
-                self, "No source video",
-                "Click a video in the list first — its current panel "
-                "settings are what gets copied."
-            )
+                self, "No video shown",
+                "Click a video in the list first — its arena, zones and other "
+                "drawn settings are what gets copied.")
             return
         if len(self.videos) <= 1:
-            QMessageBox.information(
-                self, "Nothing to copy to",
-                "Add more videos first."
-            )
+            QMessageBox.information(self, "Nothing to copy to", "Add more videos first.")
             return
-        # Snapshot the panel as the source. Capture once, immediately, so the
-        # user can't accidentally edit while the dialog is open.
+        # Snapshot once, now, so edits while the dialog is open can't leak in.
         try:
             src_snap = self.embedded_tab.snapshot_settings()
         except Exception as e:
@@ -4068,71 +4082,45 @@ class ExperimentBatchTab(QWidget):
         fields = dlg.selected_fields()
         targets = dlg.selected_targets()
         if not fields:
-            self.lbl_status.setText("Apply-to: no fields selected.")
+            self.lbl_status.setText("Copy: nothing ticked to copy.")
             return
         if not targets:
-            self.lbl_status.setText("Apply-to: no targets selected.")
+            self.lbl_status.setText("Copy: no videos to copy to.")
             return
-        # Confirmation if writing to already-configured videos.
-        will_overwrite = [t for t in targets if t in self.video_settings]
+        will_overwrite = [t for t in targets
+                          if any((self.video_settings.get(t) or {}).get(k) for k in fields)]
         if will_overwrite:
-            n = len(will_overwrite)
             ans = QMessageBox.question(
-                self, "Overwrite existing settings?",
-                f"{n} target video(s) already have saved settings. "
-                "The selected fields will be overwritten on those videos. "
-                "Continue?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-            )
+                self, "Replace what is there?",
+                f"{len(will_overwrite)} of the {len(targets)} video(s) already have some of "
+                "these drawn. They will be replaced by the copy. Continue?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if ans != QMessageBox.Yes:
                 return
-        # Apply.
         for tgt in targets:
-            existing = dict(self.video_settings.get(tgt) or {})
-            for k in fields:
-                if k in src_snap:
-                    # Deep-ish copy for nested dicts / arrays so later edits
-                    # to the source video's panel don't bleed into targets.
-                    v = src_snap[k]
-                    if isinstance(v, dict):
-                        existing[k] = {kk: (dict(vv) if isinstance(vv, dict) else vv)
-                                        for kk, vv in v.items()}
-                    elif isinstance(v, list):
-                        existing[k] = list(v)
-                    elif hasattr(v, "copy"):
-                        existing[k] = v.copy()
-                    else:
-                        existing[k] = v
-            self.video_settings[tgt] = existing
-            # Copied from the ★ source → the video follows the source again;
-            # copied from another video → those values are its own.
-            own = self._own_keys.setdefault(tgt, set())
-            copied = {k for k in fields if k in src_snap and k not in PER_VIDEO_KEYS}
-            if tgt == self._source_path:
-                pass
-            elif src == self._source_path:
-                own -= copied
-            else:
-                own |= copied
-            self._mark_ready_if_eligible(tgt, existing)
-        if self._source_path in targets:
-            self._propagate_source()
-        # If the currently-loaded video was a target, re-apply so the panel
-        # reflects the new state.
-        if self._embedded_loaded_path in targets:
-            was_loading = self._loading
-            self._loading = True   # copied values are not edits made on this video
-            try:
-                self.embedded_tab.apply_settings(
-                    self.video_settings.get(self._embedded_loaded_path) or {}
-                )
-            except Exception:
-                pass
-            finally:
-                self._loading = was_loading
+            self.video_settings[tgt] = copy_fields(src_snap, self.video_settings.get(tgt), fields)
+            self._mark_ready_if_eligible(tgt, self.video_settings[tgt])
         self.lbl_status.setText(
-            f"Applied {len(fields)} field(s) to {len(targets)} video(s)."
-        )
+            f"Copied from {os.path.basename(src)} to {len(targets)} video(s).")
+
+    def _reset_to_source(self):
+        """The video shown drops the settings changed on it and follows the
+        ★ source again (arena, zones and animal information stay)."""
+        path = self._embedded_loaded_path
+        if not path:
+            return
+        if path == self._source_path:
+            self.lbl_status.setText("This is the ★ source — the other videos follow it.")
+            return
+        self._capture_embedded_settings()
+        changed = sorted(self._own_keys.get(path) or ())
+        if not changed:
+            self.lbl_status.setText(f"{os.path.basename(path)} already follows the ★ source.")
+            return
+        self._own_keys[path] = set()
+        self._propagate_source()
+        names = ", ".join(SETTING_LABELS.get(k, k.replace("_", " ")) for k in changed)
+        self.lbl_status.setText(f"{os.path.basename(path)} follows the ★ source again ({names}).")
 
     def _sync_selection(self, path):
         """Highlight matching row + sync combo to `path`. Surfaces any error
