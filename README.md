@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="docs/img/logo.png" width="120" alt="WIMM logo">
+  <img src="docs/img/launcher-brand.png" width="360" alt="WIMM — Where Is My Mouse? Behavior Lab">
 </p>
-
-<h1 align="center">WIMM — Where Is My Mouse?</h1>
 
 <p align="center">
   A free, open-source desktop application for video tracking of mouse behaviour.<br>
