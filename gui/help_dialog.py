@@ -224,7 +224,7 @@ class HelpDialog(QDialog):
 
     def __init__(self, config, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Help — Mice Tracker")
+        self.setWindowTitle("Help — WIMM")
         self.resize(1180, 800)
         self._config = config
         self._pages = {p["id"]: p for p in load_pages()}

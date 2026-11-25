@@ -56,7 +56,7 @@ def main():
         import ctypes
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("WIMM.app")
     app = QApplication(sys.argv)
-    app.setApplicationName("Mice Tracker")
+    app.setApplicationName("WIMM")
     from PyQt5.QtGui import QIcon
     app.setWindowIcon(QIcon(os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "wimm.ico")))
     register_bundled_fonts()

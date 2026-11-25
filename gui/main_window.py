@@ -166,11 +166,11 @@ class MainWindow(QMainWindow):
         from core.app_paths import pop_notices
         msgs = pop_notices()
         if msgs:
-            QMessageBox.warning(self, "Mice Tracker", "\n\n".join(msgs))
+            QMessageBox.warning(self, "WIMM", "\n\n".join(msgs))
 
     def _build_ui(self):
         from core.version import APP_VERSION
-        self.setWindowTitle(f"Mice Tracker {APP_VERSION}")
+        self.setWindowTitle(f"WIMM {APP_VERSION}")
         # queue 200 + configuration 260 + preview 420 (their minimums) plus
         # splitter handles and margins: below this the preview is cut off.
         self.setMinimumSize(1000, 600)
@@ -310,7 +310,7 @@ class MainWindow(QMainWindow):
         names = QVBoxLayout()
         names.setContentsMargins(0, 0, 0, 0)
         names.setSpacing(1)
-        name = QLabel("Mice Tracker")
+        name = QLabel("WIMM")
         name.setObjectName("BrandName")
         tag = QLabel("BEHAVIOR LAB")
         tag.setObjectName("BrandTag")
