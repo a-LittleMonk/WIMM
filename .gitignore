@@ -45,3 +45,10 @@ WIMM old versions/
 
 # In-app Help screenshots (gui/help_dialog.py) are part of the app
 !assets/help/img/*.png
+
+# Synthetic benchmark data (download the zip from the v1.0.0 release)
+benchmark/[0-9][0-9]_*/
+benchmark/figures/*.docx
+benchmark/figures/*.pdf
+benchmark/figures/*.svg
+!benchmark/APP_vs_benchmark_summary.xlsx
