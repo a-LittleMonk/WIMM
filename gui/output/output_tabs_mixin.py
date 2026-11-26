@@ -29,13 +29,16 @@ from core import units as out_units
 # untitled trailing group; if NOTHING matches (other experiments) the table is
 # shown flat.
 _SUMMARY_GROUPS = [
+    ("Pauses", ("pause",)),             # before Recording: "Mean Pause Duration" matched "duration"
     ("Recording", ("duration", "total frames", "frames detected", "detection rate", "fps")),
     ("Thigmotaxis & habituation", ("thigmotaxis", "habituation")),
     ("Locomotion", ("distance", "speed", "mobility", "immobil", "movement", "tortuosity", "mobile")),
-    ("Center zone", ("center", "periphery", "entries", "dwell", "latency", "inter-entry")),
+    # only rows about the centre: 'entries' / 'dwell' / 'latency' alone also
+    # matched Y-Maze / EPM / NOR rows and put them under "Center zone"
+    ("Center zone", ("center", "periphery", "inter-entry")),
 ]
 # display order of the groups
-_GROUP_ORDER = ["Recording", "Locomotion", "Center zone", "Thigmotaxis & habituation", "Other"]
+_GROUP_ORDER = ["Recording", "Locomotion", "Pauses", "Center zone", "Thigmotaxis & habituation", "Other"]
 
 
 def _split_unit(key):
@@ -183,6 +186,8 @@ class OutputTabsMixin:
         # group rows for display
         disp_units = self._output_units()
         base_len = out_units.base_length_unit(metrics)
+        from export.labels import readable          # same names as the Excel export
+        rows = [(readable(k, base_len), v) for k, v in rows]
         items = []
         for k, v in rows:
             conv = out_units.display_row(k, v, disp_units, base_len)
