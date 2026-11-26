@@ -1,7 +1,7 @@
 # WIMM synthetic benchmark
 
 Synthetic validation recordings for WIMM (Where Is My Mouse?) version 1.0.0, with every
-measure known in advance, and the results of analysing them with WIMM. These are the data
+measure known in advance, and the results of analyzing them with WIMM. These are the data
 behind Section 3.4, Figure 2, Supplementary Figure S1 and Supplementary Table S1 of the paper
 *From Natural Language to Laboratory Tool: AI-Assisted Development of WIMM, an Open-Source
 Mouse Tracking Platform*.
@@ -23,10 +23,10 @@ path over a rendered arena:
   fresh sensor noise on every frame.
 - **Paths:** straight runs, arcs and stationary periods.
 - **Ground truth:** the animal's position on every frame is known exactly, so every measure
-  is calculated from the script rather than from WIMM. The body point is the centre of the
+  is calculated from the script rather than from WIMM. The body point is the center of the
   drawn body without tail and shadow. The nose point is the tip of the snout.
 
-Each recording was then analysed with WIMM 1.0.0 through the application's own Run path,
+Each recording was then analyzed with WIMM 1.0.0 through the application's own Run path,
 using its default detection and smoothing settings. The movement threshold was 2 cm/s, the
 minimum dwell time 0 s and the time bins 5 s. Every exported value was compared with its
 true value.
@@ -74,7 +74,7 @@ also need the WIMM 1.0.0 source and its requirements, including PyQt5.
 #    Output is deterministic: it reproduces the published videos and Excel files.
 python make_validation_videos.py --all
 
-# 2. analyse every recording with WIMM and compare
+# 2. analyze every recording with WIMM and compare
 #    (uses the WIMM source this folder sits in; set WIMM_DIR to use another copy)
 set WIMM_DIR=C:\path\to\WIMM
 python run_app_on_benchmarks.py
@@ -88,6 +88,6 @@ python figures/make_supplementary.py
 backup copies go to a temporary folder. Running one paradigm only:
 `python run_app_on_benchmarks.py open_field`.
 
-## Licence
+## License
 
 MIT, as the rest of the WIMM repository.

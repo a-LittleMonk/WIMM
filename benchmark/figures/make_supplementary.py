@@ -114,7 +114,7 @@ def main():
     caption(doc, "Supplementary Table S1.",
             "Every benchmark measure of the 12 synthetic recordings compared with the value exported by WIMM 1.0.0. "
             "Benchmark values were calculated from the scripted path, with position defined as the centroid of the "
-            "body excluding the tail, or as the tip of the snout for nose-based measures. Recordings were analysed "
+            "body excluding the tail, or as the tip of the snout for nose-based measures. Recordings were analyzed "
             "with default detection and smoothing settings, a movement threshold of 2 cm/s and a minimum dwell time "
             "of 0 s. Difference = WIMM − benchmark; difference (%) is relative to the benchmark value and is blank "
             "when the benchmark is 0. Status: exact, identical when rounded to two decimals; close, within 0.1 units "
